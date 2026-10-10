@@ -8,6 +8,7 @@ const router = @import("router.zig");
 const log = @import("../log.zig");
 const file_store = @import("../storage/file_store.zig");
 const handler_auth = @import("handler_auth.zig");
+const ownership = @import("../auth/ownership.zig");
 
 /// Maximum request body size (1 MiB). Prevents memory exhaustion from oversized payloads.
 const MAX_BODY_SIZE = 1024 * 1024;
@@ -41,6 +42,9 @@ pub fn handle(writer: anytype, body: []const u8, ctx: *const router.RouteContext
         identity: []const u8,
         share: []const u8,
         version: u64,
+        threshold: u8 = 0,
+        pubkey: []const u8 = "",
+        signature: []const u8 = "",
     };
 
     const parsed = std.json.parseFromSlice(PushBody, ctx.allocator, body, .{}) catch {
@@ -51,6 +55,7 @@ pub fn handle(writer: anytype, body: []const u8, ctx: *const router.RouteContext
     const identity = parsed.value.identity;
     const share_b64 = parsed.value.share;
     const version = parsed.value.version;
+    const threshold = parsed.value.threshold;
 
     // Validate identity is exactly 64 hex chars (SHA-256 hash)
     if (identity.len != IDENTITY_HEX_LEN) {
@@ -59,6 +64,15 @@ pub fn handle(writer: anytype, body: []const u8, ctx: *const router.RouteContext
     for (identity) |c| {
         if (!std.ascii.isHex(c)) {
             return response.badRequest(writer, "identity must be hex");
+        }
+    }
+
+    // Ownership proof: identity = SHA-256(pubkey) and a valid Ed25519 signature
+    // over the push message. This is what stops anyone who merely knows the
+    // identity from overwriting it. Enforced whenever a guardian is configured.
+    if (ctx.guardian != null) {
+        if (!ownership.verifyPush(identity, version, parsed.value.pubkey, parsed.value.signature)) {
+            return response.jsonError(writer, 401, "Unauthorized", "invalid ownership signature");
         }
     }
 
@@ -85,18 +99,20 @@ pub fn handle(writer: anytype, body: []const u8, ctx: *const router.RouteContext
         return response.badRequest(writer, "share data is empty");
     }
 
-    // Anti-rollback: reject shares with version <= current stored version
-    const current_version = readCurrentVersion(ctx.data_dir, identity, ctx.allocator);
-    if (current_version) |cur_ver| {
-        if (version <= cur_ver) {
-            log.warn("rejected rollback for {s}: version {d} <= current {d}", .{ identity, version, cur_ver });
-            return response.badRequest(writer, "version must be greater than current stored version");
+    // Anti-rollback: reject shares with version <= current stored version.
+    // Returns 409 Conflict (not 400) so clients can distinguish a stale version
+    // from a malformed request and re-read + bump before retrying.
+    if (file_store.readMeta(ctx.data_dir, identity, ctx.allocator)) |cur_meta| {
+        if (version <= cur_meta.version) {
+            log.warn("rejected rollback for {s}: version {d} <= current {d}", .{ identity, version, cur_meta.version });
+            return response.jsonError(writer, 409, "Conflict", "version must be greater than current stored version");
         }
-    }
+    } else |_| {}
 
-    // Derive integrity key from guardian server_secret (or use fallback)
+    // Use the guardian's persistent at-rest integrity key (survives restarts),
+    // or a fixed fallback when running without a guardian (e.g. tests).
     const integrity_key: []const u8 = if (ctx.guardian) |guardian|
-        &guardian.server_secret
+        &guardian.integrity_key
     else
         "vault-default-integrity-key!!!!!";
 
@@ -106,10 +122,12 @@ pub fn handle(writer: anytype, body: []const u8, ctx: *const router.RouteContext
         return response.internalError(writer);
     };
 
-    // Write version file
-    writeVersionFile(ctx.data_dir, identity, version) catch |err| {
-        log.err("failed to write version for {s}: {}", .{ identity, err });
-        // Share was written but version wasn't — not fatal, but log it
+    // Write metadata (version + threshold) LAST, as the commit marker — the
+    // share only becomes "present" once meta.json lands, so a crash mid-write
+    // leaves an incomplete (ignored) share rather than a corrupt one.
+    file_store.writeMeta(ctx.data_dir, identity, .{ .version = version, .threshold = threshold }, ctx.allocator) catch |err| {
+        log.err("failed to write meta for {s}: {}", .{ identity, err });
+        return response.internalError(writer);
     };
 
     log.info("stored share for identity {s} ({d} bytes, version {d})", .{ identity, share_data.len, version });

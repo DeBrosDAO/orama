@@ -1,0 +1,43 @@
+# One fresh server through its whole life: setup refuses a wrong or
+# unconfirmed host key before any credential touches it, joins it as a
+# full member of every membership view; on the joined node (disposable, so
+# a refusal that regresses into an install never lands on a core node) the
+# install flag refusals, the dry run and the archive-trust refusals change
+# nothing; a second setup changes nothing,
+# remove prints its plan, declines without a confirmation, then retires the
+# node cluster-wide and wipes it (the operator's own firewall rule survives; the
+# wipe ends with a check that fails on any orama-related leftover, /etc/orama and
+# drop-in directories included),
+# and a removed node is no longer a target for remove, wipe or clean.
+id: install-extra
+title: Fresh server setup, join, re-run, remove and wipe
+area: infrastructure
+subtasks: [2820]
+stage: 9
+destructive: true
+requires:
+  extra_nodes: 1
+  probe: false
+  chain: false
+covers:
+  cli:
+    - orama node setup
+    - orama node remove
+    - orama remove
+    - orama node wipe
+    - orama nodes
+    - orama maint node install
+    - orama maint push
+  claims:
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-maint-node-install: --dry-run shows what would be done without making changes"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-maint-node-install: a genesis install needs --operator-wallet; flag mistakes are refused before anything changes"
+    - "docs/whitepaper/technical-reference/vol1/18-cache.md#supply-chain: an unsigned, untrusted-signer, tampered or extra-file archive is refused and nothing under /opt/orama changes"
+    - "docs/whitepaper/technical-reference/vol1/18-cache.md#supply-chain: --trust-signers never changes an existing anchor"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-node-setup: a --host-key that does not match is refused before the credential is used"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-node-setup: a node already running this exact build is not re-uploaded"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-node-remove: --dry-run prints the quorum impact and the statements and changes nothing"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-node-remove: the node leaves raft and the mesh, is tombstoned and wiped"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-remove: --dry-run prints the quorum impact and every step, including the chain's, and changes nothing"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-remove: without --yes the removal is declined; orama node remove says it is replaced by orama remove"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-node-wipe: only rules tagged orama are removed; the operator's own rules and SSH stay"
+    - "docs/whitepaper/technical-reference/vol1/18-cache.md#supply-chain: a joining node takes the archive signer list from the cluster"

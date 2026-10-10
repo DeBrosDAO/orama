@@ -21,8 +21,19 @@ import (
 	"go.uber.org/zap"
 )
 
-// startLibP2P initializes the LibP2P host
+// startLibP2P initializes the LibP2P host.
+//
+// It is idempotent, because the boot supervisor retries components: a host that
+// is already fully up is left alone (a second one would put a second copy of
+// this node's identity on the network), and a partial start is torn down before
+// returning so the retry can bind the listen port again.
 func (n *Node) startLibP2P() error {
+	if n.libp2pStarted {
+		return nil
+	}
+	if n.stopping.Load() {
+		return errNodeStopping
+	}
 	n.logger.ComponentInfo(logging.ComponentLibP2P, "Starting LibP2P host")
 
 	// Load or create persistent identity
@@ -71,7 +82,9 @@ func (n *Node) startLibP2P() error {
 		return err
 	}
 
+	n.depsMu.Lock()
 	n.host = h
+	n.depsMu.Unlock()
 
 	// Initialize pubsub
 	ps, err := libp2ppubsub.NewGossipSub(context.Background(), h,
@@ -80,6 +93,12 @@ func (n *Node) startLibP2P() error {
 		libp2ppubsub.WithDirectPeers(nil),
 	)
 	if err != nil {
+		// Leaving the half-built host in place would hold the listen port, so
+		// the retry could never bind it.
+		n.depsMu.Lock()
+		n.host = nil
+		n.depsMu.Unlock()
+		_ = h.Close()
 		return fmt.Errorf("failed to create pubsub: %w", err)
 	}
 
@@ -118,6 +137,7 @@ func (n *Node) startLibP2P() error {
 	// Start peer discovery
 	n.startPeerDiscovery()
 
+	n.libp2pStarted = true
 	return nil
 }
 
@@ -136,7 +156,7 @@ func (n *Node) peerReconnectionLoop(ctx context.Context) {
 			if err := n.connectToPeers(context.Background()); err != nil {
 				consecutiveFailures++
 				jitteredInterval := addJitter(interval)
-				
+
 				select {
 				case <-ctx.Done():
 					return
@@ -291,4 +311,3 @@ func peerSource(peerAddrs []string, logger *zap.Logger) func(context.Context, in
 		return out
 	}
 }
-

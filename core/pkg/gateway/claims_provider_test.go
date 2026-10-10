@@ -1,7 +1,14 @@
 package gateway
 
 import (
+	"context"
+	"fmt"
 	"testing"
+
+	"github.com/DeBrosOfficial/network/pkg/serverless"
+	"github.com/DeBrosOfficial/network/pkg/serverless/registry"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 // Bugboard #548: the claims-provider sanitizer is the security boundary —
@@ -80,8 +87,131 @@ func TestSanitizeProviderClaims_countAndSizeCapped(t *testing.T) {
 
 func TestResolveClaims_nilInvokerOrEmptyArgs(t *testing.T) {
 	p := newJWTClaimsProvider(nil, nil) // nil invoker disables the hook
-	if got := p.ResolveClaims(nil, "0xW", "ns"); got != nil {
+	var noCtx context.Context
+	if got := p.ResolveClaims(noCtx, "0xW", "ns"); got != nil {
 		t.Errorf("nil invoker must yield nil claims, got %v", got)
+	}
+}
+
+// fakeClaimsInvoker is a programmable claimsInvoker for the retry tests
+// (bugboard #143). Each entry in results is returned on the corresponding
+// attempt; calls tracks how many times Invoke ran.
+type fakeClaimsInvoker struct {
+	results []invokeResult
+	calls   int
+}
+
+type invokeResult struct {
+	resp *serverless.InvokeResponse
+	err  error
+}
+
+func (f *fakeClaimsInvoker) Invoke(_ context.Context, _ *serverless.InvokeRequest) (*serverless.InvokeResponse, error) {
+	i := f.calls
+	f.calls++
+	if i >= len(f.results) {
+		i = len(f.results) - 1 // repeat the last programmed result
+	}
+	return f.results[i].resp, f.results[i].err
+}
+
+func successResp(body string) *serverless.InvokeResponse {
+	return &serverless.InvokeResponse{Status: serverless.InvocationStatusSuccess, Output: []byte(body)}
+}
+
+// newProviderWithFake builds a jwtClaimsProvider wired to a fake invoker.
+func newProviderWithFake(f *fakeClaimsInvoker) *jwtClaimsProvider {
+	p := newJWTClaimsProvider(nil, nil)
+	p.invoker = f // inject the fake seam directly
+	return p
+}
+
+// (a) A cold-WASM ErrWASMFetchTimeout on attempt 1 must be retried; the 2nd
+// attempt succeeds and its claims are returned. This is the core #143 fix —
+// without the retry, the transient cold start fragments the user's devices.
+func TestResolveClaims_retriesTransientThenSucceeds(t *testing.T) {
+	f := &fakeClaimsInvoker{results: []invokeResult{
+		{err: fmt.Errorf("wrap: %w", serverless.ErrWASMFetchTimeout)},
+		{resp: successResp(`{"account_id":"uuid-X"}`)},
+	}}
+	p := newProviderWithFake(f)
+
+	out := p.ResolveClaims(context.Background(), "0xW", "ns")
+	if out["account_id"] != "uuid-X" {
+		t.Fatalf("expected account_id after retry, got %v", out)
+	}
+	if f.calls != 2 {
+		t.Errorf("expected exactly 2 attempts (retry after transient), got %d", f.calls)
+	}
+}
+
+// (b) A transient failure on EVERY attempt exhausts the retry budget and fails
+// open (nil) — auth never breaks because the provider is down.
+func TestResolveClaims_transientAllAttemptsFailsOpen(t *testing.T) {
+	f := &fakeClaimsInvoker{results: []invokeResult{
+		{err: fmt.Errorf("cold: %w", serverless.ErrWASMFetchTimeout)},
+	}}
+	p := newProviderWithFake(f)
+
+	if out := p.ResolveClaims(context.Background(), "0xW", "ns"); out != nil {
+		t.Fatalf("expected nil (fail-open) after exhausting retries, got %v", out)
+	}
+	if f.calls != claimsProviderMaxAttempts {
+		t.Errorf("expected %d attempts, got %d", claimsProviderMaxAttempts, f.calls)
+	}
+}
+
+// A gateway that does not run the namespace's functions (bugboard #427) mints
+// without custom claims, silently and without retrying: it is every main-domain
+// sign-in to a tenant namespace, not a provider failure.
+func TestResolveClaims_namespaceNotServedIsSilent(t *testing.T) {
+	core, logs := observer.New(zap.WarnLevel)
+	f := &fakeClaimsInvoker{results: []invokeResult{
+		{err: fmt.Errorf("%w: %w", serverless.ErrFunctionNotFound, serverless.ErrNamespaceNotServed)},
+	}}
+	p := newJWTClaimsProvider(nil, zap.New(core))
+	p.invoker = f
+
+	if out := p.ResolveClaims(context.Background(), "0xW", "tenant-a"); out != nil {
+		t.Fatalf("expected nil, got %v", out)
+	}
+	if f.calls != 1 {
+		t.Errorf("expected 1 attempt, got %d", f.calls)
+	}
+	if logs.Len() != 0 {
+		t.Errorf("a namespace this gateway does not serve was logged as a failure: %v", logs.All())
+	}
+}
+
+// (c) ErrFunctionNotFound (no provider deployed) must NOT retry — it's the
+// normal no-claims case for most namespaces. Exactly one attempt, nil result.
+func TestResolveClaims_functionNotFoundNoRetry(t *testing.T) {
+	f := &fakeClaimsInvoker{results: []invokeResult{
+		{err: fmt.Errorf("registry: %w", registry.ErrFunctionNotFound)},
+	}}
+	p := newProviderWithFake(f)
+
+	if out := p.ResolveClaims(context.Background(), "0xW", "ns"); out != nil {
+		t.Fatalf("expected nil for not-found, got %v", out)
+	}
+	if f.calls != 1 {
+		t.Errorf("ErrFunctionNotFound must not retry; expected 1 attempt, got %d", f.calls)
+	}
+}
+
+// (d) A clean non-success result (the app's own logic returned error status) is
+// NOT retried — that's a deliberate outcome, not an infra blip. One attempt, nil.
+func TestResolveClaims_nonSuccessNoRetry(t *testing.T) {
+	f := &fakeClaimsInvoker{results: []invokeResult{
+		{resp: &serverless.InvokeResponse{Status: serverless.InvocationStatusError}},
+	}}
+	p := newProviderWithFake(f)
+
+	if out := p.ResolveClaims(context.Background(), "0xW", "ns"); out != nil {
+		t.Fatalf("expected nil for non-success result, got %v", out)
+	}
+	if f.calls != 1 {
+		t.Errorf("non-success result must not retry; expected 1 attempt, got %d", f.calls)
 	}
 }
 
@@ -95,4 +225,19 @@ func itoa(n int) string {
 		n /= 10
 	}
 	return string(b)
+}
+
+// feat-422: the device and session a token is bound to are the gateway's to
+// set. A provider that could put "did" in the custom claims could make
+// get_caller_claim("did") name a device the caller never proved it holds.
+func TestSanitizeProviderClaims_dropsTheSessionBinding(t *testing.T) {
+	out := sanitizeProviderClaims([]byte(`{"did":"forged","sid":"forged","jti":"forged","account_id":"u-1"}`))
+	for _, k := range []string{"did", "sid", "jti"} {
+		if _, present := out[k]; present {
+			t.Errorf("reserved key %q survived: %v", k, out)
+		}
+	}
+	if out["account_id"] != "u-1" {
+		t.Errorf("legitimate claim dropped: %v", out)
+	}
 }

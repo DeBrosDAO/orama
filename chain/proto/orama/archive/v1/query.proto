@@ -1,0 +1,54 @@
+syntax = "proto3";
+package orama.archive.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/archive/types";
+
+import "google/api/annotations.proto";
+import "gogoproto/gogo.proto";
+import "orama/archive/v1/archive.proto";
+
+// Query defines the gRPC querier service for x/archive.
+service Query {
+  rpc Params(QueryParamsRequest) returns (QueryParamsResponse) {
+    option (google.api.http).get = "/orama/archive/v1/params";
+  }
+  rpc Range(QueryRangeRequest) returns (QueryRangeResponse) {
+    option (google.api.http).get = "/orama/archive/v1/range/{start_height}/{end_height}";
+  }
+  rpc LastArchivedHeight(QueryLastArchivedHeightRequest) returns (QueryLastArchivedHeightResponse) {
+    option (google.api.http).get = "/orama/archive/v1/last-archived-height";
+  }
+  rpc RetainHeight(QueryRetainHeightRequest) returns (QueryRetainHeightResponse) {
+    option (google.api.http).get = "/orama/archive/v1/retain-height";
+  }
+}
+
+message QueryParamsRequest {}
+
+message QueryParamsResponse {
+  Params params = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryRangeRequest {
+  int64 start_height = 1;
+  int64 end_height = 2;
+}
+
+message QueryRangeResponse {
+  RangeRecord range = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryLastArchivedHeightRequest {}
+
+message QueryLastArchivedHeightResponse {
+  int64 last_archived_height = 1;
+}
+
+message QueryRetainHeightRequest {}
+
+message QueryRetainHeightResponse {
+  int64 retain_height = 1;
+  int64 tip = 2;
+  int64 last_archived_height = 3;
+  int64 retention_window_blocks = 4;
+}

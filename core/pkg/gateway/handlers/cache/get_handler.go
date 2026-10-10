@@ -3,14 +3,13 @@ package cache
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
+	gwauth "github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/logging"
-	olriclib "github.com/olric-data/olric"
+	"github.com/DeBrosOfficial/network/pkg/olric"
 	"go.uber.org/zap"
 )
 
@@ -33,11 +32,6 @@ import (
 //	  "dmap": "my-cache"
 //	}
 func (h *CacheHandlers) GetHandler(w http.ResponseWriter, r *http.Request) {
-	if h.olricClient == nil {
-		writeError(w, http.StatusServiceUnavailable, "Olric cache client not initialized")
-		return
-	}
-
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -55,28 +49,38 @@ func (h *CacheHandlers) GetHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !h.authorizeKey(w, r, req.DMap, req.Key, gwauth.ActionRead) {
+		return
+	}
+
+	// The availability check comes after the request has been read and
+	// authorized. A caller who may not touch this key is refused whether or not
+	// the cache happens to be up, and a 503 would otherwise tell them the cache
+	// exists and is down — an answer they are not entitled to.
+	if h.olricClient == nil {
+		writeError(w, http.StatusServiceUnavailable, "Olric cache client not initialized")
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	// Namespace isolation: prefix dmap with namespace
-	namespace := getNamespaceFromContext(ctx)
-	if namespace == "" {
-		writeError(w, http.StatusUnauthorized, "namespace not found in context")
-		return
-	}
-	namespacedDMap := fmt.Sprintf("%s:%s", namespace, req.DMap)
-
-	olricCluster := h.olricClient.GetClient()
-	dm, err := olricCluster.NewDMap(namespacedDMap)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create DMap: %v", err))
+	// Namespace isolation: the namespace's one cache DMap (namespace_dmap.go).
+	dm, ok := h.namespaceCache(ctx, w)
+	if !ok {
 		return
 	}
 
-	gr, err := dm.Get(ctx, req.Key)
+	foldedKey, ok := foldKey(req.DMap, req.Key)
+	if !ok {
+		writeError(w, http.StatusNotFound, "key not found")
+		return
+	}
+
+	gr, err := dm.Get(ctx, foldedKey)
 	if err != nil {
 		// Check for key not found error - handle both wrapped and direct errors
-		if errors.Is(err, olriclib.ErrKeyNotFound) || err.Error() == "key not found" || strings.Contains(err.Error(), "key not found") {
+		if olric.IsKeyNotFound(err) {
 			writeError(w, http.StatusNotFound, "key not found")
 			return
 		}
@@ -84,7 +88,11 @@ func (h *CacheHandlers) GetHandler(w http.ResponseWriter, r *http.Request) {
 			zap.String("dmap", req.DMap),
 			zap.String("key", req.Key),
 			zap.Error(err))
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to get key: %v", err))
+		if isCacheUnreachable(err) {
+			writeUnavailable(w)
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to get key")
 		return
 	}
 
@@ -94,7 +102,7 @@ func (h *CacheHandlers) GetHandler(w http.ResponseWriter, r *http.Request) {
 			zap.String("dmap", req.DMap),
 			zap.String("key", req.Key),
 			zap.Error(err))
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to decode value: %v", err))
+		writeError(w, http.StatusInternalServerError, "failed to decode value")
 		return
 	}
 
@@ -126,11 +134,6 @@ func (h *CacheHandlers) GetHandler(w http.ResponseWriter, r *http.Request) {
 //	  "dmap": "my-cache"
 //	}
 func (h *CacheHandlers) MultiGetHandler(w http.ResponseWriter, r *http.Request) {
-	if h.olricClient == nil {
-		writeError(w, http.StatusServiceUnavailable, "Olric cache client not initialized")
-		return
-	}
-
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -153,21 +156,24 @@ func (h *CacheHandlers) MultiGetHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// All or nothing. A partial answer to mget is indistinguishable from keys
+	// that were never set, so a caller would read a silently narrowed result as
+	// a complete one.
+	if !h.authorizeKeys(w, r, req.DMap, req.Keys, gwauth.ActionRead) {
+		return
+	}
+
+	if h.olricClient == nil {
+		writeError(w, http.StatusServiceUnavailable, "Olric cache client not initialized")
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	// Namespace isolation: prefix dmap with namespace
-	namespace := getNamespaceFromContext(ctx)
-	if namespace == "" {
-		writeError(w, http.StatusUnauthorized, "namespace not found in context")
-		return
-	}
-	namespacedDMap := fmt.Sprintf("%s:%s", namespace, req.DMap)
-
-	olricCluster := h.olricClient.GetClient()
-	dm, err := olricCluster.NewDMap(namespacedDMap)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create DMap: %v", err))
+	// Namespace isolation: the namespace's one cache DMap (namespace_dmap.go).
+	dm, ok := h.namespaceCache(ctx, w)
+	if !ok {
 		return
 	}
 
@@ -178,11 +184,15 @@ func (h *CacheHandlers) MultiGetHandler(w http.ResponseWriter, r *http.Request) 
 			continue // Skip empty keys
 		}
 
-		gr, err := dm.Get(ctx, key)
+		foldedKey, ok := foldKey(req.DMap, key)
+		if !ok {
+			continue // too long to have been stored
+		}
+		gr, err := dm.Get(ctx, foldedKey)
 		if err != nil {
 			// Skip keys that are not found - don't include them in results
 			// This matches the SDK's expectation that only found keys are returned
-			if err == olriclib.ErrKeyNotFound {
+			if olric.IsKeyNotFound(err) {
 				continue
 			}
 			// For other errors, log but continue with other keys
@@ -218,4 +228,16 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 // writeError writes a standardized JSON error response.
 func writeError(w http.ResponseWriter, code int, msg string) {
 	writeJSON(w, code, map[string]any{"error": msg})
+}
+
+// writeCacheFailure answers a failure of the cache itself. The client is told
+// what failed, as a constant; why — the Olric error, which can name member
+// addresses on the overlay — goes to the log only.
+func (h *CacheHandlers) writeCacheFailure(w http.ResponseWriter, code int, what string, err error) {
+	h.logger.ComponentError(logging.ComponentGeneral, what, zap.Error(err))
+	if isCacheUnreachable(err) {
+		writeUnavailable(w)
+		return
+	}
+	writeError(w, code, what)
 }

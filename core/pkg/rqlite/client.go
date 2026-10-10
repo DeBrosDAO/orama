@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/rqlite/gorqlite"
@@ -46,12 +47,12 @@ func NewClient(db *sql.DB) Client {
 func NewClientWithDSN(db *sql.DB, dsn string) (Client, error) {
 	conn, err := gorqlite.Open(dsn)
 	if err != nil {
-		return nil, fmt.Errorf("rqlite.NewClientWithDSN: native dial failed: %w", err)
+		return nil, fmt.Errorf("rqlite.NewClientWithDSN: native dial failed: %s", RedactError(err, dsn))
 	}
 	connNone, err := gorqlite.Open(dsn)
 	if err != nil {
 		conn.Close()
-		return nil, fmt.Errorf("rqlite.NewClientWithDSN: native dial (none-level) failed: %w", err)
+		return nil, fmt.Errorf("rqlite.NewClientWithDSN: native dial (none-level) failed: %s", RedactError(err, dsn))
 	}
 	if err := connNone.SetConsistencyLevel(gorqlite.ConsistencyLevelNone); err != nil {
 		conn.Close()
@@ -64,8 +65,8 @@ func NewClientWithDSN(db *sql.DB, dsn string) (Client, error) {
 	// parse leaves both disabled (gate nil, freshHTTP nil) rather than failing
 	// construction — none-reads then behave exactly as before this change.
 	if parts, ok := parseDSNParts(dsn); ok {
-		c.localStatusPort = parts.port
-		c.staleGate = newFollowerFreshnessGate(parts.port, LocalFollowerFresh, 0)
+		c.localStatus = Endpoint{Host: parts.hostname, Port: parts.port, Username: parts.user, Password: parts.pass}
+		c.staleGate = newFollowerFreshnessGate(c.localStatus, LocalFollowerFresh, 0)
 		c.freshScheme = parts.scheme
 		c.freshHost = parts.host
 		c.freshUser = parts.user
@@ -78,11 +79,12 @@ func NewClientWithDSN(db *sql.DB, dsn string) (Client, error) {
 // dsnParts holds the components of a parsed rqlite DSN needed by the freshness
 // gate and the native none+freshness read path.
 type dsnParts struct {
-	scheme string
-	host   string // host:port (the serving node we POST reads to)
-	port   int    // numeric port for the local /status query
-	user   string
-	pass   string
+	scheme   string
+	host     string // host:port (the serving node we POST reads to)
+	hostname string // host without the port, for the /status query
+	port     int    // numeric port for the local /status query
+	user     string
+	pass     string
 }
 
 // parseDSNParts parses a standard rqlite DSN ("http://user:pass@host:port")
@@ -102,12 +104,60 @@ func parseDSNParts(dsn string) (dsnParts, bool) {
 	if err != nil {
 		return dsnParts{}, false
 	}
-	parts := dsnParts{scheme: u.Scheme, host: u.Host, port: port}
+	parts := dsnParts{scheme: u.Scheme, host: u.Host, hostname: u.Hostname(), port: port}
 	if u.User != nil {
 		parts.user = u.User.Username()
 		parts.pass, _ = u.User.Password()
 	}
 	return parts, true
+}
+
+// RedactDSN returns dsn with the URL password replaced by "REDACTED".
+// Unparseable strings are returned unchanged except for a user:pass@ pattern.
+func RedactDSN(dsn string) string {
+	u, err := url.Parse(dsn)
+	if err != nil || u.Host == "" {
+		return redactUserinfo(dsn)
+	}
+	if u.User != nil {
+		if _, hasPass := u.User.Password(); hasPass {
+			u.User = url.UserPassword(u.User.Username(), "REDACTED")
+		}
+	}
+	return u.String()
+}
+
+// RedactError returns err.Error() with the DSN and its password stripped.
+// The original error is not wrapped: gorqlite embeds the DSN in the message.
+func RedactError(err error, dsn string) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	if dsn != "" {
+		msg = strings.ReplaceAll(msg, dsn, RedactDSN(dsn))
+	}
+	if u, e := url.Parse(dsn); e == nil && u.User != nil {
+		if pass, ok := u.User.Password(); ok && pass != "" {
+			msg = strings.ReplaceAll(msg, pass, "REDACTED")
+		}
+	}
+	return msg
+}
+
+func redactUserinfo(dsn string) string {
+	// Strip the first user:pass@ if Parse failed (malformed DSN is the leak path).
+	at := strings.Index(dsn, "@")
+	scheme := strings.Index(dsn, "://")
+	if at <= 0 || scheme < 0 || at < scheme {
+		return dsn
+	}
+	rest := dsn[scheme+3 : at]
+	colon := strings.Index(rest, ":")
+	if colon < 0 {
+		return dsn
+	}
+	return dsn[:scheme+3] + rest[:colon] + ":REDACTED" + dsn[at:]
 }
 
 // NewClientWithConn wires the ORM client when the caller already has a
@@ -135,10 +185,10 @@ type client struct {
 	// to the weak conn (always correct, just slower).
 	connNone *gorqlite.Connection
 
-	// localStatusPort is the rqlite HTTP port of the LOCAL serving node, parsed
-	// from the DSN. Used by the freshness gate to query /status. Zero when the
-	// DSN had no usable port (gate disabled).
-	localStatusPort int
+	// localStatus is the serving rqlite node named by the DSN (address and
+	// credentials). The freshness gate queries its /status. Zero when the DSN
+	// had no usable address (gate disabled).
+	localStatus Endpoint
 	// staleGate gates none-reads on local-follower freshness (#1022). nil
 	// disables gating (NewClient / NewClientWithConn, or an unparseable DSN) —
 	// none-reads then behave exactly as before this change.

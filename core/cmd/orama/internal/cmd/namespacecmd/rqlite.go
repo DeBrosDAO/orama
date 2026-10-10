@@ -1,0 +1,200 @@
+package namespacecmd
+
+import (
+	"bufio"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"strings"
+
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/shared"
+	"github.com/spf13/cobra"
+)
+
+var rqliteCmd = &cobra.Command{
+	Use:   "rqlite",
+	Short: "Manage the namespace's internal RQLite database",
+	Long: `Export and import the namespace's internal RQLite database: your own tables and the
+namespace's functions, function secrets, stored-object records, quotas and push and
+WebRTC settings. Keys, grants and deployments are in the cluster registry, not in it.
+
+Both go to the namespace's own gateway (the host 'orama auth login --namespace' stored).
+With ORAMA_TOKEN, set ORAMA_API_URL to that host (https://ns-<name>.<domain>): the
+environment's gateway does not serve them.`,
+}
+
+var rqliteExportCmd = &cobra.Command{
+	Use:   "export",
+	Short: "Export the namespace's RQLite database to a local SQLite file",
+	Long:  "Downloads a consistent SQLite snapshot of the namespace's internal RQLite database.",
+	RunE:  rqliteExport,
+}
+
+var rqliteImportCmd = &cobra.Command{
+	Use:   "import",
+	Short: "Import a SQLite dump into the namespace's RQLite (DESTRUCTIVE)",
+	Long: `Replaces the namespace's entire RQLite database with the contents of the provided SQLite file.
+
+WARNING: This is a destructive operation. All existing data in the namespace's RQLite
+(your tables, functions, function secrets, stored-object records, quotas and push and
+WebRTC settings) will be replaced with the imported file. The file must be a SQLite
+database, as 'export' writes; at most 256 MiB. Live keys and grants (in the cluster
+registry) are not replaced, and stale copies in the file are ignored. The namespace's
+storage quota stays as it was. The gateway checks the file before loading it and
+refuses (400, nothing written) one that is damaged or carries triggers, views over
+platform tables or stored-object records for content only other namespaces hold;
+it removes plaintext API keys and other namespaces' records an older file may carry,
+and checks again, after the load. One backup, restore, export or
+import runs at a time on a gateway.`,
+	RunE: rqliteImport,
+}
+
+func init() {
+	rqliteExportCmd.Flags().StringP("output", "o", "", "Output file path (default: rqlite-export.db)")
+
+	rqliteImportCmd.Flags().StringP("input", "i", "", "Input SQLite file path")
+	_ = rqliteImportCmd.MarkFlagRequired("input")
+
+	rqliteCmd.AddCommand(rqliteExportCmd)
+	rqliteCmd.AddCommand(rqliteImportCmd)
+
+	Cmd.AddCommand(rqliteCmd)
+}
+
+func rqliteExport(cmd *cobra.Command, args []string) error {
+	output, _ := cmd.Flags().GetString("output")
+	if output == "" {
+		output = "rqlite-export.db"
+	}
+
+	apiURL, err := nsRQLiteAPIURL()
+	if err != nil {
+		return err
+	}
+	token, err := nsRQLiteAuthToken()
+	if err != nil {
+		return err
+	}
+
+	url := apiURL + "/v1/rqlite/export"
+
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	client := gatewayHTTPClient()
+
+	fmt.Printf("Exporting RQLite database to %s...\n", output)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to connect to gateway: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("export failed (HTTP %d): %s", resp.StatusCode, string(body))
+	}
+
+	outFile, err := os.Create(output)
+	if err != nil {
+		return fmt.Errorf("failed to create output file: %w", err)
+	}
+	defer outFile.Close()
+
+	written, err := io.Copy(outFile, resp.Body)
+	if err != nil {
+		os.Remove(output)
+		return fmt.Errorf("failed to write export file: %w", err)
+	}
+
+	fmt.Printf("Export complete: %s (%d bytes)\n", output, written)
+	return nil
+}
+
+func rqliteImport(cmd *cobra.Command, args []string) error {
+	input, _ := cmd.Flags().GetString("input")
+
+	info, err := os.Stat(input)
+	if err != nil {
+		return fmt.Errorf("cannot access input file: %w", err)
+	}
+	if info.IsDir() {
+		return fmt.Errorf("input path is a directory, not a file")
+	}
+
+	apiURL, err := nsRQLiteAPIURL()
+	if err != nil {
+		return err
+	}
+	token, err := nsRQLiteAuthToken()
+	if err != nil {
+		return err
+	}
+	// The namespace to confirm is the one the credential in use belongs to:
+	// the stored session's, or ORAMA_TOKEN's.
+	namespace, err := shared.BearerNamespace(apiURL, token)
+	if err != nil {
+		return err
+	}
+	if namespace == "" {
+		namespace = "default"
+	}
+
+	fmt.Printf("WARNING: This will REPLACE the entire RQLite database for namespace '%s'.\n", namespace)
+	fmt.Printf("All existing data (your tables, functions, function secrets, stored-object records, push and WebRTC settings) will be lost.\n")
+	fmt.Printf("Importing from: %s (%d bytes)\n\n", input, info.Size())
+	fmt.Printf("Type the namespace name '%s' to confirm: ", namespace)
+
+	scanner := bufio.NewScanner(os.Stdin)
+	scanner.Scan()
+	confirmation := strings.TrimSpace(scanner.Text())
+	if confirmation != namespace {
+		return fmt.Errorf("aborted - namespace name did not match")
+	}
+
+	file, err := os.Open(input)
+	if err != nil {
+		return fmt.Errorf("failed to open input file: %w", err)
+	}
+	defer file.Close()
+
+	url := apiURL + "/v1/rqlite/import"
+
+	req, err := http.NewRequest(http.MethodPost, url, file)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/octet-stream")
+	req.ContentLength = info.Size()
+
+	client := gatewayHTTPClient()
+
+	fmt.Printf("Importing database...\n")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to connect to gateway: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("import failed (HTTP %d): %s", resp.StatusCode, string(body))
+	}
+
+	fmt.Printf("Import complete. The namespace '%s' RQLite database has been replaced.\n", namespace)
+	return nil
+}
+
+// nsRQLiteAPIURL and nsRQLiteAuthToken resolve the gateway and its credential
+// through the one shared resolver, so a request can never carry another
+// gateway's key. The database is the tenant's, which only the namespace's own
+// gateway serves.
+func nsRQLiteAPIURL() (string, error)    { return shared.NamespaceGatewayURL() }
+func nsRQLiteAuthToken() (string, error) { return shared.GetAuthToken() }

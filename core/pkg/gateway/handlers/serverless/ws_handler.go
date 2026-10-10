@@ -3,11 +3,14 @@ package serverless
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
+	"github.com/DeBrosOfficial/network/pkg/gateway/wssession"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
@@ -54,6 +57,18 @@ func checkWSOrigin(r *http.Request) bool {
 	return originHost == host || strings.HasSuffix(originHost, "."+host)
 }
 
+// closeClient is how the session sweeper ends one function WebSocket. The
+// handler's read loop sees the connection go and tears the rest down.
+func (h *ServerlessHandlers) closeClient(clientID string) wssession.Closer {
+	return func(code int, reason string) {
+		err := h.wsManager.CloseClient(clientID, code, reason)
+		if err != nil && !errors.Is(err, serverless.ErrWSClientNotFound) {
+			h.logger.Warn("could not close a WebSocket whose token no longer authorizes it",
+				zap.String("client_id", clientID), zap.Int("code", code), zap.Error(err))
+		}
+	}
+}
+
 // HandleWebSocket handles WebSocket connections for function streaming.
 // It upgrades HTTP connections to WebSocket and manages bi-directional communication
 // for real-time function invocation and streaming responses.
@@ -62,25 +77,64 @@ func checkWSOrigin(r *http.Request) bool {
 //   - WSPersistent=true: persistent per-connection WASM instance (plan 06)
 //   - WSPersistent=false (default): per-frame stateless invocation
 func (h *ServerlessHandlers) HandleWebSocket(w http.ResponseWriter, r *http.Request, name string, version int) {
-	namespace := r.URL.Query().Get("namespace")
-	if namespace == "" {
-		namespace = h.getNamespaceFromRequest(r)
+	// A capability is the whole authorization of its socket, checked here —
+	// before the upgrade and before a persistent instance is taken. It carries
+	// no credential, so there is no credential namespace to manage with: the
+	// namespace is the one the URL names (?namespace=), which the capability's
+	// key is derived from.
+	if token := capabilityToken(r); token != "" {
+		h.serveCapabilityWebSocket(w, r, h.invokeNamespace(r), name, version, token)
+		return
 	}
 
-	if namespace == "" {
-		http.Error(w, "namespace required", http.StatusBadRequest)
+	// Any other WebSocket needs a credential, and it runs functions of that
+	// credential's namespace (bugboard #423).
+	namespace, ok := managedNamespace(w, r)
+	if !ok {
+		return
+	}
+	// A grant narrowed to `fn:name=` limits which functions a socket may run,
+	// as it limits HTTP invocation (invoke_handler.go); checked before the
+	// upgrade and before a persistent instance is taken.
+	if err := auth.AuthorizeResource(r.Context(), auth.Resource{Domain: auth.SelectorFn, Name: name}); err != nil {
+		writeError(w, http.StatusForbidden, err.Error())
 		return
 	}
 
 	// Look up the function once to decide which execution model to use.
 	fn, lookupErr := h.registry.Get(r.Context(), namespace, name, version)
 	if lookupErr == nil && fn != nil && fn.WSPersistent {
+		// The persistent path builds its InvocationContext directly and never
+		// reaches Invoke, so the authorization that the stateless path gets
+		// per-frame has to happen here, before the upgrade.
+		//
+		// It used to check only that an internal function had an admin caller
+		// (bugboard #152). That left the rest of the same decision out: a
+		// function that is merely private — not public, not internal — was
+		// reachable over a persistent WebSocket by a caller with no wallet and
+		// no invoke grant, while the identical function over the stateless
+		// path or over HTTP refused them. Same decision, one place.
+		if !serverless.CanInvokeFunction(
+			fn,
+			h.getWalletFromRequest(r),
+			h.getCallerIsAdminFromRequest(r),
+			h.getCallerHasInvokeFromRequest(r),
+		) {
+			http.Error(w, "forbidden: not authorized to invoke this function", http.StatusForbidden)
+			return
+		}
 		h.handlePersistentWebSocket(w, r, fn, namespace)
 		return
 	}
 	// (lookup error not fatal — fall through; per-frame path's invoker will
 	// re-resolve and surface a proper error.)
+	h.handleStatelessWebSocket(w, r, namespace, name, version)
+}
 
+// handleStatelessWebSocket runs the per-frame model: every frame is one
+// invocation, authorized by the invoker as the caller the socket was opened
+// for.
+func (h *ServerlessHandlers) handleStatelessWebSocket(w http.ResponseWriter, r *http.Request, namespace, name string, version int) {
 	// Upgrade to WebSocket
 	upgrader := websocket.Upgrader{
 		CheckOrigin: checkWSOrigin,
@@ -99,10 +153,16 @@ func (h *ServerlessHandlers) HandleWebSocket(w http.ResponseWriter, r *http.Requ
 	h.wsManager.Register(clientID, wsConn)
 	defer h.wsManager.Unregister(clientID)
 
+	// Every frame is invoked with the identity captured below, so the socket
+	// is only as good as the token — or the capability — that opened it: the
+	// gateway's sweeper closes it once that expires or is revoked.
+	sock := h.sessions.Register(h.socketClaims(r), h.closeClient(clientID))
+	defer sock.Unregister()
+
 	// Track client → namespace for ws_pubsub_bridge auth checks, and
 	// auto-clean any bridged topics when the connection ends.
 	if h.wsBridge != nil {
-		h.wsBridge.SetClientNamespace(clientID, namespace)
+		h.registerBridgeClient(r, clientID, namespace)
 		defer h.wsBridge.RemoveClient(context.Background(), clientID)
 	}
 
@@ -137,12 +197,14 @@ func (h *ServerlessHandlers) HandleWebSocket(w http.ResponseWriter, r *http.Requ
 		zap.String("function", name),
 	)
 
-	callerWallet := h.getWalletFromRequest(r)
+	callerWallet, callerIsAdmin, callerHasInvoke := h.socketCaller(r)
 	callerIP := extractRemoteIP(r)
 	// Capture custom claims at upgrade time and reuse for every frame —
 	// the JWT context is request-scoped and won't survive past upgrade.
 	callerClaims := h.getCallerClaimsFromRequest(r)
 	callerJWTSubject := h.getJWTSubjectFromRequest(r)
+	callerDeviceID := h.getDeviceIDFromRequest(r)
+	callerCapability := socketCapability(r)
 
 	// Message loop
 	for {
@@ -165,9 +227,13 @@ func (h *ServerlessHandlers) HandleWebSocket(w http.ResponseWriter, r *http.Requ
 			Input:            message,
 			TriggerType:      serverless.TriggerTypeWebSocket,
 			CallerWallet:     callerWallet,
+			CallerIsAdmin:    callerIsAdmin,
+			CallerHasInvoke:  callerHasInvoke,
 			CallerIP:         callerIP,
 			CallerClaims:     callerClaims,
 			CallerJWTSubject: callerJWTSubject,
+			CallerDeviceID:   callerDeviceID,
+			CallerCapability: callerCapability,
 			WSClientID:       clientID,
 		}
 

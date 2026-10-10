@@ -6,8 +6,10 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/gateway/wssession"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
@@ -29,8 +31,9 @@ var wsUpgrader = websocket.Upgrader{
 // send Origin) are rejected 403 because their Origin's public hostname will
 // never match the proxied IP. Curl tests without Origin slip through,
 // masking the bug. See namespace gateway log:
-//   E routes WebSocket upgrade failed
-//     {"error": "websocket: request origin not allowed by Upgrader.CheckOrigin"}
+//
+//	E routes WebSocket upgrade failed
+//	  {"error": "websocket: request origin not allowed by Upgrader.CheckOrigin"}
 func checkWSOrigin(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	if origin == "" {
@@ -54,11 +57,28 @@ func checkWSOrigin(r *http.Request) bool {
 	return originHost == host || strings.HasSuffix(originHost, "."+host)
 }
 
+// subscriberCloser is how the session sweeper ends a subscriber socket: a
+// close frame saying why, then the connection, which ends the reader loop and
+// with it the subscription. The frame is best-effort — the connection is
+// closed whether or not the client read it — and closing a connection its
+// handler has already closed has nothing left to do.
+func subscriberCloser(conn *websocket.Conn) func(code int, reason string) {
+	return func(code int, reason string) {
+		_ = conn.WriteControl(websocket.CloseMessage,
+			websocket.FormatCloseMessage(code, reason), time.Now().Add(wssession.CloseFrameTimeout))
+		_ = conn.Close()
+	}
+}
+
 // wsClient wraps a WebSocket connection with message handling
 type wsClient struct {
 	conn   *websocket.Conn
 	topic  string
 	logger *logging.ColoredLogger
+
+	// writeMu serialises data-frame writes: the writer loop and the reader
+	// loop (publish_error) both write, and a connection allows one writer.
+	writeMu sync.Mutex
 }
 
 // newWSClient creates a new WebSocket client wrapper
@@ -95,8 +115,7 @@ func (c *wsClient) writeMessage(data []byte) error {
 		zap.String("topic", c.topic),
 		zap.Int("envelope_len", len(envelopeJSON)))
 
-	c.conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
-	if err := c.conn.WriteMessage(websocket.TextMessage, envelopeJSON); err != nil {
+	if err := c.writeText(envelopeJSON); err != nil {
 		c.logger.ComponentWarn("gateway", "pubsub ws: failed to write to websocket",
 			zap.String("topic", c.topic),
 			zap.Error(err))
@@ -106,6 +125,16 @@ func (c *wsClient) writeMessage(data []byte) error {
 	c.logger.ComponentInfo("gateway", "pubsub ws: message sent successfully",
 		zap.String("topic", c.topic))
 	return nil
+}
+
+// writeText writes one text frame, bounded by the write deadline.
+func (c *wsClient) writeText(data []byte) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	if err := c.conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout)); err != nil {
+		return err
+	}
+	return c.conn.WriteMessage(websocket.TextMessage, data)
 }
 
 // writeControl sends a WebSocket control message

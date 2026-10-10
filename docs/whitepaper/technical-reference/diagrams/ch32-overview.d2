@@ -1,0 +1,59 @@
+direction: right
+
+node: "Every node" {
+  helper: "orama-privhelper\nnode-report (root, flock,\n50 s limit)"
+  collectors: "17 collectors\n(report.Collect)"
+  helper -> collectors
+}
+
+gw: "Cluster gateway (orama-namespace-gateway@index)" {
+  self: "SelfCollector\nevery 10 s, 60 s timeout"
+  traffic: "traffic.Recorder\n60 x 1 s buckets"
+  agg: "Aggregator\n5 s cache, 16 parallel,\n4 s per peer"
+  alerts: "cluster.DeriveAlerts\ncluster.Components\ncluster.Summarize"
+  rec: "UptimeRecorder\n1 sample / min"
+  pub: "public status cache\n5 s"
+  self -> agg: "own report (memory)"
+  traffic -> self: "Decorate"
+  agg -> alerts
+  agg -> rec
+  agg -> pub
+}
+
+peers: "Peer cluster gateways" {
+  pr: "GET /v1/internal/telemetry\n(coordination MAC, WireGuard source)"
+}
+
+reg: "Index RQLite" {
+  dns: "dns_nodes" {shape: cylinder}
+  up: "status_uptime_hourly" {shape: cylinder}
+  ops: "operators" {shape: cylinder}
+}
+
+ops_cli: "orama status (operator machine)" {
+  api: "apiSource\nGET / SSE stream"
+  ssh: "sshSource (--ssh)"
+  tui: "live view + one-shot tables"
+  api -> tui
+  ssh -> tui
+}
+
+insp: "orama inspect (operator machine)" {
+  col: "SSH collectors\n4 at a time per node"
+  chk: "checks per subsystem"
+  ai: "optional OpenRouter analysis"
+  col -> chk -> ai
+}
+
+status: "Browser" {shape: person}
+
+node.helper -> gw.self: "JSON report"
+gw.agg -> peers.pr: "HTTP over 10.0.0.0/24"
+reg.dns -> gw.agg: "which nodes"
+gw.rec -> reg.up: "one INSERT per minute"
+reg.up -> gw.pub: "90-day history"
+reg.ops -> gw.agg: "operator check"
+gw.agg -> ops_cli.api: "/v1/operator/telemetry[/stream]\n(bearer token; operator list)"
+ops_cli.ssh -> node.collectors: "sudo orama node report --json"
+gw.pub -> status: "/status, /v1/status (open)"
+insp.col -> node.collectors: "ssh + shell scripts"

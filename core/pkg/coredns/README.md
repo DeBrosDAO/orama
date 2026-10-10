@@ -17,10 +17,10 @@ CoreDNS plugins must be compiled into the binary. Follow these steps:
 ### 1. Install Prerequisites
 
 ```bash
-# Install Go 1.21 or later
-wget https://go.dev/dl/go1.21.6.linux-amd64.tar.gz
+# Install Go 1.27.2 or later (see core/go.mod)
+wget https://go.dev/dl/go1.27.2.linux-amd64.tar.gz
 sudo rm -rf /usr/local/go
-sudo tar -C /usr/local -xzf go1.21.6.linux-amd64.tar.gz
+sudo tar -C /usr/local -xzf go1.27.2.linux-amd64.tar.gz
 export PATH=$PATH:/usr/local/go/bin
 
 # Verify Go installation
@@ -33,7 +33,7 @@ go version
 cd /tmp
 git clone https://github.com/coredns/coredns.git
 cd coredns
-git checkout v1.11.1  # Match the version in install script
+git checkout v1.14.7  # Match constants.CoreDNSVersion
 ```
 
 ### 3. Add RQLite Plugin
@@ -124,19 +124,12 @@ sudo chown orama:orama /var/lib/coredns
 # 3. Copy configuration
 sudo cp configs/coredns/Corefile /etc/coredns/
 
-# 4. Install systemd service
-sudo cp configs/coredns/coredns.service /etc/systemd/system/
-sudo systemctl daemon-reload
+# 4. Production: CoreDNS is orama-namespace-coredns@nameserver,
+#    started by orama-node after index rqlite. Do not enable coredns.service.
 
 # 5. Configure firewall
 sudo ufw allow 53/tcp
 sudo ufw allow 53/udp
-sudo ufw allow 8080/tcp  # Health check
-sudo ufw allow 9153/tcp  # Metrics
-
-# 6. Start service
-sudo systemctl enable coredns
-sudo systemctl start coredns
 ```
 
 ## Configuration
@@ -148,7 +141,9 @@ The Corefile at `/etc/coredns/Corefile` configures CoreDNS behavior:
 ```corefile
 orama.network {
     rqlite {
-        dsn http://localhost:5001    # RQLite HTTP endpoint
+        dsn http://10.0.0.1:10100     # index RQLite: this node's WireGuard IP (required)
+        username orama                # rqlited always runs with -auth
+        password <rqlite-password>    # from /opt/orama/.orama/secrets/rqlite-password
         refresh 10s                   # Health check interval
         ttl 300                       # Cache TTL in seconds
         cache_size 10000              # Max cached entries
@@ -173,16 +168,27 @@ orama.network {
 }
 ```
 
+`dsn` has no default: rqlited binds only the node's WireGuard IP
+(`discovery.http_adv_address` in `node.yaml`), nothing listens on
+`localhost:10100`, and the plugin refuses a Corefile without `dsn`. The
+installer (`pkg/install/installers/coredns.go`) writes the node's own address
+and credentials.
+
 ### RQLite Connection
 
-Ensure RQLite is running and accessible:
+Ensure RQLite is running and accessible. The commands below use these two
+variables, read from the node's own config:
 
 ```bash
+RQ="http://$(sudo sed -n 's/^ *http_adv_address: *"\(.*\)"/\1/p' /opt/orama/.orama/configs/node.yaml)"
+# Credentials go to curl on stdin (-K -), never on its command line where ps shows them.
+rqcurl() { printf 'user = "orama:%s"\n' "$(sudo cat /opt/orama/.orama/secrets/rqlite-password)" | curl -K - "$@"; }
+
 # Test RQLite connectivity
-curl http://localhost:5001/status
+rqcurl "$RQ/status"
 
 # Test DNS record query
-curl -G http://localhost:5001/db/query \
+rqcurl -G "$RQ/db/query" \
   --data-urlencode 'q=SELECT * FROM dns_records LIMIT 5'
 ```
 
@@ -192,7 +198,7 @@ curl -G http://localhost:5001/db/query \
 
 ```bash
 # Via RQLite
-curl -XPOST 'http://localhost:5001/db/execute' \
+rqcurl -XPOST "$RQ/db/execute" \
   -H 'Content-Type: application/json' \
   -d '[
     ["INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, created_by, is_active) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -218,7 +224,7 @@ dig @<node-ip> test.orama.network
 
 ```bash
 # Add wildcard record
-curl -XPOST 'http://localhost:5001/db/execute' \
+rqcurl -XPOST "$RQ/db/execute" \
   -H 'Content-Type: application/json' \
   -d '[
     ["INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, created_by, is_active) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -279,13 +285,16 @@ If CoreDNS fails to start with "plugin not found":
 
 ```bash
 # Check RQLite is running
-sudo systemctl status rqlite
+sudo systemctl status orama-namespace-rqlite@index
 
-# Test RQLite HTTP API
-curl http://localhost:5001/status
+# Test RQLite HTTP API ($RQ / rqcurl as in "RQLite Connection")
+rqcurl "$RQ/status"
+
+# Check the Corefile points at the WireGuard address with credentials
+grep -A4 'rqlite {' /etc/coredns/Corefile
 
 # Check firewall
-sudo ufw status | grep 5001
+sudo ufw status | grep 10100
 ```
 
 ### DNS Queries Not Working
@@ -301,7 +310,7 @@ dig @127.0.0.1 test.orama.network
 sudo journalctl -u coredns --since "5 minutes ago"
 
 # 4. Verify DNS records exist in RQLite
-curl -G http://localhost:5001/db/query \
+rqcurl -G "$RQ/db/query" \
   --data-urlencode 'q=SELECT * FROM dns_records WHERE is_active = TRUE'
 ```
 
@@ -378,7 +387,7 @@ Only expose necessary ports:
 - Port 53 (DNS): Public
 - Port 8080 (Health): Internal only
 - Port 9153 (Metrics): Internal only
-- Port 5001 (RQLite): Internal only
+- Port 10100 (index RQLite): Internal only
 
 ```bash
 # Allow DNS from anywhere

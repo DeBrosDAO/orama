@@ -1,0 +1,48 @@
+# Contracts
+
+The chain can run CosmWasm smart contracts through wasmd (v0.70.3 on wasmvm v3.0.7). Contracts exist only in builds made with cgo and libwasmvm (`make build-wasm`, or the static `build-linux-amd64-full`). A binary built with `-tags nowasm`, which is what plain `make build` produces, has no contracts and refuses a genesis that contains `wasm`.
+
+## Uploading code is closed
+
+`MsgStoreCode`, `MsgStoreAndInstantiateContract` and `MsgStoreAndMigrateContract` are refused by the ante chain until `upload_sunset_height` (the locked default is 3,162,240, about 183 days at an assumed 5 second block). Before then the only code that can be stored is a SHA-256 on the governance code-upload allow-list ([Governance](/docs/blockchain/governance)). A contract cannot upload code. Anyone can instantiate a stored code at any time.
+
+## The five standard contracts
+
+A genesis can include five standard contracts, stored as codes 1 to 5 and none instantiated (`oramad genesis add-standard-contracts`):
+
+| Code | Contract | Upstream |
+|---|---|---|
+| 1 | CW20 token (`cw20-base` 2.0.0) | cw-plus v2.0.0 |
+| 2 | CW721 NFT (`cw721-base` 0.22.0) | cw-nfts v0.22.0 |
+| 3 | Escrow (`cw20-escrow` 0.14.2) | cw-tokens v0.14.2 |
+| 4 | Fixed multisig (`cw3-fixed-multisig` 2.0.0) | cw-plus v2.0.0 |
+| 5 | Vesting (`cw-vesting` 2.7.1) | dao-contracts v2.7.1 |
+
+They are pinned to upstream commits with patches. A manifest (`chain/contracts/standard/manifest.json`) carries the hashes and `make contracts-verify` checks them. A contract can hold and pay out native ORAMA, so the multisig and the escrow release it to users. The vesting contract cannot vest native ORAMA, because it sets a distribution withdraw address and contracts may not; it vests tokens.
+
+## The send rule
+
+A contract is an ordinary account for payments: a user can pay a contract, and a contract can bank-send `norama` to a user or to another contract. Nobody can bank-send to a module account. A contract that wants a payout to land in a user's earnings account, where it can pay fees and bonds, uses the `earnings.pay` binding instead.
+
+## Orama bindings
+
+A contract returns `CosmosMsg::Custom` with one of these.
+
+| Binding | Calls |
+|---|---|
+| `token.{create,mint,burn}` | [Token factory](/docs/blockchain/token-factory), never for `norama`-named denoms. `create` takes the same `transfer_hook` (a contract address) as the message |
+| `cnft.{create_collection,create_tree,mint}` | [NFTs](/docs/blockchain/nfts-and-market) |
+| `market.{list,cancel_listing,bid,cancel_bid,settle}` | The market |
+| `storage.create_deal` | A deal paid from the contract's own funds. Protocol classes are refused |
+| `earnings.pay` | Pays a user's earnings account |
+| `shielded` | Returns `NOT_LINKED` |
+
+Queries a contract may make: `token.info`, `cnft.tree`, `cnft.verify_proof` (20,000 gas plus 3,000 per sibling) and `market.listing`. Staking messages, stargate (`Any`) messages and distribution `SetWithdrawAddress` are refused.
+
+## A contract as a token's transfer hook
+
+A token created with a `transfer_hook` has the named contract called (`sudo`, message `{"transfer_hook":{"denom","from","to","amount"}}`) on every `Transfer`, under a gas cap of 100,000. A contract that returns an error refuses the transfer; one that runs past the cap fails it. Only a build with the contract VM can create such a token. See [Token factory](/docs/blockchain/token-factory#the-transfer-hook).
+
+## State deposits
+
+Contract storage is priced at 68,359 norama per byte. There is one deposit chunk per payer per contract, at most 32 chunks per contract, and a first-time payer also locks a 512-byte overhead. `max_deposit_per_tx` is 10 ORAMA. When state shrinks, 99% of the deposit is refunded and 1% burned.

@@ -46,30 +46,22 @@ func TestParseJWTNamespace(t *testing.T) {
 	})
 }
 
+// A legacy key carried its namespace; a current one does not, and that is not
+// an error — it is what every key minted from here on looks like.
 func TestParseAPIKeyNamespace(t *testing.T) {
-	t.Run("valid", func(t *testing.T) {
-		ns, err := parseAPIKeyNamespace("ak_random:apins")
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+	if ns := parseAPIKeyNamespace("ak_random:apins"); ns != "apins" {
+		t.Errorf("a legacy key resolved to %q, want apins", ns)
+	}
+	for _, key := range []string{
+		"orama_rk_2fJ8xQvMz9_1aB2",
+		"no-colon",
+		"   ",
+		"",
+	} {
+		if ns := parseAPIKeyNamespace(key); ns != "" {
+			t.Errorf("parseAPIKeyNamespace(%q) = %q, want no namespace", key, ns)
 		}
-		if ns != "apins" {
-			t.Fatalf("expected 'apins', got %q", ns)
-		}
-	})
-
-	t.Run("invalid_format", func(t *testing.T) {
-		_, err := parseAPIKeyNamespace("no-colon")
-		if err == nil {
-			t.Fatalf("expected error for invalid format")
-		}
-	})
-
-	t.Run("empty_key", func(t *testing.T) {
-		_, err := parseAPIKeyNamespace("   ")
-		if err == nil {
-			t.Fatalf("expected error for empty key")
-		}
-	})
+	}
 }
 
 func TestDeriveNamespace(t *testing.T) {

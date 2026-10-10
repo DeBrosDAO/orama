@@ -1,0 +1,93 @@
+# Application deployments driven through `orama deploy` / `orama app` as an
+# operator, plus the API where the CLI cannot reach: all five runtimes (static,
+# Next.js static export, Next.js SSR standalone, Node.js with node and npm
+# start, Go) served by name from every node; update, versions, rollback, list,
+# get, logs, stats, events and delete; environment variables at deploy time and
+# after, platform names and bad values refused, encrypted at rest; the sandbox
+# probed from inside a hostile app (uid, secrets, neighbours, PID 1, read-only
+# code, state dir, bind only PORT, no WireGuard) and from the host (unit
+# properties, env file modes); npm install scripts never run and non-registry
+# sources refused; workload token renewal; grants; custom domains up to
+# verification; name and archive validation; a same-name race; control-plane
+# only; crash restarts; updates forwarded from a node without the app.
+# An environment stored sealed to its own namespace and deployment id after
+# `orama maint operator rotate-secrets`; a bare {name} host not served for a
+# subdomained deployment.
+# Home-node failover and OOM are in deployments-failover, which runs alone.
+id: deployments
+title: Application deployments, runtimes and their sandbox
+area: tenancy
+subtasks: [2832]
+stage: 5
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  cli:
+    - orama app
+    - orama app delete
+    - orama app env
+    - orama app env list
+    - orama app env set
+    - orama app env unset
+    - orama app get
+    - orama app grants
+    - orama app grants list
+    - orama app grants set
+    - orama app list
+    - orama app logs
+    - orama app rollback
+    - orama app stats
+    - orama deploy
+    - orama deploy go
+    - orama deploy nextjs
+    - orama deploy nodejs
+    - orama deploy static
+    - orama domain
+    - orama domain add
+    - orama domain list
+    - orama domain remove
+    - orama domain verify
+  routes:
+    - /v1/deployments/delete
+    - /v1/deployments/domains/add
+    - /v1/deployments/domains/list
+    - /v1/deployments/domains/remove
+    - /v1/deployments/domains/verify
+    - /v1/deployments/env
+    - /v1/deployments/env/set
+    - /v1/deployments/events
+    - /v1/deployments/get
+    - /v1/deployments/go/update
+    - /v1/deployments/go/upload
+    - /v1/deployments/grants
+    - /v1/deployments/list
+    - /v1/deployments/logs
+    - /v1/deployments/nextjs/upload
+    - /v1/deployments/nodejs/update
+    - /v1/deployments/nodejs/upload
+    - /v1/deployments/rollback
+    - /v1/deployments/static/update
+    - /v1/deployments/static/upload
+    - /v1/deployments/stats
+    - /v1/deployments/versions
+    - /v1/auth/renew
+  units:
+    - orama-deploy-build@.service
+    - orama-deploy-go@.service
+    - orama-deploy-node@.service
+    - orama-deploy-npm@.service
+  claims:
+    - "website/src/docs/developer/deployments.mdx#deployment-names: names are 1-56 of letters, digits, - and _; a taken name is 409"
+    - "website/src/docs/developer/deployments.mdx#important-notes-1: install scripts never run; git, URL, file, link, path and workspace sources are refused"
+    - "website/src/docs/developer/deployments.mdx#what-the-platform-sets-for-you: PORT, ENTRY_POINT and ORAMA_* are the platform's and refused from a tenant"
+    - "website/src/docs/developer/deployments.mdx#how-the-values-are-handled: values are encrypted in the cluster database; NUL, invalid UTF-8 and over 64 KiB are refused"
+    - "website/src/docs/developer/deployments.mdx#what-your-app-runs-as: each deployment runs as its own unprivileged user, sees only its own directory read-only, and cannot reach the cluster network"
+    - "docs/whitepaper/technical-reference/vol1/14-authorization.md: a deployment binds its own port and nothing else"
+    - "website/src/docs/developer/deployments.mdx#your-apps-own-credential: the app renews its workload token at /v1/auth/renew; it cannot be granted the control plane"
+    - "docs/whitepaper/technical-reference/vol1/14-authorization.md: a grant names a deployment that exists in the caller's namespace; a name with / or : is 400, a deployment that does not exist is 404"
+    - "website/src/docs/developer/domains.mdx#cross-node-routing: every node serves every app by name"
+    - "docs/whitepaper/technical-reference/vol1/11-app-deployments.md: after rotate-secrets a deployment's environment is stored sealed to its namespace and deployment id (enc:v2:) and still reaches the app"
+    - "website/src/docs/developer/deployments.mdx: a deployment with a subdomain is not served at its bare name"

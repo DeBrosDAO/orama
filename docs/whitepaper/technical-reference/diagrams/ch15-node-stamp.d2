@@ -1,0 +1,22 @@
+shape: sequence_diagram
+
+n: "orama-node"
+g: "index gateway (loopback :10104)"
+db: "index RQLite"
+
+n -> n: "LoadOrCreateNodeKey: secrets/node-key.pem (0600, atomic write)"
+n -> g: "POST /v1/internal/node/enrol-key\nstamp signed with identity.key"
+g -> g: "ReachedWithoutPublicProxy, body max 64 KiB"
+g -> g: "NodeIdentityVerifier: public key extracted from the peer id"
+g -> db: "SELECT node_credentials"
+db -> g: "no row"
+g -> db: "INSERT ... SELECT WHERE NOT EXISTS"
+g -> n: "recorded: true"
+n -> g: "POST /v1/internal/node/register\nstamp signed with node-key.pem"
+g -> db: "SELECT public_key, revoked_at"
+g -> g: "verify stamp, node id from header only"
+g -> db: "admitted(): dns_nodes / wireguard_peers / placeholder / empty registry"
+g -> db: "INSERT dns_nodes ON CONFLICT UPDATE"
+g -> n: "204"
+n -> g: "POST /v1/internal/node/heartbeat every 30 s"
+g -> n: "registered: true or false"

@@ -1,0 +1,39 @@
+direction: right
+
+operator: Operator {shape: person}
+joiner: Joining machine {shape: person}
+
+minting: "Cluster node (the minting node when it is named in an invite)" {
+  gw: Index gateway {
+    join: "POST /v1/internal/join (invite token)"
+    enroll: "POST /v1/node/enroll (invite token)"
+  }
+  node: orama-node {
+    sync: "WireGuard sync, every 60 s"
+    boot: "mesh bootstrap repair"
+    disc: "libp2p peer exchange"
+  }
+  helper: orama-privhelper {shape: rectangle}
+  wg0: "wg0 (kernel) and wg0.conf"
+  reg: "index RQLite\nwireguard_peers, invite_tokens" {shape: cylinder}
+}
+
+peers: Other nodes {
+  wgp: "wg0, 10.0.0.x"
+  p2p: "libp2p :4001 on the overlay"
+}
+
+operator -> minting.gw: "mints invite (POST /v1/operator/invite)"
+operator -> joiner: "orama1_ invite (copy once)"
+joiner -> minting.gw.join: "HTTPS, certificate pinned by SHA-256"
+minting.gw.join -> minting.reg: "overlay.Register: lowest free wg_ip"
+minting.gw.enroll -> minting.reg: "overlay.Register"
+minting.gw -> minting.helper: "add-peer / remove-peer (unix socket)"
+minting.node.sync -> minting.reg: "read wireguard_peers (leader, else local replica);\nupsert own row (self-registration)"
+minting.node.sync -> minting.wg0: "wg set (CAP_NET_ADMIN)"
+minting.node.sync -> minting.helper: "persist-peers"
+minting.node.boot -> minting.reg: "local replica, additive only"
+minting.node.boot -> minting.wg0: "wg set"
+minting.helper -> minting.wg0: "wg set + rewrite [Peer] sections"
+minting.wg0 <-> peers.wgp: "UDP 51820, keepalive 25 s"
+minting.node.disc <-> peers.p2p: "peer-exchange/1.0.0"

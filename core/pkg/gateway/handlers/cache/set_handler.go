@@ -3,12 +3,18 @@ package cache
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
+	gwauth "github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
+	"github.com/DeBrosOfficial/network/pkg/logging"
+	"github.com/DeBrosOfficial/network/pkg/olric"
+	olriclib "github.com/olric-data/olric"
+	"go.uber.org/zap"
 )
 
 // getNamespaceFromContext extracts the namespace from the request context
@@ -30,7 +36,7 @@ func getNamespaceFromContext(ctx context.Context) string {
 //	  "dmap": "my-cache",
 //	  "key": "user:123",
 //	  "value": {"name": "John", "age": 30},
-//	  "ttl": "1h"  // Optional: "1h", "30m", etc.
+//	  "ttl": "1h"  // Optional: "1h", "30m", etc. Omitted or "0s" = no expiry.
 //	}
 //
 // Response:
@@ -41,11 +47,6 @@ func getNamespaceFromContext(ctx context.Context) string {
 //	  "dmap": "my-cache"
 //	}
 func (h *CacheHandlers) SetHandler(w http.ResponseWriter, r *http.Request) {
-	if h.olricClient == nil {
-		writeError(w, http.StatusServiceUnavailable, "Olric cache client not initialized")
-		return
-	}
-
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -63,53 +64,71 @@ func (h *CacheHandlers) SetHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !h.authorizeKey(w, r, req.DMap, req.Key, gwauth.ActionWrite) {
+		return
+	}
+
+	// The availability check comes after the request has been read and
+	// authorized. A caller who may not touch this key is refused whether or not
+	// the cache happens to be up, and a 503 would otherwise tell them the cache
+	// exists and is down — an answer they are not entitled to.
+	if h.olricClient == nil {
+		writeError(w, http.StatusServiceUnavailable, "Olric cache client not initialized")
+		return
+	}
+
 	if req.Value == nil {
 		writeError(w, http.StatusBadRequest, "value is required")
+		return
+	}
+
+	foldedKey, ok := foldKey(req.DMap, req.Key)
+	if !ok {
+		writeError(w, http.StatusRequestEntityTooLarge, keyTooLargeMessage(req.DMap))
+		return
+	}
+
+	putOpts, err := putOptionsForTTL(req.TTL)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	// Namespace isolation: prefix dmap with namespace
-	namespace := getNamespaceFromContext(ctx)
-	if namespace == "" {
-		writeError(w, http.StatusUnauthorized, "namespace not found in context")
+	// Namespace isolation: the namespace's one cache DMap (namespace_dmap.go).
+	dm, ok := h.namespaceCache(ctx, w)
+	if !ok {
 		return
 	}
-	namespacedDMap := fmt.Sprintf("%s:%s", namespace, req.DMap)
 
-	olricCluster := h.olricClient.GetClient()
-	dm, err := olricCluster.NewDMap(namespacedDMap)
+	// Olric stores untyped bytes; the value is stored as typed JSON so a read
+	// returns exactly what was put (see storedValueMarker).
+	valueToStore, err := encodeStoredValue(req.Value)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create DMap: %v", err))
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !entryFitsTable(foldedKey, valueToStore) {
+		writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf(
+			"value too large: an entry must fit in one cache table (%d bytes), key and encoding included; store less under one key", OlricTableSizeBytes))
 		return
 	}
 
-	// TODO: TTL support - need to check Olric v0.7 API for TTL/expiry options
-	// For now, ignore TTL if provided
-	if req.TTL != "" {
-		_, err := time.ParseDuration(req.TTL)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid ttl format: %v", err))
+	if err := dm.Put(ctx, foldedKey, valueToStore, putOpts...); err != nil {
+		status, message := putFailure(err)
+		if status == http.StatusServiceUnavailable {
+			h.logger.ComponentError(logging.ComponentGeneral, "cache unreachable on put",
+				zap.String("dmap", req.DMap), zap.Error(err))
+			writeUnavailable(w)
 			return
 		}
-		// TTL parsing succeeded but not yet implemented in API
-		// Will be added once we confirm the correct Olric API method
-	}
-
-	// Serialize complex types (maps, slices) to JSON bytes for Olric storage
-	// Olric can handle basic types (string, number, bool) directly, but complex
-	// types need to be serialized to bytes
-	valueToStore, err := prepareValueForStorage(req.Value)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to prepare value: %v", err))
-		return
-	}
-
-	err = dm.Put(ctx, req.Key, valueToStore)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to put key: %v", err))
+		if status == http.StatusInternalServerError {
+			h.logger.ComponentError(logging.ComponentGeneral, "failed to put key into cache",
+				zap.String("dmap", req.DMap), zap.Error(err))
+		}
+		writeError(w, status, message)
 		return
 	}
 
@@ -120,34 +139,43 @@ func (h *CacheHandlers) SetHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// prepareValueForStorage prepares a value for storage in Olric.
-// Complex types (maps, slices) are serialized to JSON bytes.
-// Basic types (string, number, bool) are stored directly.
-func prepareValueForStorage(value any) (any, error) {
-	switch value.(type) {
-	case map[string]any:
-		// Serialize maps to JSON bytes
-		jsonBytes, err := json.Marshal(value)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal map value: %w", err)
-		}
-		return jsonBytes, nil
-	case []any:
-		// Serialize slices to JSON bytes
-		jsonBytes, err := json.Marshal(value)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal array value: %w", err)
-		}
-		return jsonBytes, nil
-	case string, float64, int, int64, bool, nil:
-		// Basic types can be stored directly
-		return value, nil
+// putOptionsForTTL turns the request's optional ttl into Olric put options.
+// An empty or zero ttl ("", "0", "0s") stores the entry with no expiry,
+// matching cache_set's ttl=0. A ttl that does not parse, is negative, or is
+// longer than olric.MaxEntryTTL is refused rather than stored as something it
+// is not.
+func putOptionsForTTL(ttl string) ([]olriclib.PutOption, error) {
+	if ttl == "" {
+		return nil, nil
+	}
+	d, err := time.ParseDuration(ttl)
+	if err != nil {
+		return nil, fmt.Errorf("invalid ttl format: %w", err)
+	}
+	switch {
+	case d < 0:
+		return nil, fmt.Errorf("ttl must not be negative, got %q; omit ttl or send \"0s\" for no expiry", ttl)
+	case d > olric.MaxEntryTTL:
+		return nil, fmt.Errorf("ttl %q exceeds the maximum of %s", ttl, olric.MaxEntryTTL)
+	case d == 0:
+		return nil, nil
+	}
+	return []olriclib.PutOption{olriclib.EX(d)}, nil
+}
+
+// putFailure is the status and message for a put Olric refused. An entry or a
+// key too large for a table is the caller's request, and says what to change;
+// anything else is the cache failing.
+func putFailure(err error) (int, string) {
+	switch {
+	case errors.Is(err, olriclib.ErrEntryTooLarge):
+		return http.StatusRequestEntityTooLarge, "value too large: an entry must fit in one cache table (1 MiB), key and encoding included; store less under one key"
+	case errors.Is(err, olriclib.ErrKeyTooLarge):
+		return http.StatusRequestEntityTooLarge, "key too large: use a shorter key"
+	case isCacheUnreachable(err):
+		return http.StatusServiceUnavailable, cacheUnavailableMessage
 	default:
-		// For any other type, serialize to JSON to be safe
-		jsonBytes, err := json.Marshal(value)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal value: %w", err)
-		}
-		return jsonBytes, nil
+		// Olric's text can name cluster members; it is the operator's, in the log.
+		return http.StatusInternalServerError, "failed to put key; retry, and if it persists the cache is unavailable"
 	}
 }

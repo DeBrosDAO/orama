@@ -1,0 +1,22 @@
+direction: down
+
+start: "ResolveNodes(env)" {shape: oval}
+api: "GET gateway/v1/operator/nodes?env=\nBearer from shared.AuthToken\n10 s timeout, no redirects, 1 MiB cap"
+apiok: "answered 200\nwith at least one node?" {shape: diamond}
+rec: "environments.json\nNodes recorded by orama node setup\n(empty when env is empty)"
+recok: "any recorded?" {shape: diamond}
+conf: "nodes.conf\n~/.orama/nodes.conf, then scripts/ paths\nfilter by env"
+confok: "loaded and non-empty?" {shape: diamond}
+err: "error naming both failures\n(or the one that failed)" {shape: oval}
+use: "[]inspector.Node\nUser defaults to root\nVaultTarget host/user" {shape: oval}
+
+start -> api
+api -> apiok
+apiok -> use: "yes"
+apiok -> rec: "no"
+rec -> recok
+recok -> use: "yes"
+recok -> conf: "no"
+conf -> confok
+confok -> use: "yes"
+confok -> err: "no"

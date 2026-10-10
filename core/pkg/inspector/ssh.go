@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -83,16 +84,17 @@ func runSSHOnce(ctx context.Context, node Node, command string) SSHResult {
 		}
 	}
 
-	args := []string{
-		"ssh", "-n",
-		"-o", "StrictHostKeyChecking=accept-new",
+	args := append([]string{"ssh", "-n"}, node.HostKeyOptions()...)
+	args = append(args, node.sharedConnectionOptions()...)
+	args = append(args,
 		"-o", "ConnectTimeout=10",
 		"-o", "BatchMode=yes",
 		"-o", "IdentitiesOnly=yes",
+		"-o", "ForwardAgent=no",
 		"-i", node.SSHKey,
 		fmt.Sprintf("%s@%s", node.User, node.Host),
 		command,
-	}
+	)
 
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 
@@ -119,6 +121,41 @@ func runSSHOnce(ctx context.Context, node Node, command string) SSHResult {
 		Duration: duration,
 		Err:      err,
 	}
+}
+
+// sshControlPersist is how long a shared connection outlives its last
+// session. A collection is a burst of sessions; the master must not outlive it
+// by much because Collect also closes it explicitly.
+const sshControlPersist = "30s"
+
+// sharedConnectionOptions are the ssh -o arguments that make a node's sessions
+// share one connection, or none when the node has no ControlDir.
+//
+// Setting up an SSH session is most of what a collector costs: on a CPU-starved
+// VPS (60% steal) it took 1-4s per session against 0.4s over an open
+// connection, so the 14 sessions of one node's collection took 49s, longer
+// than the whole --timeout. %C is a hash of the connection, so the path stays
+// inside the 104 bytes of a unix socket name whatever the host is called.
+func (n Node) sharedConnectionOptions() []string {
+	if n.ControlDir == "" {
+		return nil
+	}
+	return []string{
+		"-o", "ControlMaster=auto",
+		"-o", "ControlPath=" + filepath.Join(n.ControlDir, "%C"),
+		"-o", "ControlPersist=" + sshControlPersist,
+	}
+}
+
+// closeSharedConnection stops the node's connection master. An error is not
+// reported: a master that is already gone (it idled out, or the node never
+// answered) is exactly the state this wants.
+func closeSharedConnection(node Node) {
+	if node.ControlDir == "" {
+		return
+	}
+	_ = exec.Command("ssh", "-O", "exit", "-o", "ControlPath="+filepath.Join(node.ControlDir, "%C"),
+		fmt.Sprintf("%s@%s", node.User, node.Host)).Run()
 }
 
 // isSSHConnectionError returns true if the failure looks like an SSH connection

@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
+	"github.com/DeBrosOfficial/network/pkg/gateway/wssession"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"github.com/DeBrosOfficial/network/pkg/serverless/persistent"
 	"github.com/google/uuid"
@@ -21,51 +23,6 @@ import (
 // json.Unmarshal cost — the vast majority of inbound frames are
 // application traffic that goes straight to WASM. Bugboard #321.
 var oramaControlFramePrefix = []byte(`"__orama"`)
-
-const (
-	// wsJWTExpiryGrace is the slack past a JWT's `exp` before the gateway
-	// stops serving application frames on a persistent WS. It covers clock
-	// skew between the gateway and the issuing path plus the client's
-	// refresh round-trip (the #321 auth.refresh control frame). Bugboard
-	// #868: without this, a socket authenticated ONCE at upgrade keeps full
-	// RPC access — including turn.credentials minting — for the socket's
-	// entire lifetime even after the token expires.
-	//
-	// Note: on the auth.refresh path ParseAndVerifyJWT independently allows
-	// its own ±60s exp skew, so worst-case service-past-exp is this grace
-	// plus that skew (~180s), not 120s flat. Both bounds are deliberate and
-	// the socket is force-closed once they elapse.
-	wsJWTExpiryGrace = 120 * time.Second
-
-	// wsCloseJWTExpired is the application-specific WS close code sent when a
-	// persistent socket is torn down for serving past its JWT expiry. It sits
-	// in the private-use range (4000-4999) and is distinct from protocol
-	// codes so clients can special-case it as "reconnect with a fresh token".
-	// Bugboard #868.
-	wsCloseJWTExpired = 4401
-)
-
-// wsAuthState carries the live JWT expiry for a persistent WS across the read
-// loop and the auth.refresh control handler. Both run in the SAME goroutine —
-// control frames are handled inline in the read loop before any frame reaches
-// WASM — so the field needs no synchronization. Bugboard #868.
-type wsAuthState struct {
-	// expUnix is the `exp` (unix seconds) of the JWT currently authorizing
-	// this socket. 0 means "no expiry to enforce" (e.g. API-key auth or a
-	// token without exp) — such sockets are exempt from mid-session expiry.
-	expUnix int64
-}
-
-// wsJWTExpired reports whether a persistent WS authorized by a JWT expiring at
-// expUnix (unix seconds) has passed its enforcement deadline at time now,
-// allowing grace for clock skew + refresh round-trip. expUnix <= 0 means there
-// is no expiry to enforce and is never considered expired. Bugboard #868.
-func wsJWTExpired(expUnix int64, now time.Time, grace time.Duration) bool {
-	if expUnix <= 0 {
-		return false
-	}
-	return now.After(time.Unix(expUnix, 0).Add(grace))
-}
 
 // oramaControlFrame is the wire shape for gateway-handled control
 // frames on a persistent WS. The single Type field discriminates;
@@ -82,6 +39,11 @@ type oramaControlFrame struct {
 	Type string `json:"__orama"`
 	JWT  string `json:"jwt,omitempty"`
 }
+
+// authRefreshUnavailableMessage is the ack error for a token whose revocation
+// state could not be read. Constant, and worded as retryable, so a client can
+// tell it from a refused token ("invalid or expired jwt").
+const authRefreshUnavailableMessage = "cannot check whether this token was revoked; retry shortly"
 
 // oramaControlAck is the response shape sent back on the WS after a
 // control frame is handled. Clients SHOULD await this before assuming
@@ -135,18 +97,19 @@ func (h *ServerlessHandlers) handlePersistentWebSocket(
 	// instance can call ws_pubsub_bridge from ws_open or any frame handler;
 	// the bridge needs to know which namespace owns this client.
 	if h.wsBridge != nil {
-		h.wsBridge.SetClientNamespace(clientID, namespace)
+		h.registerBridgeClient(r, clientID, namespace)
 		defer h.wsBridge.RemoveClient(context.Background(), clientID)
 	}
 
 	invCtx := h.buildPersistentInvocationContext(r, fn, clientID)
 	callerWallet := invCtx.CallerWallet
 
-	// Capture the authorizing JWT's expiry so the read loop can enforce it
-	// for the socket's lifetime (bugboard #868). A successful auth.refresh
-	// control frame updates this in place; 0 (non-JWT auth) disables the
-	// check.
-	authState := &wsAuthState{expUnix: h.getJWTExpiryFromRequest(r)}
+	// Hold the socket to the token that opened it (bugboard #868): the
+	// gateway's sweeper closes it once the token expires or is revoked, and
+	// the read loop below refuses frames past expiry in between sweeps. A
+	// successful auth.refresh control frame moves it to the new token.
+	sock := h.sessions.Register(h.socketClaims(r), h.closeClient(clientID))
+	defer sock.Unregister()
 
 	// Instantiate the persistent module. This compiles once (cached) and
 	// creates one wazero instance bound to this connection.
@@ -247,7 +210,7 @@ func (h *ServerlessHandlers) handlePersistentWebSocket(
 		// avoids json.Unmarshal for every application frame. Only
 		// frames carrying the `"__orama"` key get parsed.
 		if bytes.Contains(frame, oramaControlFramePrefix) {
-			handled, ackErr := h.handleOramaControlFrame(frame, fn, inst, authState, namespace, clientID, conn)
+			handled, ackErr := h.handleOramaControlFrame(frame, fn, inst, sock, namespace, clientID, conn)
 			if ackErr != nil {
 				h.logger.Warn("persistent WS: control-frame ack write failed",
 					zap.String("client_id", clientID),
@@ -266,21 +229,18 @@ func (h *ServerlessHandlers) handlePersistentWebSocket(
 
 		// Bugboard #868: a persistent WS authenticates ONCE at upgrade.
 		// Before handing an application frame to WASM, reject it once the
-		// authorizing JWT is past exp+grace — otherwise an expired token
-		// keeps serving RPCs (incl. turn.credentials minting) indefinitely.
-		// The client keeps the socket alive by sending an
+		// authorizing JWT is past exp+grace, rather than serving it until
+		// the next sweep. The client keeps the socket alive by sending an
 		// {"__orama":"auth.refresh"} control frame (handled above, which
-		// bypasses this check) before the token expires. The check runs
-		// only on application frames so an expired client can still recover
-		// via auth.refresh rather than being locked out.
-		if wsJWTExpired(authState.expUnix, time.Now(), wsJWTExpiryGrace) {
+		// bypasses this check) before the token expires.
+		if sock.Expired(time.Now()) {
 			h.logger.Info("persistent WS: closing — JWT expired without refresh",
 				zap.String("client_id", clientID),
 				zap.String("namespace", namespace),
-				zap.Int64("jwt_exp", authState.expUnix))
+				zap.Int64("jwt_exp", sock.Claims().Exp))
 			_ = conn.WriteControl(websocket.CloseMessage,
-				websocket.FormatCloseMessage(wsCloseJWTExpired, "jwt expired; reconnect with a fresh token"),
-				time.Now().Add(time.Second))
+				websocket.FormatCloseMessage(wssession.CloseExpired, wssession.ReasonExpired),
+				time.Now().Add(wssession.CloseFrameTimeout))
 			break
 		}
 
@@ -320,14 +280,24 @@ func (h *ServerlessHandlers) handlePersistentWebSocket(
 func (h *ServerlessHandlers) buildPersistentInvocationContext(
 	r *http.Request, fn *serverless.Function, clientID string,
 ) *serverless.InvocationContext {
+	// CallerHasInvoke has to travel with the socket. The upgrade checks it,
+	// then every nested function_invoke reads it back from this context.
+	// Dropping it made a private handler unauthorized for the same wallet
+	// that had just been allowed to open the socket: the async dispatch
+	// returned, the child never ran, and the client got no reply.
+	callerWallet, callerIsAdmin, callerHasInvoke := h.socketCaller(r)
 	return &serverless.InvocationContext{
 		FunctionID:       fn.ID,
 		FunctionName:     fn.Name,
 		Namespace:        fn.Namespace,
-		CallerWallet:     h.getWalletFromRequest(r),
+		CallerWallet:     callerWallet,
+		CallerIsAdmin:    callerIsAdmin,
+		CallerHasInvoke:  callerHasInvoke,
 		CallerIP:         extractRemoteIP(r),
 		CallerClaims:     h.getCallerClaimsFromRequest(r),
 		CallerJWTSubject: h.getJWTSubjectFromRequest(r),
+		CallerDeviceID:   h.getDeviceIDFromRequest(r),
+		CallerCapability: socketCapability(r),
 		WSClientID:       clientID,
 		TriggerType:      serverless.TriggerTypeWebSocket,
 	}
@@ -347,7 +317,7 @@ func (h *ServerlessHandlers) handleOramaControlFrame(
 	frame []byte,
 	fn *serverless.Function,
 	inst *persistent.Instance,
-	authState *wsAuthState,
+	sock *wssession.Socket,
 	namespace, clientID string,
 	conn *websocket.Conn,
 ) (handled bool, ackErr error) {
@@ -363,7 +333,7 @@ func (h *ServerlessHandlers) handleOramaControlFrame(
 
 	switch ctrl.Type {
 	case "auth.refresh":
-		return true, h.handleAuthRefresh(ctrl, fn, inst, authState, namespace, clientID, conn)
+		return true, h.handleAuthRefresh(ctrl, fn, inst, sock, namespace, clientID, conn)
 	default:
 		// Unknown control type — ack with an error so the client knows
 		// the frame was seen but ignored. Treat as handled (don't
@@ -384,7 +354,7 @@ func (h *ServerlessHandlers) handleAuthRefresh(
 	ctrl oramaControlFrame,
 	fn *serverless.Function,
 	inst *persistent.Instance,
-	authState *wsAuthState,
+	sock *wssession.Socket,
 	namespace, clientID string,
 	conn *websocket.Conn,
 ) error {
@@ -395,6 +365,16 @@ func (h *ServerlessHandlers) handleAuthRefresh(
 			Error: "mid-session auth refresh not supported on this gateway",
 		})
 	}
+	// A socket held to no account — an API key's, or one opened with a
+	// capability — cannot take one on. It is refused before the token is
+	// even read, so an anonymous socket is never logged beside an account.
+	if !sock.HoldsAccount() {
+		return h.writeControlAck(conn, oramaControlAck{
+			Type:  "auth.refresh",
+			OK:    false,
+			Error: wssession.ErrNotRefreshable.Error(),
+		})
+	}
 	if ctrl.JWT == "" {
 		return h.writeControlAck(conn, oramaControlAck{
 			Type:  "auth.refresh",
@@ -403,6 +383,19 @@ func (h *ServerlessHandlers) handleAuthRefresh(
 		})
 	}
 	claims, err := h.jwtVerifier.ParseAndVerifyJWT(ctrl.JWT)
+	if errors.Is(err, auth.ErrRevocationsUnavailable) {
+		// Not a verdict on the token: the gateway could not tell whether it
+		// was revoked. The client keeps its socket and retries. The ack never
+		// carries err, which can name why the registry could not be read.
+		h.logger.Warn("persistent WS: auth.refresh could not be checked against the revocation list",
+			zap.String("client_id", clientID),
+			zap.Error(err))
+		return h.writeControlAck(conn, oramaControlAck{
+			Type:  "auth.refresh",
+			OK:    false,
+			Error: authRefreshUnavailableMessage,
+		})
+	}
 	if err != nil {
 		h.logger.Info("persistent WS: auth.refresh rejected (invalid jwt)",
 			zap.String("client_id", clientID),
@@ -420,7 +413,7 @@ func (h *ServerlessHandlers) handleAuthRefresh(
 			zap.String("reason", reason),
 			zap.String("ws_namespace", fn.Namespace),
 			zap.String("jwt_namespace", claims.Namespace),
-			zap.String("jwt_subject", claims.Sub),
+			zap.String("jwt_subject", auth.RedactSubject(claims.Sub)),
 		)
 		return h.writeControlAck(conn, oramaControlAck{
 			Type:  "auth.refresh",
@@ -429,47 +422,22 @@ func (h *ServerlessHandlers) handleAuthRefresh(
 		})
 	}
 
-	// Audit log when the refreshed subject DIFFERS from the original
-	// (bug #321 audit LOW #8). Same-subject rotations are the common
-	// case (token renewal); cross-subject is legal but rare enough
-	// that operators benefit from seeing it in the audit trail.
-	prevSubject := ""
-	if cur := inst.CurrentInvocationContext(); cur != nil {
-		prevSubject = cur.CallerJWTSubject
-	}
-	if prevSubject != "" && prevSubject != claims.Sub {
-		h.logger.Info("persistent WS: auth.refresh swapping subject identity on socket",
+	// A token for another subject is refused before anything changes — a
+	// refresh keeps this socket open, it does not hand it to somebody else,
+	// and ws_open ran for the original identity.
+	if err := sock.CheckRefresh(claims); err != nil {
+		h.logger.Warn("persistent WS: auth.refresh rejected",
 			zap.String("client_id", clientID),
-			zap.String("previous_subject", prevSubject),
-			zap.String("new_subject", claims.Sub),
-		)
+			zap.String("jwt_subject", auth.RedactSubject(claims.Sub)),
+			zap.Error(err))
+		return h.writeControlAck(conn, oramaControlAck{
+			Type:  "auth.refresh",
+			OK:    false,
+			Error: err.Error(),
+		})
 	}
 
-	// Build a fresh InvocationContext with the new identity. Preserve
-	// the connection-scoped fields (FunctionID/Name, Namespace,
-	// WSClientID, CallerIP, TriggerType) — those don't change. Wallet
-	// resolution follows the same precedence as the original upgrade:
-	// JWT subject is the source of truth here since the caller is
-	// proving fresh identity.
-	customClaims := map[string]string{}
-	for k, v := range claims.Custom {
-		customClaims[k] = v
-	}
-	newInvCtx := &serverless.InvocationContext{
-		FunctionID:       fn.ID,
-		FunctionName:     fn.Name,
-		Namespace:        fn.Namespace,
-		CallerWallet:     claims.Sub,
-		CallerClaims:     customClaims,
-		CallerJWTSubject: claims.Sub,
-		WSClientID:       clientID,
-		TriggerType:      serverless.TriggerTypeWebSocket,
-	}
-
-	if err := inst.UpdateInvocationContext(newInvCtx); err != nil {
-		// nil-guard inside UpdateInvocationContext is the only error
-		// path today; we just built newInvCtx with non-nil fields so
-		// this shouldn't fire. If it does, surface as an internal error.
+	if err := inst.UpdateInvocationContext(refreshedInvocationContext(inst, fn, claims, clientID)); err != nil {
 		h.logger.Error("persistent WS: UpdateInvocationContext failed",
 			zap.String("client_id", clientID),
 			zap.Error(err))
@@ -480,22 +448,65 @@ func (h *ServerlessHandlers) handleAuthRefresh(
 		})
 	}
 
-	// Extend the socket's expiry enforcement to the new token's exp so the
-	// read loop keeps serving RPCs past the old deadline (bugboard #868).
-	// authState and the read loop share this goroutine, so the write is
-	// race-free.
-	authState.expUnix = claims.Exp
+	// Only once the instance runs as the new token does the socket answer to
+	// it: its expiry and its jti are what the sweeper checks from here on.
+	if err := sock.Refresh(claims); err != nil {
+		h.logger.Error("persistent WS: auth.refresh applied to the instance but not the socket",
+			zap.String("client_id", clientID),
+			zap.Error(err))
+		return h.writeControlAck(conn, oramaControlAck{
+			Type:  "auth.refresh",
+			OK:    false,
+			Error: "internal: failed to apply refresh",
+		})
+	}
 
 	h.logger.Info("persistent WS: auth.refresh applied",
 		zap.String("client_id", clientID),
 		zap.String("namespace", namespace),
-		zap.String("new_subject", claims.Sub))
+		zap.String("subject", auth.RedactSubject(claims.Sub)))
 
 	return h.writeControlAck(conn, oramaControlAck{
 		Type:    "auth.refresh",
 		OK:      true,
 		Subject: claims.Sub,
 	})
+}
+
+// refreshedInvocationContext is the persistent instance's identity after a
+// token refresh. The connection-scoped fields (function, namespace, client id,
+// trigger type) do not change, and neither do the authorization and client IP
+// established at the upgrade — a refresh keeps the socket alive, it does not
+// re-open it. Dropping CallerIsAdmin here would silently strip admin from an
+// admin's internal→internal child invokes after a refresh (bugboard #152).
+// Dropping CallerHasInvoke would refuse every private handler the socket was
+// allowed to dispatch. The subject is the one the socket was opened with; the
+// custom claims may have moved on.
+func refreshedInvocationContext(
+	inst *persistent.Instance, fn *serverless.Function, claims *auth.JWTClaims, clientID string,
+) *serverless.InvocationContext {
+	prevIsAdmin, prevHasInvoke, prevIP := false, false, ""
+	if cur := inst.CurrentInvocationContext(); cur != nil {
+		prevIsAdmin, prevHasInvoke, prevIP = cur.CallerIsAdmin, cur.CallerHasInvoke, cur.CallerIP
+	}
+	customClaims := make(map[string]string, len(claims.Custom))
+	for k, v := range claims.Custom {
+		customClaims[k] = v
+	}
+	return &serverless.InvocationContext{
+		FunctionID:       fn.ID,
+		FunctionName:     fn.Name,
+		Namespace:        fn.Namespace,
+		CallerWallet:     claims.Sub,
+		CallerClaims:     customClaims,
+		CallerJWTSubject: claims.Sub,
+		CallerDeviceID:   claims.Did,
+		CallerIP:         prevIP,
+		CallerIsAdmin:    prevIsAdmin,
+		CallerHasInvoke:  prevHasInvoke,
+		WSClientID:       clientID,
+		TriggerType:      serverless.TriggerTypeWebSocket,
+	}
 }
 
 // validateRefreshClaims is the policy decision for whether a

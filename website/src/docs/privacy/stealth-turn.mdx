@@ -1,0 +1,95 @@
+# Stealth TURN
+
+Stealth TURN lets a namespace serve TURN over TLS on port 443, the same port as ordinary HTTPS. To a network observer a relayed call looks like a normal HTTPS connection. It exists for users in regions that block standard VoIP ports.
+
+It needs [WebRTC](/docs/developer/webrtc) to be enabled for the namespace first, and it is an opt-in at two levels: the operator turns the router on for a node, then the namespace owner turns stealth on for the namespace.
+
+## How it works
+
+```
+                 Internet
+                     |
+               TCP :443
+                     |
+           +---------+---------+
+           |  orama-sni-router |   reads the TLS server name, forwards bytes
+           +---------+---------+
+                     |
+        +------------+--------------+
+        v                           v
+ cdn-<hash>.<base>            *.<base>, <base>
+ turn.ns-<ns>.<base>          (everything else)
+        |                           |
+        v                           v
+  Pion TURN-over-TLS             Caddy on 127.0.0.1:8443
+  (per namespace)
+```
+
+The router does **not** terminate TLS. It reads the unencrypted ClientHello (the first few KB), looks at the server name (SNI), dials the matching backend and passes the encrypted bytes through unchanged.
+
+The stealth hostname is `cdn-<12 hex of sha256(namespace)>.<base-domain>`. The label deliberately does not contain the namespace: a name like `cdn.ns-anchat…` would tell a censor exactly which app to block. It is deterministic, so the cluster manager, gateway, router and DNS all compute the same name with no coordination. Each namespace also gets a readable alias `turn.ns-<namespace>.<base-domain>` for operators.
+
+## Enable it on a node (operator)
+
+Edit the node's `node.yaml` (`<oramaDir>/configs/node.yaml`):
+
+```yaml
+sni_router:
+  enabled: true
+```
+
+Then re-run the normal install or upgrade. The orchestrator does the whole cut-over:
+
+- moves Caddy's HTTPS listener from `:443` to `:8443` (plain HTTP on `:80` is unchanged)
+- writes `<oramaDir>/configs/sni-router.yaml` (listen `:443`, fall back to Caddy on `127.0.0.1:8443`, discover TURN routes automatically)
+- starts `orama-namespace-sni-router@index` after the index gateway and before Caddy, so the router owns `:443`
+
+The flag is carried across config regenerations, so an upgrade never silently turns it off. **Rollback:** set `enabled: false` and re-run the upgrade. The supervisor stops the router and Caddy takes `:443` back.
+
+There are no static routes. The router rescans `<oramaDir>/data/namespaces/*/configs/turn-*.yaml` every 30 seconds and installs two routes for each namespace with a TURNS listener. A failed scan keeps the old routes, so a file-system hiccup never blackholes live traffic. Settings the installer writes: `client_hello_timeout: 5s`, `backend_dial_timeout: 5s`, `max_concurrent_conns: 10000`.
+
+## Enable it for a namespace (owner)
+
+```bash
+orama namespace enable webrtc-stealth --namespace myapp
+orama namespace disable webrtc-stealth --namespace myapp
+```
+
+This calls `POST /v1/namespace/webrtc/stealth/{enable|disable}`, which creates the DNS records for the stealth host, flips `stealth_enabled`, restarts the namespace's TURN servers with the stealth domain (served with the cluster's wildcard certificate, so no new certificate is issued) and refreshes the gateways so the credentials response advertises the new address. If enabling fails it is rolled back. Disabling keeps TURN and the normal ladder (UDP/TCP 3478, `turns` on 5349) running and only removes the `:443` rung. Enabling twice, or on a namespace without WebRTC, answers 409; an unknown namespace answers 404.
+
+## What clients see
+
+The TURN credentials response gains one entry at the end of the list:
+
+```json
+{
+  "username": "...",
+  "password": "...",
+  "ttl": 600,
+  "uris": [
+    "turn:turn.example.com:3478?transport=udp",
+    "turn:turn.example.com:3478?transport=tcp",
+    "turns:turn.example.com:5349",
+    "turns:cdn-1a2b3c4d5e6f.example.com:443"
+  ]
+}
+```
+
+Browsers walk the ICE candidates in order. Users in restricted regions succeed on the `:443` rung when the others fail. No client change is needed.
+
+## Certificates
+
+TURN loads its certificate and the stealth host's certificate through hot-reloading callbacks that poll the files every 60 seconds, so a renewal is picked up without dropping live relays.
+
+## Monitoring
+
+```bash
+sudo orama node logs orama-namespace-sni-router@index -f
+sudo orama node logs caddy -f
+```
+
+Watch for `Connection limit reached` (raise `max_concurrent_conns`), `backend dial failed` (Caddy is not listening on `:8443`, or the namespace's TURNS listener is down), `ClientHello peek failed` (usually port scanners sending non-TLS to `:443`) and `TURN route discovery failed` (namespaces directory unreadable; the router keeps serving its current routes).
+
+## What it does not do
+
+Stealth TURN only makes TURN-over-TLS look like HTTPS to someone watching the network. It is not a Tor circuit and not a VPN. TURN carries your media through the node, so the node sees your address. The `cdn-…` hostname is visible in the TLS handshake, so a censor that blocks that exact name can still block it.

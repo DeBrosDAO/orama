@@ -1,0 +1,61 @@
+# RootWallet overview
+
+RootWallet is a self-custody wallet that also keeps your passwords, SSH keys, authenticator codes, payment cards and secure notes. It is the wallet Orama uses to sign you in, to sign what operators deploy, and to hold the SSH keys that install nodes.
+
+The crypto keys come from one BIP-39 recovery phrase. The vault is encrypted with a key derived from the same phrase. There is no account, no email and no cloud copy: your keys and vault never leave your device. If you lose the device and keep only the phrase, the crypto comes back. The vault contents do not, unless you also kept the vault file or an encrypted export.
+
+RootWallet lives in its own repository (`DeBrosDAO/rootwallet`, AGPL-3.0), separate from Orama. These pages describe it as of version 0.200.x.
+
+## Three surfaces
+
+| Surface | What it is | Platforms |
+|---|---|---|
+| Desktop app | Tauri 2 app with an embedded local agent | macOS (universal), Linux x86-64 (`.deb`, `.rpm`, `.AppImage`). No Windows build |
+| Mobile app | React Native | iOS and Android. In active development, distributed by TestFlight and as an Android APK |
+| CLI `rw` | Terminal wallet | macOS, Linux, Windows (npm or Homebrew) |
+
+Status: closed beta. The CLI and desktop are stable; mobile is in active development; an independent security audit is planned after funding.
+
+## What you can do, by surface
+
+| Feature | Desktop | Mobile | CLI |
+|---|---|---|---|
+| Create or import a wallet (12-word phrase) | Yes | Yes | Yes |
+| Several wallets on one device | Yes | Yes | One active wallet per home, plus HD accounts |
+| EVM, Solana, Bitcoin, ORAMA accounts | Yes | Yes | Yes |
+| Send and receive, tokens | Yes | Yes | Yes |
+| Swap and bridge | Yes | Yes | No |
+| NFTs | View, hide, transfer | View, hide | List, show, send |
+| Sign and verify messages | Yes | No | Yes |
+| Contacts and QR scan | No | Yes | No |
+| Passwords | Yes | Yes | Yes |
+| SSH keys | Yes | Yes | Yes (plus connect, exec, ssh-agent) |
+| Authenticator (TOTP) | Yes | Yes | Yes |
+| Secure notes and payment cards | No | No | Yes |
+| Local agent for other programs | Yes | No | No (it uses none) |
+| Face ID or Touch ID, PIN | Touch ID (macOS), PIN | Biometrics, PIN | No |
+| ORAMA staking and governance votes | Yes (stagenet) | Yes (stagenet) | Yes |
+
+## How it connects to Orama
+
+- **It signs you in.** The `orama` CLI asks the RootWallet agent for your EVM address and has it sign the gateway's sign-in challenge. See [Signing in to Orama with RootWallet](/docs/rootwallet/orama-sign-in).
+- **It holds an operator's keys.** `orama node setup` creates an SSH key for each node in your vault, installs it, and later asks the agent for it. You never paste a key into a terminal. See [The agent](/docs/rootwallet/agent).
+- **It signs releases.** `orama maint build` signs the archive's manifest with your wallet, and nodes install only archives signed by an address they trust. See [Build and sign](/docs/operator/build-and-sign).
+- **It reaches blockchains through Orama.** Balance, history, NFT and swap-quote requests go through functions on a `rootwallet` namespace on an Orama network, so no provider API key ships in any build.
+
+## What it is not
+
+- No WalletConnect and no dApp connections on any surface. The only integration with external tools is the desktop agent.
+- No cloud backup, by design. The recovery phrase is the backup.
+- No post-quantum cryptography. See [Security](/docs/rootwallet/security).
+
+## Pages
+
+- [Install](/docs/rootwallet/install)
+- [Wallets and accounts](/docs/rootwallet/wallets)
+- [Send, receive, swap and ORAMA](/docs/rootwallet/assets)
+- [The vault](/docs/rootwallet/vault)
+- [The agent](/docs/rootwallet/agent)
+- [Signing in to Orama](/docs/rootwallet/orama-sign-in)
+- [CLI reference (`rw`)](/docs/rootwallet/cli)
+- [Security](/docs/rootwallet/security)

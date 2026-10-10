@@ -1,0 +1,99 @@
+name: Release archive
+
+# Builds the cluster archive for a tag, twice, and publishes it unsigned with
+# its SHA-256 as release assets. The two builds must hash the same: that is
+# what lets each release signer rebuild the tag on their own machine, compare
+# the hash with this one and only then sign the TUF targets metadata that
+# names it (docs/whitepaper/technical-reference/vol1/29-build-signing-and-release.md, "Reproducible builds"). CI holds no signing
+# key; a published archive is not trusted by any node until signers have
+# signed it.
+
+# It runs when the GitHub Release exists (release.yaml creates it with a token
+# that fires this event), so the assets have a release to attach to.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  # The zig release the vault needs (vault/build.zig.zon), and the digest the
+  # download is refused without. The digest is the one ziglang.org/download/index.json
+  # lists for this tarball.
+  ZIG_VERSION: '0.15.2'
+  ZIG_SHA256: '02aa270f183da276e5b5920b1dac44a63f1a49e55050ebde3aecc9eb82f93239'
+
+jobs:
+  archive:
+    name: linux/${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.2'
+          cache-dependency-path: core/go.sum
+
+      - name: Install zig
+        run: |
+          curl -fsSL -o zig.tar.xz "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz"
+          echo "${ZIG_SHA256}  zig.tar.xz" | sha256sum -c -
+          mkdir -p "${RUNNER_TEMP}/zig"
+          tar -xJf zig.tar.xz -C "${RUNNER_TEMP}/zig" --strip-components=1
+          echo "ORAMA_ZIG=${RUNNER_TEMP}/zig/zig" >> "$GITHUB_ENV"
+
+      - name: Build the archive twice
+        working-directory: core
+        run: |
+          # The commit's time is the build date, so a signer rebuilding this
+          # tag later stamps the same one.
+          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          go build -o "${RUNNER_TEMP}/orama" ./cmd/orama
+          for n in 1 2; do
+            "${RUNNER_TEMP}/orama" build --unsigned --arch "${{ matrix.arch }}" --output "${RUNNER_TEMP}/build-${n}.tar.gz"
+          done
+          sha256sum "${RUNNER_TEMP}/build-1.tar.gz" "${RUNNER_TEMP}/build-2.tar.gz"
+
+      - name: The two builds must be identical
+        run: |
+          first="$(sha256sum "${RUNNER_TEMP}/build-1.tar.gz" | cut -d' ' -f1)"
+          second="$(sha256sum "${RUNNER_TEMP}/build-2.tar.gz" | cut -d' ' -f1)"
+          if [ "$first" != "$second" ]; then
+            echo "::error::two builds of ${GITHUB_SHA} differ ($first and $second): the archive is not reproducible"
+            exit 1
+          fi
+
+      - name: Name the archive
+        run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+          name="orama-${version}-linux-${{ matrix.arch }}.tar.gz"
+          mkdir -p dist
+          cp "${RUNNER_TEMP}/build-1.tar.gz" "dist/${name}"
+          (cd dist && sha256sum "${name}" > "${name}.sha256")
+          cat "dist/${name}.sha256"
+
+      - name: Publish as release assets
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PAT || secrets.GITHUB_TOKEN }}
+        run: gh release upload "${GITHUB_REF_NAME}" dist/* --clobber
+
+      - name: Keep the archive for a manual run
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: orama-archive-${{ matrix.arch }}
+          path: dist/
+          retention-days: 5

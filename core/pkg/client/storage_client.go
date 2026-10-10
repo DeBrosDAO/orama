@@ -60,8 +60,7 @@ func (s *StorageClientImpl) Upload(ctx context.Context, reader io.Reader, name s
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("upload failed with status %d: %s", resp.StatusCode, string(body))
+		return nil, statusErrorFrom("upload", resp)
 	}
 
 	var result StorageUploadResult
@@ -108,8 +107,7 @@ func (s *StorageClientImpl) Pin(ctx context.Context, cid string, name string) (*
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("pin failed with status %d: %s", resp.StatusCode, string(body))
+		return nil, statusErrorFrom("pin", resp)
 	}
 
 	var result StoragePinResult
@@ -143,8 +141,7 @@ func (s *StorageClientImpl) Status(ctx context.Context, cid string) (*StorageSta
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("status failed with status %d: %s", resp.StatusCode, string(body))
+		return nil, statusErrorFrom("status", resp)
 	}
 
 	var result StorageStatus
@@ -177,8 +174,8 @@ func (s *StorageClientImpl) Get(ctx context.Context, cid string) (io.ReadCloser,
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
-		return nil, fmt.Errorf("get failed with status %d", resp.StatusCode)
+		defer resp.Body.Close()
+		return nil, statusErrorFrom("get", resp)
 	}
 
 	return resp.Body, nil
@@ -207,8 +204,7 @@ func (s *StorageClientImpl) Unpin(ctx context.Context, cid string) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("unpin failed with status %d: %s", resp.StatusCode, string(body))
+		return statusErrorFrom("unpin", resp)
 	}
 
 	return nil

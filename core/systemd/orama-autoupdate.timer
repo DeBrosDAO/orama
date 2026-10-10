@@ -1,0 +1,19 @@
+[Unit]
+Description=Look for a newer release on the cluster's channel
+Documentation=https://github.com/DeBrosOfficial/network
+
+[Timer]
+# OnBootSec, then every 15 minutes after a run ends (a run that installs takes
+# as long as it takes). Each node decides on its own whether it is its turn, so
+# the cluster's rollout advances by one node per interval at most, and a node
+# that finds nothing to do costs one metadata fetch.
+OnBootSec=10min
+OnUnitInactiveSec=15min
+# The nodes of a cluster are installed together and would otherwise wake
+# together, all asking the repository and all reading the lock at once.
+RandomizedDelaySec=2min
+AccuracySec=1min
+Unit=orama-autoupdate.service
+
+[Install]
+WantedBy=timers.target

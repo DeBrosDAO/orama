@@ -1,0 +1,14 @@
+direction: down
+
+none: "No anchor\n(ErrNoAnchor: node installs nothing)"
+one: "Anchor = operator wallet\nroot:root 0644, no rotation mark"
+many: "Anchor = rotated list\nup to 32 addresses\nmark = build date of the last rotation"
+
+none -> one: "genesis install:\n--operator-wallet, after the first\narchive verifies against it"
+none -> one: "orama push --trust-signers\n(node installed before signing;\nnever changes an existing anchor)"
+none -> many: "join: list and mark copied\nfrom the minting node\n(--expect-archive-signers checked)"
+one -> many: "VerifyAndRotate: archive signed by a trusted\nsigner carries signers that include its own signer;\nmark first, then anchor"
+many -> many: "newer build, new list:\nmark advances, anchor replaced"
+many -> many: "same list, newer build:\nmark advances only"
+one -> none: "orama node wipe"
+many -> none: "orama node wipe"

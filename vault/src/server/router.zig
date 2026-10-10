@@ -24,6 +24,12 @@ pub const Request = struct {
     authorization: ?[]const u8,
     /// X-Session-Token header value (if present)
     session_token: ?[]const u8,
+    /// X-Vault-Pubkey (hex Ed25519 public key) for V2 ownership proofs.
+    vault_pubkey: ?[]const u8,
+    /// X-Vault-Signature (hex Ed25519 signature) for V2 ownership proofs.
+    vault_signature: ?[]const u8,
+    /// X-Vault-Timestamp (unix seconds) for V2 GET/DELETE/LIST proofs.
+    vault_timestamp: ?[]const u8,
 };
 
 pub const Method = enum {
@@ -63,6 +69,9 @@ pub fn parseRequest(buf: []const u8) ?Request {
     var content_length: usize = 0;
     var authorization: ?[]const u8 = null;
     var session_token: ?[]const u8 = null;
+    var vault_pubkey: ?[]const u8 = null;
+    var vault_signature: ?[]const u8 = null;
+    var vault_timestamp: ?[]const u8 = null;
 
     const headers_end = std.mem.indexOf(u8, buf, "\r\n\r\n") orelse return null;
     const headers_section = buf[request_line_end + 2 .. headers_end];
@@ -77,6 +86,12 @@ pub fn parseRequest(buf: []const u8) ?Request {
             authorization = std.mem.trimLeft(u8, header_line["authorization:".len..], " ");
         } else if (std.ascii.startsWithIgnoreCase(header_line, "x-session-token:")) {
             session_token = std.mem.trimLeft(u8, header_line["x-session-token:".len..], " ");
+        } else if (std.ascii.startsWithIgnoreCase(header_line, "x-vault-pubkey:")) {
+            vault_pubkey = std.mem.trimLeft(u8, header_line["x-vault-pubkey:".len..], " ");
+        } else if (std.ascii.startsWithIgnoreCase(header_line, "x-vault-signature:")) {
+            vault_signature = std.mem.trimLeft(u8, header_line["x-vault-signature:".len..], " ");
+        } else if (std.ascii.startsWithIgnoreCase(header_line, "x-vault-timestamp:")) {
+            vault_timestamp = std.mem.trimLeft(u8, header_line["x-vault-timestamp:".len..], " ");
         }
     }
 
@@ -90,6 +105,9 @@ pub fn parseRequest(buf: []const u8) ?Request {
         .content_length = content_length,
         .authorization = authorization,
         .session_token = session_token,
+        .vault_pubkey = vault_pubkey,
+        .vault_signature = vault_signature,
+        .vault_timestamp = vault_timestamp,
     };
 }
 
@@ -156,16 +174,16 @@ pub fn route(req: Request, writer: anytype, ctx: *const RouteContext) !void {
         if (suffix.len == 0) {
             // GET /v2/vault/secrets -> list
             if (req.method != .GET) return response.methodNotAllowed(writer);
-            return handler_secrets.handleList(writer, ctx, req.session_token);
+            return handler_secrets.handleList(writer, ctx, req);
         }
 
         if (suffix[0] == '/') {
             const name = suffix[1..];
             if (name.len == 0) return response.badRequest(writer, "secret name required");
             return switch (req.method) {
-                .PUT => handler_secrets.handlePut(writer, req.body, name, ctx, req.session_token),
-                .GET => handler_secrets.handleGet(writer, name, ctx, req.session_token),
-                .DELETE => handler_secrets.handleDelete(writer, name, ctx, req.session_token),
+                .PUT => handler_secrets.handlePut(writer, req.body, name, ctx, req),
+                .GET => handler_secrets.handleGet(writer, name, ctx, req),
+                .DELETE => handler_secrets.handleDelete(writer, name, ctx, req),
                 else => response.methodNotAllowed(writer),
             };
         }
@@ -212,6 +230,14 @@ test "parseRequest: session token header" {
     const raw = "POST /v1/vault/push HTTP/1.1\r\nX-Session-Token: tok123\r\n\r\n";
     const req = parseRequest(raw).?;
     try std.testing.expectEqualSlices(u8, "tok123", req.session_token.?);
+}
+
+test "parseRequest: V2 ownership headers" {
+    const raw = "GET /v2/vault/secrets/k HTTP/1.1\r\nX-Vault-Pubkey: aa\r\nX-Vault-Signature: bb\r\nX-Vault-Timestamp: 1700000000\r\n\r\n";
+    const req = parseRequest(raw).?;
+    try std.testing.expectEqualSlices(u8, "aa", req.vault_pubkey.?);
+    try std.testing.expectEqualSlices(u8, "bb", req.vault_signature.?);
+    try std.testing.expectEqualSlices(u8, "1700000000", req.vault_timestamp.?);
 }
 
 test "parseRequest: malformed returns null" {

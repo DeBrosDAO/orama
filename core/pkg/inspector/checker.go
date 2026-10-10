@@ -46,8 +46,8 @@ type CheckResult struct {
 	Subsystem string   `json:"subsystem"` // "rqlite"
 	Severity  Severity `json:"severity"`
 	Status    Status   `json:"status"`
-	Message   string   `json:"message"`          // human-readable detail
-	Node      string   `json:"node,omitempty"`   // which node (empty for cluster-wide)
+	Message   string   `json:"message"`        // human-readable detail
+	Node      string   `json:"node,omitempty"` // which node (empty for cluster-wide)
 }
 
 // Results holds all check outcomes.
@@ -134,6 +134,8 @@ func RunChecks(data *ClusterData, subsystems []string) *Results {
 			results.Checks = append(results.Checks, checks...)
 		}
 	}
+
+	results.Checks = append(results.Checks, collectionResults(data, shouldCheck)...)
 
 	results.Duration = time.Since(start)
 	return results

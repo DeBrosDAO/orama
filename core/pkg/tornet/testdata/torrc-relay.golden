@@ -1,0 +1,19 @@
+# Managed by Orama Network: rewritten on every `orama global install`.
+# Relay of the Orama Tor network orama-teststage (orama.network/docs/operator/tor-network).
+DataDirectory /var/lib/orama-global/tor-relay
+Log notice stdout
+SafeLogging 1
+UseDefaultFallbackDirs 0
+DirAuthority OramaAuth1 orport=31020 v3ident=00000000000000000000000000000000000000A0 57.129.166.16:31021 00000000000000000000000000000000000000B0
+DirAuthority OramaAuth2 orport=31020 v3ident=00000000000000000000000000000000000000A1 57.129.166.17:31021 00000000000000000000000000000000000000B1
+DirAuthority OramaAuth3 orport=31020 v3ident=00000000000000000000000000000000000000A2 161.97.184.199:31021 00000000000000000000000000000000000000B2
+SocksPort 0
+Nickname Orama35971be6e9bb02
+ContactInfo ops@example.org 0xabc
+Address 57.129.166.18
+ORPort 31020 IPv4Only
+DirPort 0
+RelayBandwidthRate 100 Mbits
+RelayBandwidthBurst 100 Mbits
+ExitRelay 0
+ExitPolicy reject *:*

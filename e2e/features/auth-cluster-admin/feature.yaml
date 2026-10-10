@@ -1,0 +1,58 @@
+# Cluster-wide identity switches and the sign-in floods. Every test here
+# changes something every other package depends on — who may create a
+# namespace, the per-wallet cap, the operator list, the signing key — or
+# drains the per-address sign-in bucket the whole runner shares, so the
+# package runs alone and restores what it changed (the signing-key rotation
+# cannot be undone; the new key simply becomes the cluster's key).
+# "orama maint operator remove refuses to delete the last operator" is not claimed:
+# TestOperator_neverRemovesTheLast can only observe it on a cluster with
+# exactly one operator and skips (not applicable) on any other.
+id: auth-cluster-admin
+title: Namespace-creation policy, operators, key rotation and sign-in limits
+area: auth
+subtasks: [2826, 2828]
+stage: 3
+destructive: true
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  cli:
+    - orama cluster
+    - orama maint cluster creators
+    - orama maint cluster creators add
+    - orama maint cluster creators list
+    - orama maint cluster creators remove
+    - orama cluster namespace
+    - orama cluster namespace remove
+    - orama maint cluster settings
+    - orama maint cluster settings set
+    - orama maint cluster settings show
+    - orama maint operator
+    - orama maint operator add
+    - orama maint operator list
+    - orama maint operator remove
+    - orama maint operator rotate-secrets
+    - orama maint operator rotate-signing-key
+  routes:
+    - /v1/operator/creators
+    - /v1/operator/creators/
+    - /v1/operator/namespaces/remove
+    - /v1/operator/operators
+    - /v1/operator/operators/
+    - /v1/operator/rotate-secrets
+    - /v1/operator/rotate-signing-key
+    - /v1/operator/settings
+    - /v1/operator/settings/
+  claims:
+    - "docs/whitepaper/technical-reference/vol1/13-identity.md#a-lobby-instead-of-claiming-on-first-sign-in: namespace creation follows the cluster's setting: operators, allowlist or open"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-maint-cluster-creators: an operator is not on the allowlist unless added; an empty list admits nobody"
+    - "docs/whitepaper/technical-reference/appendices/i-api-surface.md#namespace-management: a wallet at its per-wallet cap is refused (NAMESPACE_QUOTA)"
+    - "docs/whitepaper/technical-reference/vol1/14-authorization.md: a transfer to a wallet already at the per-wallet cap is a generic 403 TRANSFER_REFUSED that does not name the wallet or the limit; the owner keeps the namespace"
+    - "docs/whitepaper/technical-reference/vol1/14-authorization.md#the-decision-pipeline: operator endpoints need a wallet on the operator list (NOT_AN_OPERATOR)"
+    - "docs/whitepaper/technical-reference/vol1/13-identity.md#key-rotation: rotate-signing-key publishes a new key; the outgoing one keeps verifying for one access-token lifetime; nobody is signed out"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-maint-operator-rotate-secrets: the walker is idempotent"
+    - "docs/whitepaper/technical-reference/vol1/14-authorization.md#refusals-and-the-error-code-table: TOO_MANY_CHALLENGES after ten unanswered challenges"
+    - "docs/whitepaper/technical-reference/appendices/i-api-surface.md#api-surface: an operator removes a namespace whose owner can no longer delete it; its owner, not an operator, is refused"
+    - "docs/whitepaper/technical-reference/vol1/13-identity.md#single-use-by-a-conditional-update-and-its-row-count: a nonce is single-use cluster-wide; concurrent verifies on every gateway have exactly one winner"

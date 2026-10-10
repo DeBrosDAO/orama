@@ -2,6 +2,7 @@ package namespace
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"time"
 
@@ -18,22 +19,26 @@ type ClusterNodeSelector struct {
 	db            rqlite.Client
 	portAllocator *NamespacePortAllocator
 	logger        *zap.Logger
+	// now is the clock the liveness cutoff is taken from; time.Now outside
+	// tests, which give it a time in a zone of their choosing instead of moving
+	// the process-wide time.Local.
+	now func() time.Time
 }
 
 // NodeCapacity represents the capacity metrics for a single node
 type NodeCapacity struct {
-	NodeID                   string  `json:"node_id"`
-	IPAddress                string  `json:"ip_address"`
-	InternalIP               string  `json:"internal_ip"` // WireGuard IP for inter-node communication
-	DeploymentCount          int     `json:"deployment_count"`
-	AllocatedPorts           int     `json:"allocated_ports"`
-	AvailablePorts           int     `json:"available_ports"`
-	UsedMemoryMB             int     `json:"used_memory_mb"`
-	AvailableMemoryMB        int     `json:"available_memory_mb"`
-	UsedCPUPercent           int     `json:"used_cpu_percent"`
-	NamespaceInstanceCount   int     `json:"namespace_instance_count"`   // Number of namespace clusters on this node
-	AvailableNamespaceSlots  int     `json:"available_namespace_slots"`  // How many more namespace instances can fit
-	Score                    float64 `json:"score"`
+	NodeID                  string  `json:"node_id"`
+	IPAddress               string  `json:"ip_address"`
+	InternalIP              string  `json:"internal_ip"` // WireGuard IP for inter-node communication
+	DeploymentCount         int     `json:"deployment_count"`
+	AllocatedPorts          int     `json:"allocated_ports"`
+	AvailablePorts          int     `json:"available_ports"`
+	UsedMemoryMB            int     `json:"used_memory_mb"`
+	AvailableMemoryMB       int     `json:"available_memory_mb"`
+	UsedCPUPercent          int     `json:"used_cpu_percent"`
+	NamespaceInstanceCount  int     `json:"namespace_instance_count"`  // Number of namespace clusters on this node
+	AvailableNamespaceSlots int     `json:"available_namespace_slots"` // How many more namespace instances can fit
+	Score                   float64 `json:"score"`
 }
 
 // NewClusterNodeSelector creates a new node selector
@@ -42,15 +47,16 @@ func NewClusterNodeSelector(db rqlite.Client, portAllocator *NamespacePortAlloca
 		db:            db,
 		portAllocator: portAllocator,
 		logger:        logger.With(zap.String("component", "cluster-node-selector")),
+		now:           time.Now,
 	}
 }
 
-// SelectNodesForCluster selects the optimal N nodes for a new namespace cluster.
-// Returns the node IDs sorted by score (best first).
-func (cns *ClusterNodeSelector) SelectNodesForCluster(ctx context.Context, nodeCount int) ([]NodeCapacity, error) {
+// ListEligibleNodes returns every active node with a free namespace slot,
+// sorted by capacity score (highest first). Provision uses the length of this
+// list to pick N=1 (eval) or N=3 (production) — it is not "try 3, then 1".
+func (cns *ClusterNodeSelector) ListEligibleNodes(ctx context.Context) ([]NodeCapacity, error) {
 	internalCtx := client.WithInternalAuth(ctx)
 
-	// Get all active nodes
 	activeNodes, err := cns.getActiveNodes(internalCtx)
 	if err != nil {
 		return nil, err
@@ -58,10 +64,14 @@ func (cns *ClusterNodeSelector) SelectNodesForCluster(ctx context.Context, nodeC
 
 	cns.logger.Debug("Found active nodes", zap.Int("count", len(activeNodes)))
 
-	// Filter nodes that have capacity for namespace instances
 	eligibleNodes := make([]NodeCapacity, 0)
 	for _, node := range activeNodes {
 		capacity, err := cns.getNodeCapacity(internalCtx, node.NodeID, node.IPAddress, node.InternalIP)
+		if err != nil && rqlite.ClassifyBatchError(err) == rqlite.BatchCodeUnavailable {
+			// The registry, not this node, is what failed: skipping the node
+			// would report a healthy fleet as too small.
+			return nil, fmt.Errorf("failed to read capacity of node %s: %w", node.NodeID, err)
+		}
 		if err != nil {
 			cns.logger.Warn("Failed to get node capacity, skipping",
 				zap.String("node_id", node.NodeID),
@@ -70,7 +80,6 @@ func (cns *ClusterNodeSelector) SelectNodesForCluster(ctx context.Context, nodeC
 			continue
 		}
 
-		// Only include nodes with available namespace slots
 		if capacity.AvailableNamespaceSlots > 0 {
 			eligibleNodes = append(eligibleNodes, *capacity)
 		} else {
@@ -83,20 +92,45 @@ func (cns *ClusterNodeSelector) SelectNodesForCluster(ctx context.Context, nodeC
 
 	cns.logger.Debug("Eligible nodes after filtering", zap.Int("count", len(eligibleNodes)))
 
-	// Check if we have enough nodes
-	if len(eligibleNodes) < nodeCount {
-		return nil, &ClusterError{
-			Message: ErrInsufficientNodes.Message,
-			Cause:   nil,
-		}
-	}
-
-	// Sort by score (highest first)
 	sort.Slice(eligibleNodes, func(i, j int) bool {
 		return eligibleNodes[i].Score > eligibleNodes[j].Score
 	})
+	return eligibleNodes, nil
+}
 
-	// Return top N nodes
+// fleetMembersSQL lists the fleet's members: every registered node that has
+// not been retired, whether or not it is heartbeating or has room.
+const fleetMembersSQL = `SELECT id FROM dns_nodes WHERE last_seen != ? ORDER BY id`
+
+// fleetMember is one row of fleetMembersSQL.
+type fleetMember struct {
+	ID string `db:"id"`
+}
+
+// FleetMemberCount is how many nodes the fleet has: every node registered and
+// not retired. It is deliberately not liveness: a production fleet whose nodes
+// stopped heartbeating for a while is still a production fleet, and must not
+// look like a one-node eval fleet to a namespace created in that window.
+func (cns *ClusterNodeSelector) FleetMemberCount(ctx context.Context) (int, error) {
+	var members []fleetMember
+	if err := cns.db.Query(client.WithInternalAuth(ctx), &members, fleetMembersSQL, RetiredNodeLastSeen); err != nil {
+		return 0, &ClusterError{Message: "failed to count the fleet's nodes", Cause: err}
+	}
+	return len(members), nil
+}
+
+// SelectNodesForCluster selects the optimal N nodes for a new namespace cluster.
+// Returns the node IDs sorted by score (best first).
+func (cns *ClusterNodeSelector) SelectNodesForCluster(ctx context.Context, nodeCount int) ([]NodeCapacity, error) {
+	eligibleNodes, err := cns.ListEligibleNodes(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(eligibleNodes) < nodeCount {
+		return nil, capacityShortfall(nodeCount, len(eligibleNodes))
+	}
+
 	selectedNodes := eligibleNodes[:nodeCount]
 
 	cns.logger.Info("Selected nodes for cluster",
@@ -177,7 +211,14 @@ type nodeInfo struct {
 // getActiveNodes retrieves all active nodes from dns_nodes table
 func (cns *ClusterNodeSelector) getActiveNodes(ctx context.Context) ([]nodeInfo, error) {
 	// Nodes must have checked in within last 2 minutes
-	cutoff := time.Now().Add(-2 * time.Minute)
+	// Bugboard #282: UTC, not local. dns_nodes.last_seen is written with
+	// SQLite datetime('now') (UTC), and this cutoff is string-compared against
+	// it. Formatting a local time here made the comparison wrong by the node's
+	// UTC offset — on a node set to Europe/Berlin the cutoff rendered ~2h ahead
+	// of every stored last_seen, so every OTHER node was filtered out and
+	// provisioning failed with "insufficient nodes available for cluster",
+	// non-deterministically depending on which node served the request.
+	cutoff := cns.now().UTC().Add(-2 * time.Minute)
 
 	var results []nodeInfo
 	query := `
@@ -226,6 +267,11 @@ func (cns *ClusterNodeSelector) getNodeCapacity(ctx context.Context, nodeID, ipA
 		return nil, err
 	}
 
+	availableNamespaceSlots, err := cns.portAllocator.GetNodeCapacity(ctx, nodeID)
+	if err != nil {
+		return nil, err
+	}
+
 	// Calculate available capacity
 	maxDeployments := constants.MaxDeploymentsPerNode
 	maxPorts := constants.MaxPortsPerNode
@@ -242,7 +288,6 @@ func (cns *ClusterNodeSelector) getNodeCapacity(ctx context.Context, nodeID, ipA
 		availableMemoryMB = 0
 	}
 
-	availableNamespaceSlots := MaxNamespacesPerNode - namespaceInstanceCount
 	if availableNamespaceSlots < 0 {
 		availableNamespaceSlots = 0
 	}
@@ -412,3 +457,10 @@ func (cns *ClusterNodeSelector) calculateCapacityScore(
 	return totalScore
 }
 
+// capacityShortfall is the refusal when fewer nodes than a namespace needs
+// have a free namespace slot. It wraps ErrInsufficientNodes, which the create
+// handler answers as a capacity refusal, and says how far short the fleet is.
+func capacityShortfall(need, withRoom int) error {
+	return fmt.Errorf("%w: a namespace needs %d nodes with a free namespace slot and %d have one",
+		ErrInsufficientNodes, need, withRoom)
+}

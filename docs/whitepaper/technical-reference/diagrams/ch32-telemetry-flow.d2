@@ -1,0 +1,21 @@
+shape: sequence_diagram
+
+priv: "orama-privhelper"
+self: "SelfCollector (gateway A)"
+agg: "Aggregator (gateway A)"
+db: "index RQLite"
+peer: "gateway B"
+viewer: "operator monitor"
+
+self -> priv: "node-report (every 10 s, 60 s timeout)"
+priv -> self: "NodeReport JSON (flock; 50 s limit)"
+self -> self: "Decorate: traffic snapshot,\nregistry-disowned tenants"
+peer -> peer: "same loop on node B"
+viewer -> agg: "GET /v1/operator/telemetry"
+agg -> agg: "cache younger than 5 s? return it"
+agg -> db: "dns_nodes seen in last 24 h"
+agg -> peer: "GET /v1/internal/telemetry\nMAC-signed, 4 s timeout"
+peer -> agg: "report + X-Orama-Report-Age-Ms\n+ X-Orama-Clock-Ms"
+agg -> agg: "classify each node:\nreport, error, stale (over 90 s), unknown"
+agg -> agg: "DeriveAlerts(snapshot)"
+agg -> viewer: "ClusterSnapshot JSON"

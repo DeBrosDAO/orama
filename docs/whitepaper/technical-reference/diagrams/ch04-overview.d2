@@ -1,0 +1,38 @@
+direction: right
+
+systemd: "systemd (PID 1)" {
+  wg: "orama-namespace-wireguard@index\noneshot, RemainAfterExit, ExecStop is a no-op\nnot PartOf the supervisor"
+  node: "orama-node.service\nUser=orama, Restart=always, TimeoutStopSec=60"
+  units: "orama-namespace-svc@index units\nrqlite, olric, gateway, pubsub, ipfs, ipfs-cluster,\nipfs-gc timer, vault, caddy, ntfy, tor, sni-router\nPartOf=orama-node.service"
+  ns: "orama-namespace-coredns@nameserver\nnameserver nodes only"
+}
+
+proc: "orama-node process" {
+  main: "cmd/node/main.go\nload, validate, signal handling"
+  sup: "boot.Supervisor\nconverge loop, one goroutine"
+  comps: "components (22 on a cluster node)\nReconcile and Health per component"
+  life: "lifecycle.Manager\njoining, active, degraded,\ndraining, maintenance"
+  loops: "long-lived loops\nDNS heartbeat 30 s, WireGuard sync 60 s,\nmembership 60 s, IPFS swarm sync 60 s,\nmonitoring 30 s"
+  core: "coreapi.Client\nsigned calls to the index gateway"
+  main -> sup: "Start"
+  sup -> comps: "Reconcile / Health"
+  sup -> life: "OnChange(Snapshot)"
+  comps -> loops: "start once"
+  loops -> core: "register, heartbeat"
+}
+
+gw: "index gateway\nlocalhost:10104" {shape: hexagon}
+reg: "index RQLite\nregistry: dns_nodes,\nwireguard_peers, dns_records" {shape: cylinder}
+ph: "orama-privhelper\nroot socket (chapter 5)"
+disc: "libp2p metadata\nlifecycle state, TTL" {shape: queue}
+
+systemd.node -> proc.main: "exec orama-node --config node.yaml"
+proc.comps -> ph: "systemctl start/stop, unit env, wg persist"
+ph -> systemd.units: "start (Ensure*)"
+ph -> systemd.ns: "start"
+ph -> systemd.wg: "start (idempotent)"
+proc.core -> gw: "POST /v1/internal/node/{enrol-key,register,heartbeat}\nEd25519 stamp"
+gw -> reg: "writes dns_nodes, node_credentials"
+proc.loops -> reg: "direct SQL: wireguard_peers, dns_records,\nnameserver slots, membership deletes"
+proc.life -> disc: "UpdateOwnMetadata"
+systemd.node -> systemd.units: "PartOf: stop and restart propagate"

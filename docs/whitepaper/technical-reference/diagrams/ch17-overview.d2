@@ -1,0 +1,40 @@
+direction: right
+
+client: "tenant client\nSDK, CLI, deployment" {shape: person}
+
+edge: "ns-<name> host\nCaddy -> index gateway\n(proxy, 30 s / 300 s)"
+
+ns: "Namespace gateway (one per member node, x3)" {
+  orm: "ORM HTTP gateway\n/v1/rqlite/*\nbody 4 MiB, timeout 30 s"
+  guard: "sqlguard.Check\n(69 reserved names)"
+  sqlh: "SQLite handlers\n/v1/db/sqlite/*"
+  bk: "backup.Handler\n/v1/namespace/backup,\nrestore-key, restore"
+  xp: "/v1/rqlite/export, import"
+  slot: "one transfer slot\n(429 + Retry-After 30)"
+  orm -> guard
+  bk -> slot
+  xp -> slot
+}
+
+rq: "Namespace RQLite\n3 voters, one per member node" {shape: cylinder}
+file: "data/sqlite/<ns>/<db>.db\non the home node only\n0600 in 0700" {shape: cylinder}
+reg: "Cluster registry\n(index RQLite)" {shape: cylinder}
+ipfs: "IPFS + Cluster\nAES-256-GCM wrap" {shape: cylinder}
+peer: "gateway on another node\n(home node of a SQLite file)"
+owner: "owner's machine\nX25519 backup private key" {shape: person}
+
+client -> edge: "HTTPS"
+edge -> ns.orm: "HTTP over WireGuard"
+edge -> ns.sqlh
+edge -> ns.bk
+ns.orm -> rq: "level=weak reads,\nBatch for transactions"
+ns.guard -> rq: "allowed SQL only"
+ns.sqlh -> file: "mattn/go-sqlite3,\nATTACH limit 0"
+ns.sqlh -> rq: "namespace_sqlite_databases,\nnamespace_sqlite_backups"
+ns.sqlh -> peer: "forward if home is elsewhere\nX-Orama-Forwarded"
+ns.sqlh -> reg: "find the home gateway"
+ns.sqlh -> ipfs: "db backup (cluster-keyed wrap)"
+ns.bk -> rq: "/db/backup, /db/load"
+ns.bk -> reg: "deployment CIDs,\nipfs_cid_refs"
+ns.bk -> ipfs: "pin restored CIDs"
+ns.bk -> owner: "ORBK sealed backup"

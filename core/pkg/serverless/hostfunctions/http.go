@@ -6,8 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
+	"strings"
 
+	"github.com/DeBrosOfficial/network/pkg/anonproxy"
+	"github.com/DeBrosOfficial/network/pkg/httputil"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"go.uber.org/zap"
 )
@@ -29,49 +34,59 @@ func (h *HostFunctions) SetHTTPResponse(ctx context.Context, status int, headers
 	return nil
 }
 
-// AnyoneFetch makes an outbound HTTP request routed through the Anyone
-// (ANyONe protocol) SOCKS5 proxy, so the third-party endpoint sees an
-// Anyone exit IP instead of the gateway IP and the gateway can't
-// correlate (function → external request) traffic by source IP.
-// Feat-11 — server-side analog of anchat's client-side proxyClient.
+// AnonFetch makes an outbound HTTP request routed through the node's Tor
+// client (SOCKS5), so the third-party endpoint sees a Tor exit IP instead
+// of the gateway IP and the gateway can't correlate (function → external
+// request) traffic by source IP. Feat-11 — server-side analog of anchat's
+// client-side proxyClient. WASM imports it as anon_fetch or as the
+// deprecated alias anyone_fetch.
 //
-// Privacy guarantee: there is NO silent fallback to direct. If Anyone
-// routing isn't available on this gateway (operator disabled it via
-// --disable-anonrc / ANYONE_DISABLE=1, so h.anyoneHTTPClient is nil),
-// this returns a typed error rather than leaking the request over the
-// direct path. If the Anyone daemon is configured-but-down, the SOCKS
-// dial to localhost:9050 fails and surfaces as a transport error — also
-// never a direct send. This is the explicit ask in feat-11: a privacy
-// regression must fail loudly, not degrade silently.
-func (h *HostFunctions) AnyoneFetch(ctx context.Context, method, url string, headers map[string]string, body []byte) ([]byte, error) {
-	if h.anyoneHTTPClient == nil {
-		// Anyone routing not enabled on this gateway. Return the typed
-		// error envelope (status 0) rather than dialing direct — the
-		// caller explicitly asked for anonymized egress and we must not
-		// silently downgrade it.
-		errorResp := map[string]interface{}{
-			"error":  "anyone routing not available on this gateway (disabled by operator)",
-			"status": 0,
-			"proxy":  "anyone",
-		}
-		return json.Marshal(errorResp)
+// Privacy guarantee: there is NO direct path. Every connection of
+// h.anonHTTPClient goes to the Tor SOCKS port, whatever the destination; if
+// Tor is down the dial fails and comes back as a transport-error envelope
+// (status 0, the error naming the Tor SOCKS address) — never a direct send.
+// This is the explicit ask in feat-11: a privacy regression must fail
+// loudly, not degrade silently.
+func (h *HostFunctions) AnonFetch(ctx context.Context, method, url string, headers map[string]string, body []byte) ([]byte, error) {
+	return h.doFetch(ctx, anonFetchName, h.anonHTTPClient, method, url, headers, body)
+}
+
+// anonFetchName is the host function whose destination the node does not log.
+const anonFetchName = "anon_fetch"
+
+// fetchLogFields describe a failed fetch for the node log without the request's
+// query string, where a credential may be, and the client's error, which quotes
+// the whole URL. An anon_fetch caller chose Tor so the node could not say where
+// the function went: its log names neither the URL nor the cause (the cause of
+// a SOCKS failure names the destination), only the class of the failure.
+func fetchLogFields(fnName, rawURL string, err error) []zap.Field {
+	if fnName == anonFetchName {
+		return []zap.Field{zap.String("error_class", anonproxy.ErrorClass(err))}
 	}
-	return h.doFetch(ctx, "anyone_fetch", h.anyoneHTTPClient, method, url, headers, body)
+	return []zap.Field{zap.String("url", httputil.WithoutQuery(rawURL)), zap.String("error", httputil.FailureReason(err))}
 }
 
 // doFetch is the shared request/response machinery for HTTPFetch and
-// AnyoneFetch — identical except for which *http.Client (direct vs
+// AnonFetch — identical except for which *http.Client (direct vs
 // SOCKS-routed) does the dialing and the function name used in logs +
 // HostFunctionError.
-func (h *HostFunctions) doFetch(ctx context.Context, fnName string, client *http.Client, method, url string, headers map[string]string, body []byte) ([]byte, error) {
+func (h *HostFunctions) doFetch(ctx context.Context, fnName string, client *http.Client, method, rawURL string, headers map[string]string, body []byte) ([]byte, error) {
+	if err := denyInternalURL(rawURL); err != nil {
+		errorResp := map[string]interface{}{
+			"error":  err.Error(),
+			"status": 0,
+		}
+		return json.Marshal(errorResp)
+	}
+
 	var bodyReader io.Reader
 	if len(body) > 0 {
 		bodyReader = bytes.NewReader(body)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
+	req, err := http.NewRequestWithContext(ctx, method, rawURL, bodyReader)
 	if err != nil {
-		h.logger.Error(fnName+" request creation error", zap.Error(err), zap.String("url", url))
+		h.logger.Error(fnName+" request creation error", fetchLogFields(fnName, rawURL, err)...)
 		errorResp := map[string]interface{}{
 			"error":  "failed to create request: " + err.Error(),
 			"status": 0,
@@ -85,7 +100,7 @@ func (h *HostFunctions) doFetch(ctx context.Context, fnName string, client *http
 
 	resp, err := client.Do(req)
 	if err != nil {
-		h.logger.Error(fnName+" transport error", zap.Error(err), zap.String("url", url))
+		h.logger.Error(fnName+" transport error", fetchLogFields(fnName, rawURL, err)...)
 		errorResp := map[string]interface{}{
 			"error":  err.Error(),
 			"status": 0, // Transport error
@@ -96,7 +111,7 @@ func (h *HostFunctions) doFetch(ctx context.Context, fnName string, client *http
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		h.logger.Error(fnName+" response read error", zap.Error(err), zap.String("url", url))
+		h.logger.Error(fnName+" response read error", fetchLogFields(fnName, rawURL, err)...)
 		errorResp := map[string]interface{}{
 			"error":  "failed to read response: " + err.Error(),
 			"status": resp.StatusCode,
@@ -117,4 +132,37 @@ func (h *HostFunctions) doFetch(ctx context.Context, fnName string, client *http
 	}
 
 	return data, nil
+}
+
+// denyInternalURL rejects a URL that is refusable from its text alone.
+//
+// It is the first of two checks and not the load-bearing one. It used to be the
+// only one, and it let through every URL whose host was a name rather than an
+// IP literal — `http://rqlite.internal/`, or any name the tenant controlled
+// pointed at 10.0.0.x. A name cannot be checked: the resolver decides what it
+// becomes, the answer can change between this check and the connection, and a
+// redirect goes somewhere this URL never named.
+//
+// The real check is guardEgressAddress, which runs on the socket itself with
+// the resolved address, for every attempt and every redirect hop. What is left
+// here is what can be settled without resolving anything: the scheme, the names
+// that mean the machine itself, and an IP literal that is already refusable —
+// answered as a clear message rather than as a connection failure.
+func denyInternalURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return fmt.Errorf("invalid url")
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return fmt.Errorf("url scheme not allowed")
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") || host == "metadata.google.internal" {
+		return fmt.Errorf("url host not allowed")
+	}
+	if ip := net.ParseIP(host); ip != nil && blockedIP(ip) {
+		return fmt.Errorf("url host not allowed")
+	}
+	return nil
 }

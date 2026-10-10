@@ -1,0 +1,30 @@
+direction: down
+
+in: "Request from Caddy, a node or a local process"
+
+m0: "0. dropForgedProxyNode\ndelete X-Orama-Proxy-Node unless the peer is on the overlay"
+m1: "1. internalAuthMiddleware\nverify X-Internal-Auth MAC (v1, v2, v3, skew 60 s);\nif invalid delete every X-Internal-Auth-* header;\nalways delete the MAC headers"
+m2: "2. routePolicyMiddleware\nresolve the matched route's Policy once,\nput it on the request context"
+m3: "3. loggingMiddleware\nstatus writer, traffic attribution, phase marks,\nslow-request log (1 s), request_logs batch"
+m4: "4. securityHeadersMiddleware\nnosniff, DENY framing, HSTS behind TLS,\nCache-Control no-store on /v1/*"
+m5: "5. rateLimitMiddleware\nresolve client network, exempt overlay + local;\nauth, chain, capability, relay, general buckets"
+m6: "6. corsMiddleware\nbase domain + subdomains + localhost;\nOPTIONS answered 204 here"
+m7: "7. readinessGate\n503 with reason code unless ready\nor on the passthrough list"
+m8: "8. domainRoutingMiddleware\nns-NAME host -> namespace proxy (or MainGateway route stays);\nother base-domain host -> deployment"
+m9: "9. clusterServerlessRoutingMiddleware\nindex gateway only: tenant function traffic\nproxied to the tenant's gateway"
+m10: "10. authMiddleware\nsigned hop identity, JWT (Bearer, ?jwt= on WebSocket),\nAPI key; Open and HandlerAuth routes pass without one"
+m11: "11. trafficAttributionMiddleware\nnamespace for request metrics"
+m12: "12. authorizationMiddleware\ncross-namespace refusal, grant lookup,\nownership gate, narrowed grants"
+m13: "13. scopeMiddleware\npermission for Domain:Action,\ntoken requirement"
+m14: "14. namespaceRateLimitMiddleware\nper-namespace bucket, tenant-configurable"
+m15: "15. longRequestDeadlines\nextend read and write deadline to 5 min\nfor authenticated long routes"
+h: "Handler (routepolicy.Mux)"
+
+in -> m0 -> m1 -> m2 -> m3 -> m4 -> m5 -> m6 -> m7 -> m8 -> m9 -> m10 -> m11 -> m12 -> m13 -> m14 -> m15 -> h
+m8 -> prox: "ns-NAME host"
+m9 -> prox: "tenant function route"
+prox: "proxyToNamespaceGateway\n(validates credential itself)"
+prox -> ns: "signed hop"
+ns: "Namespace gateway"
+m8 -> dep: "deployment host"
+dep: "Static from IPFS or proxy\nto the deployment's port"

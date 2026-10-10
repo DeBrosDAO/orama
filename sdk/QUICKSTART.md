@@ -1,23 +1,28 @@
-# Quick Start Guide for @debros/network-ts-sdk
+# Quick Start Guide for @debros/orama
 
 ## 5-Minute Setup
 
 ### 1. Install
 
 ```bash
-npm install @debros/network-ts-sdk
+npm install @debros/orama
 ```
 
 ### 2. Create a Client
 
 ```typescript
-import { createClient } from "@debros/network-ts-sdk";
+import { createClient } from "@debros/orama";
 
 const client = createClient({
-  baseURL: "http://localhost:6001",
-  apiKey: "ak_your_api_key:namespace", // Get from gateway
+  baseURL: "https://ns-myapp.orama-devnet.network",
+  apiKey: process.env.ORAMA_API_KEY, // ak_<id>:<namespace>
 });
 ```
+
+Mint one with `orama namespace keys create --scope <profile>`. **Which profile
+depends on where the code runs:** an `app-runtime` key is safe in a browser
+bundle, an `admin` key is not — it carries the whole control plane. See
+[Browser and server](./README.md#browser-and-server).
 
 ### 3. Use It
 
@@ -41,32 +46,38 @@ sub.close();
 **Network:**
 ```typescript
 const healthy = await client.network.health();
+// network.status() and network.peers() are for cluster operators; other
+// credentials are refused 403 NOT_AN_OPERATOR.
 const status = await client.network.status();
 ```
 
 ## Running Tests Locally
 
-### Prerequisites
-1. Bootstrap node must be running (provides database on port 5001)
-2. Gateway must be running (provides REST API on port 6001)
+The unit tests need nothing:
 
 ```bash
-# Terminal 1: Start bootstrap node
-cd ../network
-make run-node
-
-# Terminal 2: Start gateway (after bootstrap is ready)
-cd ../network
-make run-gateway
-
-# Terminal 3: Run E2E tests
-cd ../network-ts-sdk
-export GATEWAY_BASE_URL=http://localhost:6001
-export GATEWAY_API_KEY=ak_your_api_key:default
-pnpm run test:e2e
+cd sdk
+pnpm test        # one run, unit + end-to-end
+pnpm test:watch  # re-run on change
+pnpm test:unit   # unit only
 ```
 
-**Note**: The gateway configuration now correctly uses port 5001 for RQLite (not 4001 which is P2P).
+`pnpm test` used to be `vitest` with no `run`, so it started watch mode and
+never returned — in a terminal or in CI.
+
+### End-to-end tests
+
+These need a gateway and an API key for it:
+
+```bash
+export GATEWAY_BASE_URL=https://ns-myapp.orama-devnet.network
+export GATEWAY_API_KEY=ak_your_api_key:default
+pnpm test:e2e
+```
+
+Without `GATEWAY_API_KEY` they are skipped, and reported as skipped. They used
+to log "Skipping ..." and then run anyway against a gateway that was not there,
+which is where 27 of the suite's 30 failures came from.
 
 ## Building for Production
 
@@ -87,6 +98,10 @@ npm run build
 | `PubSubClient` | Pub/sub operations |
 | `NetworkClient` | Network status, peers |
 | `SDKError` | All errors inherit from this |
+| `AuthError` | 401 — the credential was rejected |
+| `ScopeError` | 403 — the credential's grants do not cover the operation; `requiredScope` names the one it needed |
+| `NotFoundError` | 404 |
+| `NetworkError` | The gateway was never reached; `httpStatus` is 0 |
 
 ## Common Patterns
 
@@ -124,16 +139,23 @@ await client.db.transaction([
 
 ### Error Handling
 ```typescript
-import { SDKError } from "@debros/network-ts-sdk";
+import { NetworkError, ScopeError, SDKError } from "@debros/orama";
 
 try {
   await client.db.query("SELECT * FROM invalid_table");
 } catch (error) {
-  if (error instanceof SDKError) {
+  if (error instanceof ScopeError) {
+    console.error(`this key needs the ${error.requiredScope} grant`);
+  } else if (error instanceof NetworkError) {
+    console.error("the gateway was never reached");
+  } else if (error instanceof SDKError) {
     console.error(`${error.httpStatus}: ${error.message}`);
   }
 }
 ```
+
+The four subclasses all extend `SDKError`, so one `catch` still covers
+everything.
 
 ## TypeScript Types
 
@@ -141,14 +163,17 @@ Full type safety - use autocomplete in your IDE:
 ```typescript
 const status: NetworkStatus = await client.network.status();
 const users: User[] = await repo.find({ active: 1 });
-const msg: Message = await subscription.onMessage((m) => m);
+const sub = await client.pubsub.subscribe("news", {
+  onMessage: (msg: PubSubMessage) => console.log(msg.data),
+});
 ```
 
 ## Next Steps
 
 1. Read the full [README.md](./README.md)
-2. Explore [tests/e2e/](./tests/e2e/) for examples
-3. Explore [examples/](./examples/) for runnable code samples
+2. Read [website/src/docs/developer/sdk-reference.mdx](../website/src/docs/developer/sdk-reference.mdx) for the module-by-module reference
+3. Explore [tests/e2e/](./tests/e2e/) for examples
+4. Explore [examples/](./examples/) for runnable code samples
 
 ## Troubleshooting
 
@@ -158,8 +183,13 @@ const msg: Message = await subscription.onMessage((m) => m);
 - Verify network connectivity
 
 **"API key invalid"**
-- Confirm `apiKey` format: `ak_key:namespace`
+- Confirm `apiKey` format: `ak_<id>:<namespace>`
 - Get a fresh API key from gateway admin
+
+**"insufficient scope"**
+- The key is valid but lacks the grant the operation needs. The error is a
+  `ScopeError` and `error.requiredScope` names it.
+- Mint a key that has it: `orama namespace keys create --scope <grant list>`
 
 **"WebSocket connection failed"**
 - Gateway must support WebSocket at `/v1/pubsub/ws`
@@ -167,4 +197,4 @@ const msg: Message = await subscription.onMessage((m) => m);
 
 **"Tests skip"**
 - Set `GATEWAY_API_KEY` environment variable
-- Tests gracefully skip without it
+- End-to-end tests are skipped without it; the unit tests need nothing

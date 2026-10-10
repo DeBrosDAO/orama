@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"strings"
 )
 
 const (
@@ -35,6 +36,11 @@ func NewManager() *Manager {
 // Configure writes the WireGuard configuration to disk.
 // Called during enrollment with config received from the Gateway.
 func (m *Manager) Configure(config string) error {
+	priv, err := privateKeyFromConfig(config)
+	if err != nil {
+		return err
+	}
+
 	if err := os.MkdirAll("/etc/wireguard", 0700); err != nil {
 		return fmt.Errorf("failed to create wireguard dir: %w", err)
 	}
@@ -43,8 +49,38 @@ func (m *Manager) Configure(config string) error {
 		return fmt.Errorf("failed to write WG config: %w", err)
 	}
 
+	// LUKS share distribution derives this node's vault identity as
+	// SHA-256 of this file. Writing only wg0.conf left that file missing,
+	// so enrollment failed after the gateway had already pushed config.
+	if err := os.WriteFile(PrivateKeyPath, []byte(priv+"\n"), 0600); err != nil {
+		return fmt.Errorf("failed to write WG private key: %w", err)
+	}
+
 	log.Println("WireGuard configuration written")
 	return nil
+}
+
+// privateKeyFromConfig extracts the Interface PrivateKey from a wg0.conf body.
+func privateKeyFromConfig(config string) (string, error) {
+	for _, line := range strings.Split(config, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		key, val, ok := strings.Cut(trimmed, "=")
+		if !ok {
+			continue
+		}
+		if strings.TrimSpace(key) != "PrivateKey" {
+			continue
+		}
+		priv := strings.TrimSpace(val)
+		if priv == "" {
+			return "", fmt.Errorf("WireGuard config PrivateKey is empty")
+		}
+		return priv, nil
+	}
+	return "", fmt.Errorf("WireGuard config has no PrivateKey")
 }
 
 // Up brings the WireGuard interface up using wg-quick.
@@ -136,4 +172,35 @@ func indexOf(s string, c byte) int {
 		}
 	}
 	return -1
+}
+
+// LocalIP returns this node's address on the overlay.
+//
+// The command receiver binds it rather than every interface, so a node whose
+// overlay address cannot be determined does not get a receiver at all. Reading
+// it from the interface rather than the config file means it reflects what the
+// kernel actually has, not what was written at enrollment.
+func (m *Manager) LocalIP() (string, error) {
+	out, err := exec.Command("ip", "-4", "-o", "addr", "show", "dev", m.iface).Output()
+	if err != nil {
+		return "", fmt.Errorf("could not read the address of %s: %w", m.iface, err)
+	}
+
+	// "3: wg0    inet 10.0.0.4/24 scope global wg0\..."
+	for _, line := range splitLines(string(out)) {
+		fields := strings.Fields(line)
+		for i, f := range fields {
+			if f != "inet" || i+1 >= len(fields) {
+				continue
+			}
+			addr := fields[i+1]
+			if idx := indexOf(addr, '/'); idx >= 0 {
+				addr = addr[:idx]
+			}
+			if addr != "" {
+				return addr, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("%s has no IPv4 address: WireGuard is not up", m.iface)
 }

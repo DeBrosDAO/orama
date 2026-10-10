@@ -1,0 +1,12 @@
+direction: right
+
+unconfirmed: "unconfirmed\nconfirmed_at NULL"
+confirmed: "confirmed\nconfirmed_at set"
+gone: "row deleted"
+
+start: Register {shape: circle}
+start -> unconfirmed: "INSERT (join, enroll)"
+unconfirmed -> confirmed: "node self-registers (upsert)\nenroll: UPDATE after the push\nreconciler sees a dns_nodes row"
+unconfirmed -> gone: "no dns_nodes row and older than 30 min\n(reconciler)"
+unconfirmed -> gone: "same public IP re-joins (removeUnfinishedJoinRows)\nor a node self-registers there under another id"
+confirmed -> gone: "node departed: leave, orama node remove,\nreconciler evidence"

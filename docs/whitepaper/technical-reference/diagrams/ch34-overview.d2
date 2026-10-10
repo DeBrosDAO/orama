@@ -1,0 +1,38 @@
+direction: down
+
+code: "The repository" {
+  go: "core/ (Go module)\n8,454 Test functions\nrule tests, contract tests"
+  other: "chain/, caddy/, os/agent/\nsdk/, sdk-vault/, vault/ (Zig)\neach with its own tests"
+  shared: "Shared artefacts\ncontracts/*.json\nchain/*/testdata/*.json\nappendices d-cli-reference.md, i-api-surface.md"
+}
+
+nofleet: "Checks that need no servers" {
+  unit: "Unit and rule tests"
+  bind: "Contract, vector and\ndoc-binding tests"
+  lint: "e2e lint, e2e coverage gate,\nharness unit tests"
+  book: "Book gates\ncore/tools/whitepaper check"
+}
+
+fleet: "Fleet e2e (e2e/)" {
+  run: "e2e-fleet run\n87 feature packages, 11 stages"
+  hz: "3 Hetzner servers, Cloudflare\ndelegation, Let's Encrypt staging" {shape: cylinder}
+  run -> hz: "SSH, CLI, public HTTPS"
+}
+
+runners: "Who runs what" {
+  mk: "make test (root)"
+  ci: "GitHub Actions ci.yml\nsecurity.yml"
+  owner: "The owner:\nmake e2e-fleet"
+}
+
+code.go -> nofleet.unit
+code.other -> nofleet.unit
+code.shared -> nofleet.bind: "read by Go and TS tests"
+code.shared -> nofleet.lint: "universe of the coverage gate"
+code.go -> nofleet.book: "anchors, ownership"
+
+nofleet.lint -> fleet.run: "manifests say what the run must cover"
+runners.mk -> nofleet: "core, caddy, e2e, book"
+runners.ci -> nofleet.unit: "core, os/agent, sdk,\nsdk-vault, vault"
+runners.ci -> nofleet.bind: "contracts, CLI reference"
+runners.owner -> fleet.run

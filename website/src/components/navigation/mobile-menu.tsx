@@ -1,11 +1,12 @@
 import { useEffect } from "react";
 import { Link, useLocation } from "react-router";
-import { ExternalLink, X } from "lucide-react";
-import { NAV_LINKS, MORE_LINKS } from "../../data/navigation";
+import { X } from "lucide-react";
+import { SUPPORT_LINK, NAV, isActivePath, isGroup } from "../../content/navigation";
 import { Button } from "../ui/button";
 import { cn } from "../../lib/utils";
 
-const menuLinkClass = "py-3 text-2xl font-display font-semibold tracking-tight transition-colors duration-150";
+const menuLinkClass =
+  "py-2 text-xl font-display font-semibold tracking-tight transition-colors duration-150";
 
 export interface MobileMenuProps {
   open: boolean;
@@ -20,11 +21,16 @@ export function MobileMenu({ open, onClose }: MobileMenuProps) {
   }, [location.pathname, onClose]);
 
   useEffect(() => {
-    if (open) {
-      document.body.style.overflow = "hidden";
-    } else {
-      document.body.style.overflow = "";
-    }
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
+  useEffect(() => {
+    document.body.style.overflow = open ? "hidden" : "";
     return () => {
       document.body.style.overflow = "";
     };
@@ -33,10 +39,12 @@ export function MobileMenu({ open, onClose }: MobileMenuProps) {
   return (
     <div
       className={cn(
-        "fixed inset-0 z-[60] bg-bg/95 backdrop-blur-md md:hidden flex flex-col transition-all duration-300",
+        "fixed inset-0 z-[60] bg-bg/95 lg:hidden flex flex-col transition-opacity duration-300",
+        // backdrop-blur only while open: a permanently mounted full-screen
+        // backdrop-filter costs a compositing layer on every frame.
         open
-          ? "opacity-100 pointer-events-auto"
-          : "opacity-0 pointer-events-none",
+          ? "opacity-100 pointer-events-auto backdrop-blur-md"
+          : "opacity-0 pointer-events-none invisible",
       )}
     >
       <div className="flex items-center justify-end px-6 pt-5 pb-2">
@@ -50,51 +58,35 @@ export function MobileMenu({ open, onClose }: MobileMenuProps) {
         </button>
       </div>
 
-      <nav className="flex flex-col px-6 gap-1">
-        {NAV_LINKS.map((link) => {
-          if (link.external) {
-            return (
-              <a
-                key={link.href}
-                href={link.href}
-                target="_blank"
-                rel="noopener noreferrer"
-                className={cn(menuLinkClass, "flex items-center gap-2 text-muted hover:text-fg")}
-              >
-                {link.label}
-                <ExternalLink className="w-4 h-4" />
-              </a>
-            );
-          }
-          const isActive = location.pathname === link.href;
+      <nav aria-label="Mobile" className="flex flex-col gap-6 px-6 overflow-y-auto">
+        {NAV.map((entry) => {
+          const items = isGroup(entry) ? entry.items : [entry];
           return (
-            <Link
-              key={link.href}
-              to={link.href}
-              className={cn(menuLinkClass, isActive ? "text-fg" : "text-muted hover:text-fg")}
-            >
-              {link.label}
-            </Link>
-          );
-        })}
-
-        {MORE_LINKS.map((link) => {
-          const isActive = location.pathname === link.href;
-          return (
-            <Link
-              key={link.href}
-              to={link.href}
-              className={cn(menuLinkClass, isActive ? "text-fg" : "text-muted hover:text-fg")}
-            >
-              {link.label}
-            </Link>
+            <div key={entry.label} className="flex flex-col">
+              {isGroup(entry) && (
+                <span className="mb-1 font-mono text-[11px] tracking-[0.2em] uppercase text-muted/70">{entry.label}</span>
+              )}
+              {items.map((item) => {
+                const current = isActivePath(location.pathname, item.path);
+                return (
+                  <Link
+                    key={item.path}
+                    to={item.path}
+                    aria-current={current ? "page" : undefined}
+                    className={cn(menuLinkClass, current ? "text-fg" : "text-muted hover:text-fg")}
+                  >
+                    {item.label}
+                  </Link>
+                );
+              })}
+            </div>
           );
         })}
       </nav>
 
-      <div className="mt-auto px-6 pb-8">
-        <Button variant="primary" size="lg" className="w-full" asChild>
-          <Link to="/invest">Investors Dashboard</Link>
+      <div className="mt-auto px-6 pt-6 pb-8">
+        <Button variant="primary" size="lg" className="w-full rounded-full" asChild>
+          <Link to={SUPPORT_LINK.path}>{SUPPORT_LINK.label}</Link>
         </Button>
       </div>
     </div>

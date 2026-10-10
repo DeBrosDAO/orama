@@ -1,0 +1,159 @@
+syntax = "proto3";
+package orama.cnft.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/cnft/types";
+
+import "amino/amino.proto";
+import "cosmos/msg/v1/msg.proto";
+import "gogoproto/gogo.proto";
+import "orama/cnft/v1/cnft.proto";
+
+// Msg is x/cnft's transaction service. No message has an admin, a pause, or a
+// parameter change (plans/open-network.md D18).
+service Msg {
+  option (cosmos.msg.v1.service) = true;
+
+  rpc CreateCollection(MsgCreateCollection) returns (MsgCreateCollectionResponse);
+  rpc CreateTree(MsgCreateTree) returns (MsgCreateTreeResponse);
+  rpc Mint(MsgMint) returns (MsgMintResponse);
+  rpc Transfer(MsgTransfer) returns (MsgTransferResponse);
+  rpc Burn(MsgBurn) returns (MsgBurnResponse);
+  rpc UpdateMetadata(MsgUpdateMetadata) returns (MsgUpdateMetadataResponse);
+  rpc Decompress(MsgDecompress) returns (MsgDecompressResponse);
+  rpc Compress(MsgCompress) returns (MsgCompressResponse);
+  rpc RecordSnapshot(MsgRecordSnapshot) returns (MsgRecordSnapshotResponse);
+}
+
+message MsgCreateCollection {
+  option (cosmos.msg.v1.signer) = "creator";
+  option (amino.name) = "orama/cnft/CreateCollection";
+
+  string creator = 1;
+  string name = 2;
+  uint32 royalty_bps = 3;
+}
+
+message MsgCreateCollectionResponse {
+  uint64 id = 1;
+}
+
+message MsgCreateTree {
+  option (cosmos.msg.v1.signer) = "creator";
+  option (amino.name) = "orama/cnft/CreateTree";
+
+  string creator = 1;
+  uint64 collection_id = 2;
+  uint32 depth = 3;
+  uint32 buffer = 4;
+  uint32 canopy = 5;
+}
+
+message MsgCreateTreeResponse {
+  uint64 id = 1;
+  bytes root = 2;
+}
+
+message MsgMint {
+  option (cosmos.msg.v1.signer) = "creator";
+  option (amino.name) = "orama/cnft/Mint";
+
+  string creator = 1;
+  uint64 tree_id = 2;
+  // root must still sit in the tree's changelog buffer. Two mints in one block
+  // can both name the same earlier root because the buffer keeps it.
+  bytes root = 3;
+  repeated MintLeaf leaves = 4 [(gogoproto.nullable) = false];
+}
+
+message MsgMintResponse {
+  repeated uint32 leaf_indices = 1;
+  bytes root = 2;
+}
+
+message MsgTransfer {
+  option (cosmos.msg.v1.signer) = "signer";
+  option (amino.name) = "orama/cnft/Transfer";
+
+  string signer = 1;
+  uint64 tree_id = 2;
+  Leaf current = 3 [(gogoproto.nullable) = false];
+  string new_owner = 4;
+  string new_delegate = 5;
+  MerkleProof proof = 6 [(gogoproto.nullable) = false];
+}
+
+message MsgTransferResponse {
+  bytes root = 1;
+  uint64 nonce = 2;
+}
+
+message MsgBurn {
+  option (cosmos.msg.v1.signer) = "signer";
+  option (amino.name) = "orama/cnft/Burn";
+
+  string signer = 1;
+  uint64 tree_id = 2;
+  Leaf current = 3 [(gogoproto.nullable) = false];
+  MerkleProof proof = 4 [(gogoproto.nullable) = false];
+}
+
+message MsgBurnResponse {
+  bytes root = 1;
+}
+
+message MsgUpdateMetadata {
+  option (cosmos.msg.v1.signer) = "signer";
+  option (amino.name) = "orama/cnft/UpdateMetadata";
+
+  string signer = 1;
+  uint64 tree_id = 2;
+  Leaf current = 3 [(gogoproto.nullable) = false];
+  string new_metadata_cid = 4;
+  MerkleProof proof = 5 [(gogoproto.nullable) = false];
+}
+
+message MsgUpdateMetadataResponse {
+  bytes root = 1;
+  uint64 nonce = 2;
+}
+
+message MsgDecompress {
+  option (cosmos.msg.v1.signer) = "owner";
+  option (amino.name) = "orama/cnft/Decompress";
+
+  string owner = 1;
+  uint64 tree_id = 2;
+  Leaf current = 3 [(gogoproto.nullable) = false];
+  MerkleProof proof = 4 [(gogoproto.nullable) = false];
+}
+
+message MsgDecompressResponse {}
+
+message MsgCompress {
+  option (cosmos.msg.v1.signer) = "owner";
+  option (amino.name) = "orama/cnft/Compress";
+
+  string owner = 1;
+  bytes asset_id = 2;
+  bytes root = 3;
+}
+
+message MsgCompressResponse {
+  uint64 tree_id = 1;
+  uint32 leaf_index = 2;
+  bytes root = 3;
+  uint64 nonce = 4;
+}
+
+message MsgRecordSnapshot {
+  option (cosmos.msg.v1.signer) = "creator";
+  option (amino.name) = "orama/cnft/RecordSnapshot";
+
+  string creator = 1;
+  uint64 tree_id = 2;
+  string cid = 3;
+}
+
+message MsgRecordSnapshotResponse {
+  uint64 id = 1;
+}

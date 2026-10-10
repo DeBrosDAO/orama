@@ -1,0 +1,28 @@
+direction: down
+
+msg: "Message reaches dispatch(ns, topic, data, depth)"
+d1: "depth at or above 5?"
+wire: "from libp2p?\nraise depth to the recorded one"
+d2: "depth at or above 5 now?"
+loc: "local claim of\nns|topic|hash|depth held?"
+olric: "Olric NX claim\nheld by another gateway?"
+down: "Olric unreachable or errored"
+match: "GLOB lookup + segment filter"
+none: "no match: stop"
+fire: "go invokeFunction(match, event, depth + 1)\nor Aggregator.Buffer"
+skip: "drop"
+
+msg -> d1
+d1 -> skip: "yes, log"
+d1 -> wire: "no"
+wire -> d2
+d2 -> skip: "yes, log"
+d2 -> loc: "no"
+loc -> skip: "yes"
+loc -> olric: "no"
+olric -> skip: "yes"
+olric -> match: "no, we won"
+olric -> down: "error"
+down -> match: "fail open: fire anyway"
+match -> none: "0 rows"
+match -> fire: "rows"

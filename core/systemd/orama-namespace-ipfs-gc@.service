@@ -1,0 +1,40 @@
+[Unit]
+Description=Orama Namespace IPFS repo garbage collection (%i)
+Documentation=https://github.com/DeBrosOfficial/network
+# Requires is deliberate: `ipfs repo gc` operates on the running daemon's repo
+# through its API. With the daemon down there is nothing to collect, and the
+# timer firing would only log a connection failure every six hours.
+After=orama-namespace-ipfs@%i.service
+Requires=orama-namespace-ipfs@%i.service
+PartOf=orama-node.service
+
+[Service]
+Type=oneshot
+User=orama
+Group=orama
+ProtectSystem=strict
+ProtectHome=yes
+NoNewPrivileges=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+RestrictNamespaces=yes
+ProtectProc=invisible
+ReadWritePaths=/opt/orama/.orama/data/namespaces/%i /opt/orama/.orama/logs /opt/orama/.orama/data/ipfs
+InaccessiblePaths=/opt/orama/.orama/secrets
+EnvironmentFile=/var/lib/orama-unit-env/%i/ipfs-gc.env
+Environment=HOME=/opt/orama
+# `orama node ipfs-gc` collects through the running daemon's RPC API (IPFS_API
+# and IPFS_API_AUTH in the environment file), never the repo directly: while the
+# daemon is starting (lock held, api file not yet written) `ipfs repo gc` fell
+# back to an offline GC and failed on "someone else has the lock". It is not
+# `ipfs repo gc` itself because that CLI answers SIGTERM by waiting for the
+# collection, and this unit is stopped with the daemon it requires and with the
+# node (orama node restart, an upgrade): the stop ran into TimeoutStopSec and
+# left the unit failed until the next run. `orama node ipfs-gc` exits 0 on
+# SIGTERM; any other failure still fails the unit.
+ExecStart=/opt/orama/bin/orama node ipfs-gc
+TimeoutStartSec=1800
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=orama-ipfs-gc-%i

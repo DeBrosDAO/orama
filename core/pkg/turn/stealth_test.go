@@ -38,16 +38,49 @@ func TestStealthHostForNamespace_distinctPerNamespace(t *testing.T) {
 }
 
 // TestStealthHostForNamespace_matchesDNSNameAllowlist guards the contract that
-// the derived host always passes the Caddyfile DNS-name allowlist
-// (pkg/namespace turn_cert.go dnsNamePattern) — a legitimate stealth domain
-// must never be rejected by that defense-in-depth check. Mirrors the same
-// conservative pattern here to avoid an import cycle.
+// the derived host is always a conservative lowercase DNS name, so it can be
+// published as a DNS record and matched by SNI.
 func TestStealthHostForNamespace_matchesDNSNameAllowlist(t *testing.T) {
 	dnsName := regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$`)
 	for _, ns := range []string{"anchat-test", "a", "ns-with-many-dashes", "x1y2z3"} {
 		h := StealthHostForNamespace(ns, "orama-devnet.network")
 		if !dnsName.MatchString(h) {
 			t.Errorf("derived stealth host %q for ns %q fails the DNS-name allowlist", h, ns)
+		}
+	}
+}
+
+// TURNS cert fix: the TLS host must be a SINGLE-label subdomain of the base so
+// the *.<base> wildcard cert covers it (the legacy two-label turn.ns-<ns>.<base>
+// host can only present a browser-rejected self-signed cert).
+func TestTLSHostForNamespace_singleLabelUnderBase(t *testing.T) {
+	got := TLSHostForNamespace("anchat-test", "orama-devnet.network")
+	want := "turn-anchat-test.orama-devnet.network"
+	if got != want {
+		t.Fatalf("TLSHostForNamespace = %q, want %q", got, want)
+	}
+	// The label under the base domain must contain no dots (single-label),
+	// otherwise the wildcard would not cover it.
+	label := strings.TrimSuffix(got, ".orama-devnet.network")
+	if strings.Contains(label, ".") {
+		t.Errorf("TLS host label %q is multi-label; wildcard cert would not cover it", label)
+	}
+}
+
+// TLSHostFromLegacyTURNHost must derive the exact same single-label host from
+// the legacy plain-TURN host, so the creds handler (which only has TURNDomain)
+// and the DNS layer (which has ns+base) never disagree on the base domain.
+func TestTLSHostFromLegacyTURNHost(t *testing.T) {
+	legacy := "turn.ns-anchat-test.orama-devnet.network"
+	got := TLSHostFromLegacyTURNHost(legacy)
+	want := TLSHostForNamespace("anchat-test", "orama-devnet.network")
+	if got != want {
+		t.Errorf("TLSHostFromLegacyTURNHost(%q) = %q, want %q (must match TLSHostForNamespace)", legacy, got, want)
+	}
+	// Unexpected shapes return "" so the caller falls back to the legacy host.
+	for _, bad := range []string{"", "turn-already-single.orama-devnet.network", "sfu.ns-x.base", "turnXns-x.base"} {
+		if out := TLSHostFromLegacyTURNHost(bad); out != "" {
+			t.Errorf("TLSHostFromLegacyTURNHost(%q) = %q, want \"\"", bad, out)
 		}
 	}
 }

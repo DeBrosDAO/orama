@@ -1,4 +1,24 @@
 import { HttpClient } from "../core/http";
+import { SDKError } from "../errors";
+import {
+  type DirectFetch,
+  type FetchCapability,
+  type FetchOptions,
+  type FetchTransport,
+} from "./fetch-transport";
+import {
+  FetchCapsClient,
+  type MintFetchCapsOptions,
+  type MintFetchCapsResult,
+} from "./fetch-caps-client";
+import { PIN_PROPAGATION_ATTEMPTS, isNotFound, pinPropagationBackoff } from "./pin-propagation";
+
+export {
+  FETCH_CAP_MAX_COUNT,
+  FETCH_CAP_MIN_TTL_SECONDS,
+  FETCH_CAP_MAX_TTL_SECONDS,
+} from "./fetch-caps-client";
+export type { MintFetchCapsOptions, MintFetchCapsResult } from "./fetch-caps-client";
 
 export interface StorageUploadResponse {
   cid: string;
@@ -19,7 +39,7 @@ export interface StoragePinResponse {
 export interface StorageStatus {
   cid: string;
   name: string;
-  status: string; // "pinned", "pinning", "queued", "unpinned", "error"
+  status: string; // "pinned", "pinning", "queued", "unpinned", "error", "unknown"
   replication_min: number;
   replication_max: number;
   replication_factor: number;
@@ -29,9 +49,11 @@ export interface StorageStatus {
 
 export class StorageClient {
   private httpClient: HttpClient;
+  private fetchCaps: FetchCapsClient;
 
   constructor(httpClient: HttpClient) {
     this.httpClient = httpClient;
+    this.fetchCaps = new FetchCapsClient(httpClient);
   }
 
   /**
@@ -89,7 +111,7 @@ export class StorageClient {
       // This is a limitation - in practice, pass File/Blob/Buffer
       const chunks: ArrayBuffer[] = [];
       const reader = file.getReader();
-      while (true) {
+      for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
         const buffer = value.buffer.slice(
@@ -159,47 +181,15 @@ export class StorageClient {
    * ```
    */
   async get(cid: string): Promise<ReadableStream<Uint8Array>> {
-    // Retry logic for content retrieval - content may not be immediately available
-    // after upload due to eventual consistency in IPFS Cluster
-    // IPFS Cluster pins can take 2-3+ seconds to complete across all nodes
-    const maxAttempts = 8;
-    let lastError: Error | null = null;
-
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        const response = await this.httpClient.getBinary(
-          `/v1/storage/get/${cid}`
-        );
-
-        if (!response.body) {
-          throw new Error("Response body is null");
-        }
-
-        return response.body;
-      } catch (error: any) {
-        lastError = error;
-
-        // Check if this is a 404 error (content not found)
-        const isNotFound =
-          error?.httpStatus === 404 ||
-          error?.message?.includes("not found") ||
-          error?.message?.includes("404");
-
-        // If it's not a 404 error, or this is the last attempt, give up
-        if (!isNotFound || attempt === maxAttempts) {
-          throw error;
-        }
-
-        // Wait before retrying with bounded exponential backoff
-        // Max 3 seconds per retry to fit within 30s test timeout
-        // Total: 1s + 2s + 3s + 3s + 3s + 3s + 3s + 3s = 21 seconds
-        const backoffMs = Math.min(attempt * 1000, 3000);
-        await new Promise((resolve) => setTimeout(resolve, backoffMs));
-      }
+    const response = await this.fetchWhilePinPropagates(cid);
+    if (!response.body) {
+      throw new SDKError(
+        `storage returned no body for ${cid}`,
+        response.status,
+        "EMPTY_BODY"
+      );
     }
-
-    // This should never be reached, but TypeScript needs it
-    throw lastError || new Error("Failed to retrieve content");
+    return response.body;
   }
 
   /**
@@ -218,47 +208,75 @@ export class StorageClient {
    * ```
    */
   async getBinary(cid: string): Promise<Response> {
-    // Retry logic for content retrieval - content may not be immediately available
-    // after upload due to eventual consistency in IPFS Cluster
-    // IPFS Cluster pins can take 2-3+ seconds to complete across all nodes
-    const maxAttempts = 8;
-    let lastError: Error | null = null;
+    return this.fetchWhilePinPropagates(cid);
+  }
 
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+  /**
+   * Fetch a CID, re-asking while the cluster still answers 404.
+   *
+   * A CID is addressable the moment the upload returns, but the pin has to
+   * propagate across the IPFS Cluster peers before every node can serve it, so
+   * a read that closely follows a write can legitimately 404 for a few seconds.
+   * Only a 404 is retried: any other failure is the caller's answer straight
+   * away.
+   *
+   * Both `get` and `getBinary` come through here. They used to carry a
+   * character-for-character copy of this loop each, which is two places to fix
+   * when the propagation window changes and two places to get it wrong.
+   */
+  private async fetchWhilePinPropagates(cid: string): Promise<Response> {
+    for (let attempt = 1; ; attempt++) {
       try {
-        const response = await this.httpClient.getBinary(
-          `/v1/storage/get/${cid}`
-        );
-
-        if (!response) {
-          throw new Error("Response is null");
-        }
-
-        return response;
-      } catch (error: any) {
-        lastError = error;
-
-        // Check if this is a 404 error (content not found)
-        const isNotFound =
-          error?.httpStatus === 404 ||
-          error?.message?.includes("not found") ||
-          error?.message?.includes("404");
-
-        // If it's not a 404 error, or this is the last attempt, give up
-        if (!isNotFound || attempt === maxAttempts) {
+        return await this.httpClient.getBinary(`/v1/storage/get/${cid}`);
+      } catch (error) {
+        if (attempt >= PIN_PROPAGATION_ATTEMPTS || !isNotFound(error)) {
           throw error;
         }
-
-        // Wait before retrying with bounded exponential backoff
-        // Max 3 seconds per retry to fit within 30s test timeout
-        // Total: 1s + 2s + 3s + 3s + 3s + 3s + 3s + 3s = 21 seconds
-        const backoffMs = Math.min(attempt * 1000, 3000);
-        await new Promise((resolve) => setTimeout(resolve, backoffMs));
+        await pinPropagationBackoff(attempt);
       }
     }
+  }
 
-    // This should never be reached, but TypeScript needs it
-    throw lastError || new Error("Failed to retrieve content");
+  /**
+   * Mint fetch capabilities for a CID you own: tokens that let a holder
+   * download it through `fetchWith` without an identity. Needs a device-bound
+   * session.
+   *
+   * @example
+   * ```ts
+   * const { caps } = await client.storage.mintFetchCaps(cid, { count: 3, ttlSeconds: 86400 });
+   * ```
+   */
+  mintFetchCaps(cid: string, options: MintFetchCapsOptions): Promise<MintFetchCapsResult> {
+    return this.fetchCaps.mintFetchCaps(cid, options);
+  }
+
+  /**
+   * Revoke a fetch capability by its `id`, proving it was issued to you with the
+   * `revokeKey` the mint returned beside it. Takes effect for every later use of the
+   * token. An `id` with no matching key is refused (`FETCH_CAP_REVOKE_KEY_INVALID`).
+   */
+  revokeFetchCap(id: string, revokeKey: string): Promise<void> {
+    return this.fetchCaps.revokeFetchCap(id, revokeKey);
+  }
+
+  /** The non-private transport: downloads with this client's own credential. See `DirectFetch`. */
+  directTransport(): DirectFetch {
+    return this.fetchCaps.directTransport();
+  }
+
+  /**
+   * Download a CID with a fetch capability over the transport the caller chose,
+   * re-asking while the pin propagates exactly as `get` does. See
+   * `FetchCapsClient.fetchWith`.
+   */
+  fetchWith(
+    transport: FetchTransport,
+    cid: string,
+    cap: FetchCapability,
+    opts?: FetchOptions
+  ): Promise<Uint8Array> {
+    return this.fetchCaps.fetchWith(transport, cid, cap, opts);
   }
 
   /**

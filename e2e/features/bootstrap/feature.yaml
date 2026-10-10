@@ -1,0 +1,31 @@
+# Stage 1: the fresh cluster is healthy as the operator sees it through the
+# real CLI, the operator is the test wallet, the co-hosted chain produces
+# blocks, and namespace creation is opened for the whole run (the documented
+# exception to the cleanup rule, e2e/README.md "Bootstrap contract"). The
+# facts later stages compare against are recorded in the artifact dir.
+id: bootstrap
+title: Fresh cluster baseline and run-wide settings
+area: infrastructure
+subtasks: [2819]
+stage: 1
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: true
+covers:
+  cli:
+    - orama status
+    - orama status report
+    - orama status chain
+    - orama status cluster
+    - orama maint operator list
+    - orama maint cluster settings set
+    - orama maint cluster settings show
+    - orama network current
+    - orama network list
+  claims:
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-maint-cluster-settings-set: namespace-creation open admits any signed-in wallet and is set once for the whole run"
+    - "website/src/docs/operator/monitoring.mdx: a fresh cluster reports quorum ok, one leader, a full WireGuard mesh and no critical alert"
+    - "docs/whitepaper/technical-reference/vol2/38-anonymity-and-tor.md: every co-hosted validator is in sync and the chain height advances"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-monitor: only the cluster's operators may read the telemetry; no credentials is an auth error"

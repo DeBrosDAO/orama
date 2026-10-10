@@ -105,7 +105,7 @@ func TestDBQueryBatch_consistencyNoneRoutesLocal(t *testing.T) {
 	h := newHFWithDB(fake)
 
 	in := []byte(`{"consistency":"none","ops":[{"sql":"SELECT 1"}]}`)
-	if _, err := h.DBQueryBatch(context.Background(), in); err != nil {
+	if _, err := h.DBQueryBatch(nsCtx(), in); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if fake.consistencyCalls != 1 {
@@ -121,7 +121,7 @@ func TestDBQueryBatch_invalidConsistencyErrors(t *testing.T) {
 	h := newHFWithDB(fake)
 
 	in := []byte(`{"consistency":"bogus","ops":[{"sql":"SELECT 1"}]}`)
-	if _, err := h.DBQueryBatch(context.Background(), in); err == nil {
+	if _, err := h.DBQueryBatch(nsCtx(), in); err == nil {
 		t.Fatal("DBQueryBatch must reject an unknown consistency value")
 	}
 }

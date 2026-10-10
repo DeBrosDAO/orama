@@ -1,0 +1,24 @@
+# Alerts and failure detection provoked on purpose, one at a time, each
+# undone and checked cleared: clock skew past the 5s warning and the 60s
+# critical thresholds (ClockSkew restores NTP), a failed unit named in the
+# alerts, a stopped core service, UFW disabled (re-enabled first thing at
+# cleanup), and the ring detector: a hung cluster gateway suspected within
+# heartbeat trust plus three misses and recorded recovered without ever
+# being declared dead, while an injected restart of the cluster gateway unit
+# (a raw systemctl restart on the node) raises nothing.
+id: monitoring-chaos
+title: Alert injection and the ring failure detector
+area: operations
+subtasks: [2842]
+stage: 11
+destructive: true
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  units:
+    - orama-namespace-gateway@.service
+  claims:
+    - "website/src/docs/operator/monitoring.mdx#alert-severities: clock skew beyond 5s warns and beyond 60s is critical; a failed unit, a stopped service and UFW inactive are alerted"
+    - "website/src/docs/operator/monitoring.mdx#in-cluster-failure-detection-the-ring-monitor: an unresponsive node is suspect after its heartbeat goes stale plus 3 misses and recovers; a restart of the cluster gateway raises nothing"

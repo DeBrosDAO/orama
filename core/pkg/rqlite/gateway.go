@@ -8,7 +8,7 @@ package rqlite
 // helpers into JSON-over-HTTP endpoints that can be called from any language.
 //
 // Endpoints (under BasePath, default: /v1/db):
-//   - POST  {base}/query           -> arbitrary SELECT; returns rows as []map[string]any
+//   - POST  {base}/query           -> arbitrary SELECT; returns rows as []map[string]any and "columns", their names in SELECT order
 //   - POST  {base}/exec            -> write statement (INSERT/UPDATE/DELETE/DDL); returns {rows_affected,last_insert_id}
 //   - POST  {base}/find            -> FindBy(table, criteria, opts...) -> returns []map
 //   - POST  {base}/find-one        -> FindOneBy(table, criteria, opts...) -> returns map
@@ -49,6 +49,12 @@ type HTTPGateway struct {
 
 	// Optional: Request timeout. If > 0, handlers will use a context with this timeout.
 	Timeout time.Duration
+
+	// SQLGuard, when set, is asked about every statement a request would run —
+	// query, exec, each op of a transaction, the SQL a find or select builds,
+	// create-table and drop-table — and a refusal is a 403 before anything
+	// reaches the database. Nil means unguarded.
+	SQLGuard SQLGuard
 }
 
 // NewHTTPGateway constructs a new HTTPGateway with sensible defaults.
@@ -60,20 +66,49 @@ func NewHTTPGateway(c Client, base string) *HTTPGateway {
 }
 
 // RegisterRoutes registers all handlers onto the provided mux under BasePath.
-func (g *HTTPGateway) RegisterRoutes(mux *http.ServeMux) {
-	base := g.base()
-	mux.HandleFunc(base+"/query", g.handleQuery)
-	mux.HandleFunc(base+"/exec", g.handleExec)
-	mux.HandleFunc(base+"/find", g.handleFind)
-	mux.HandleFunc(base+"/find-one", g.handleFindOne)
-	mux.HandleFunc(base+"/select", g.handleSelect)
-	// Keep "transaction" for compatibility with existing routes.
-	mux.HandleFunc(base+"/transaction", g.handleTransaction)
+// route is one mounted pattern and the handler behind it.
+type route struct {
+	Pattern string
+	Handler http.HandlerFunc
+}
 
-	// Schema helpers
-	mux.HandleFunc(base+"/schema", g.handleSchema)
-	mux.HandleFunc(base+"/create-table", g.handleCreateTable)
-	mux.HandleFunc(base+"/drop-table", g.handleDropTable)
+// routes is the single list of what this gateway serves. RegisterRoutes mounts
+// it and Routes reports it, so the two cannot disagree.
+func (g *HTTPGateway) routes() []route {
+	base := g.base()
+	return []route{
+		{base + "/query", g.handleQuery},
+		{base + "/exec", g.handleExec},
+		{base + "/find", g.handleFind},
+		{base + "/find-one", g.handleFindOne},
+		{base + "/select", g.handleSelect},
+		// Keep "transaction" for compatibility with existing routes.
+		{base + "/transaction", g.handleTransaction},
+		// Schema helpers
+		{base + "/schema", g.handleSchema},
+		{base + "/create-table", g.handleCreateTable},
+		{base + "/drop-table", g.handleDropTable},
+	}
+}
+
+func (g *HTTPGateway) RegisterRoutes(mux *http.ServeMux) {
+	for _, r := range g.routes() {
+		mux.HandleFunc(r.Pattern, r.Handler)
+	}
+}
+
+// Routes returns every pattern RegisterRoutes mounts.
+//
+// These are composed from the base path rather than written as literals, so the
+// route inventory in docs/whitepaper/technical-reference/appendices/i-api-surface.md cannot discover them by reading the
+// source. It asks here instead.
+func (g *HTTPGateway) Routes() []string {
+	table := g.routes()
+	out := make([]string, 0, len(table))
+	for _, r := range table {
+		out = append(out, r.Pattern)
+	}
+	return out
 }
 
 func (g *HTTPGateway) base() string {
@@ -106,6 +141,18 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 
 func writeError(w http.ResponseWriter, code int, msg string) {
 	writeJSON(w, code, map[string]any{"error": msg})
+}
+
+// batchFailureStatus is the HTTP status for a batch-level failure: 400 for a
+// request the caller must change, 503 for one worth retrying, 500 otherwise.
+func batchFailureStatus(code string) int {
+	switch code {
+	case BatchCodeTooManyStatements, BatchCodeInvalidArgument:
+		return http.StatusBadRequest
+	case BatchCodeUnavailable, BatchCodeDeadlineExceeded:
+		return http.StatusServiceUnavailable
+	}
+	return http.StatusInternalServerError
 }
 
 func onlyMethod(w http.ResponseWriter, r *http.Request, method string) bool {
@@ -230,22 +277,30 @@ func (g *HTTPGateway) handleQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body queryRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.SQL) == "" {
+	if !decodeBody(w, r, &body, "invalid body: {sql, args?}") {
+		return
+	}
+	if strings.TrimSpace(body.SQL) == "" {
 		writeError(w, http.StatusBadRequest, "invalid body: {sql, args?}")
+		return
+	}
+	if err := g.checkSQL(body.SQL); err != nil {
+		refuseSQL(w, err)
 		return
 	}
 	args := normalizeArgs(body.Args)
 	ctx, cancel := g.withTimeout(r.Context())
 	defer cancel()
 
-	out := make([]map[string]any, 0, 16)
+	var out ColumnRows
 	if err := g.Client.Query(ctx, &out, body.SQL, args...); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"items": out,
-		"count": len(out),
+		"items":   out.Rows,
+		"count":   len(out.Rows),
+		"columns": out.Columns,
 	})
 }
 
@@ -258,8 +313,15 @@ func (g *HTTPGateway) handleExec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body execRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.SQL) == "" {
+	if !decodeBody(w, r, &body, "invalid body: {sql, args?}") {
+		return
+	}
+	if strings.TrimSpace(body.SQL) == "" {
 		writeError(w, http.StatusBadRequest, "invalid body: {sql, args?}")
+		return
+	}
+	if err := g.checkSQL(body.SQL); err != nil {
+		refuseSQL(w, err)
 		return
 	}
 	args := normalizeArgs(body.Args)
@@ -289,11 +351,18 @@ func (g *HTTPGateway) handleFind(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body findRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Table) == "" {
+	if !decodeBody(w, r, &body, "invalid body: {table, criteria, options?}") {
+		return
+	}
+	if strings.TrimSpace(body.Table) == "" {
 		writeError(w, http.StatusBadRequest, "invalid body: {table, criteria, options?}")
 		return
 	}
 	opts := makeFindOptions(mergeFindOptions(body))
+	if err := g.checkFind(body.Table, body.Criteria, opts); err != nil {
+		refuseSQL(w, err)
+		return
+	}
 	ctx, cancel := g.withTimeout(r.Context())
 	defer cancel()
 
@@ -317,11 +386,18 @@ func (g *HTTPGateway) handleFindOne(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body findOneRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Table) == "" {
+	if !decodeBody(w, r, &body, "invalid body: {table, criteria, options?}") {
+		return
+	}
+	if strings.TrimSpace(body.Table) == "" {
 		writeError(w, http.StatusBadRequest, "invalid body: {table, criteria, options?}")
 		return
 	}
 	opts := makeFindOptions(mergeFindOptions(body))
+	if err := g.checkFind(body.Table, body.Criteria, opts); err != nil {
+		refuseSQL(w, err)
+		return
+	}
 	ctx, cancel := g.withTimeout(r.Context())
 	defer cancel()
 
@@ -346,7 +422,10 @@ func (g *HTTPGateway) handleSelect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body selectRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Table) == "" {
+	if !decodeBody(w, r, &body, "invalid body: {table, select?, where?, joins?, order_by?, group_by?, limit?, offset?, one?}") {
+		return
+	}
+	if strings.TrimSpace(body.Table) == "" {
 		writeError(w, http.StatusBadRequest, "invalid body: {table, select?, where?, joins?, order_by?, group_by?, limit?, offset?, one?}")
 		return
 	}
@@ -393,6 +472,10 @@ func (g *HTTPGateway) handleSelect(w http.ResponseWriter, r *http.Request) {
 	if body.Offset != nil {
 		qb = qb.Offset(*body.Offset)
 	}
+	if err := g.checkBuilt(qb); err != nil {
+		refuseSQL(w, err)
+		return
+	}
 
 	if body.One {
 		row := make(map[string]any)
@@ -428,8 +511,7 @@ func (g *HTTPGateway) handleTransaction(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var body transactionRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body: {ops:[{kind,sql,args?}], return_results?} or {statements:[sql...]}")
+	if !decodeBody(w, r, &body, "invalid body: {ops:[{kind,sql,args?}], return_results?} or {statements:[sql...]}") {
 		return
 	}
 
@@ -456,6 +538,10 @@ func (g *HTTPGateway) handleTransaction(w http.ResponseWriter, r *http.Request) 
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid op kind: %s", op.Kind))
 			return
 		}
+		if err := g.checkSQL(op.SQL); err != nil {
+			refuseSQL(w, fmt.Errorf("op %d: %w", len(batchOps), err))
+			return
+		}
 		batchOps = append(batchOps, BatchOp{
 			Kind: kind,
 			SQL:  op.SQL,
@@ -465,21 +551,36 @@ func (g *HTTPGateway) handleTransaction(w http.ResponseWriter, r *http.Request) 
 
 	batchRes, err := g.Client.Batch(ctx, batchOps)
 	if err != nil && batchRes == nil {
-		// Setup/transport failure (no native conn, oversized batch, etc.)
-		writeError(w, http.StatusInternalServerError, err.Error())
+		// Refused before it ran: an oversized batch, an unknown op kind, no
+		// native connection.
+		code := ClassifyBatchError(err)
+		writeJSON(w, batchFailureStatus(code), map[string]any{"error": err.Error(), "code": code})
+		return
+	}
+
+	// A batch with no statement result — lost leader, transport fault,
+	// deadline — is a server-side failure, not a rollback of the caller's op.
+	// For a deadline or reset after the request was sent, whether the writes
+	// landed is unknown.
+	if batchRes != nil && batchRes.Error != "" {
+		writeJSON(w, batchFailureStatus(batchRes.Code), map[string]any{
+			"error": batchRes.Error,
+			"code":  batchRes.Code,
+		})
 		return
 	}
 
 	// Rollback path: 4xx-style response so callers can branch.
 	if batchRes != nil && !batchRes.Committed {
-		failingErr := ""
+		var failing OpResult
 		if batchRes.FailedIndex < len(batchRes.Results) {
-			failingErr = batchRes.Results[batchRes.FailedIndex].Error
+			failing = batchRes.Results[batchRes.FailedIndex]
 		}
 		writeJSON(w, http.StatusConflict, map[string]any{
 			"status":       "rollback",
 			"failed_index": batchRes.FailedIndex,
-			"error":        failingErr,
+			"error":        failing.Error,
+			"code":         failing.Code,
 		})
 		return
 	}
@@ -547,8 +648,15 @@ func (g *HTTPGateway) handleCreateTable(w http.ResponseWriter, r *http.Request) 
 	var body struct {
 		Schema string `json:"schema"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Schema) == "" {
+	if !decodeBody(w, r, &body, "invalid body: {schema}") {
+		return
+	}
+	if strings.TrimSpace(body.Schema) == "" {
 		writeError(w, http.StatusBadRequest, "invalid body: {schema}")
+		return
+	}
+	if err := g.checkSQL(body.Schema); err != nil {
+		refuseSQL(w, err)
 		return
 	}
 	ctx, cancel := g.withTimeout(r.Context())
@@ -574,7 +682,10 @@ func (g *HTTPGateway) handleDropTable(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Table string `json:"table"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Table) == "" {
+	if !decodeBody(w, r, &body, "invalid body: {table}") {
+		return
+	}
+	if strings.TrimSpace(body.Table) == "" {
 		writeError(w, http.StatusBadRequest, "invalid body: {table}")
 		return
 	}
@@ -583,10 +694,14 @@ func (g *HTTPGateway) handleDropTable(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid table identifier")
 		return
 	}
+	stmt := "DROP TABLE " + tbl
+	if err := g.checkSQL(stmt); err != nil {
+		refuseSQL(w, err)
+		return
+	}
 	ctx, cancel := g.withTimeout(r.Context())
 	defer cancel()
 
-	stmt := "DROP TABLE " + tbl
 	if _, err := g.Client.Exec(ctx, stmt); err != nil {
 		if strings.Contains(err.Error(), "no such table") {
 			writeError(w, http.StatusNotFound, err.Error())

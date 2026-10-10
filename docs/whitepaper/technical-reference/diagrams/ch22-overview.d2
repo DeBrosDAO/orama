@@ -1,0 +1,58 @@
+direction: right
+
+callers: "Callers in one namespace" {
+  device: "device app\n(JWT or runtime key)" {shape: person}
+  backend: "backend\n(push:write grant)" {shape: person}
+  fn: "serverless function\npush_send, push_send_v2,\npush_send_topic"
+}
+
+gw: "Namespace gateway (core/pkg/gateway)" {
+  routes: "/v1/push/devices, /send, /topics, /topics/send\n/v1/push/config\n/v1/namespace/push-credentials"
+  mgr: "push.Manager\n30 s dispatcher cache per namespace"
+  disp: "PushDispatcher\nfilter by provider, send per device"
+  creds: "credentials.Manager\n30 s cache, validators"
+  fanout: "ntfy fan-out resolver\n30 s cache of dns_nodes"
+  routes -> mgr
+  mgr -> disp: "build on miss"
+  mgr -> creds: "APNs, ntfy credentials"
+}
+
+ns: "Namespace RQLite" {
+  dev: "push_devices" {shape: cylinder}
+  topics: "push_topics" {shape: cylinder}
+  cfg: "namespace_push_config" {shape: cylinder}
+  cr: "namespace_push_credentials" {shape: cylinder}
+}
+
+reg: "Index RQLite (registry)" {
+  nodes: "dns_nodes" {shape: cylinder}
+  revoked: "session devices" {shape: cylinder}
+}
+
+ext: "Providers" {
+  apns: "APNs HTTP/2\napi.push.apple.com"
+  expo: "Expo relay\nexp.host"
+  tenant: "tenant's own ntfy\n(guarded client)"
+}
+
+node: "Every node (index plane)" {
+  relay: "index gateway :10104\n/v1/internal/push/ntfy/"
+  ntfy: "ntfy 127.0.0.1:10109"
+  caddy: "Caddy push.zone :443"
+  relay -> ntfy: "loopback POST"
+  caddy -> ntfy: "subscribers"
+}
+
+callers.device -> gw.routes: "register"
+callers.backend -> gw.routes: "send"
+callers.fn -> gw.mgr: "host call"
+gw.mgr -> ns.dev: "ListForUser (AES-GCM tokens)"
+gw.mgr -> ns.topics: "Get"
+gw.mgr -> ns.cfg
+gw.creds -> ns.cr
+gw.mgr -> reg.revoked: "revoked devices"
+gw.disp -> ext.apns: "apns, apns_voip"
+gw.disp -> ext.expo: "expo"
+gw.disp -> ext.tenant: "ntfy, tenant base_url"
+gw.fanout -> reg.nodes: "id, internal_ip"
+gw.disp -> node.relay: "ntfy, platform host\nWireGuard, MAC v2, one POST per node"

@@ -20,7 +20,17 @@ const secretsKeyBytes = 32
 type DBSecretsManager struct {
 	db            rqlite.Client
 	encryptionKey []byte // 32-byte AES-256 key
+	holder        *secrets.Holder
 	logger        *zap.Logger
+}
+
+const functionSecretsPurpose = "orama-secrets-encryption-v1"
+
+// SetHolder lets a rotate take effect without restarting this process.
+func (s *DBSecretsManager) SetHolder(h *secrets.Holder) {
+	if s != nil {
+		s.holder = h
+	}
 }
 
 // Ensure DBSecretsManager implements SecretsManager.
@@ -73,7 +83,7 @@ func (s *DBSecretsManager) Set(ctx context.Context, namespace, name, value strin
 	// []byte on both legs and the round-trip never reproduced the ciphertext, so
 	// decrypt() always failed and get_secret returned empty. A text string round-
 	// trips cleanly.
-	encrypted, err := secrets.Encrypt(value, s.encryptionKey)
+	encrypted, err := secrets.Seal(s.holder, functionSecretsPurpose, s.encryptionKey, value)
 	if err != nil {
 		return fmt.Errorf("failed to encrypt secret: %w", err)
 	}
@@ -113,7 +123,7 @@ func (s *DBSecretsManager) Get(ctx context.Context, namespace, name string) (str
 		return "", serverless.ErrSecretNotFound
 	}
 
-	decrypted, err := secrets.Decrypt(rows[0].EncryptedValue, s.encryptionKey)
+	decrypted, err := secrets.Open(s.holder, functionSecretsPurpose, s.encryptionKey, rows[0].EncryptedValue)
 	if err != nil {
 		return "", fmt.Errorf("failed to decrypt secret: %w", err)
 	}

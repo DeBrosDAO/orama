@@ -2,6 +2,7 @@ package cache
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/olric"
@@ -55,42 +56,37 @@ type ScanRequest struct {
 	Match string `json:"match"` // Optional regex pattern to match keys
 }
 
-// decodeValueFromOlric decodes a value from Olric GetResponse.
-// Handles JSON-serialized complex types and basic types (string, number, bool).
-// This function attempts multiple strategies to decode the value:
-// 1. First tries to get as bytes and unmarshal as JSON
-// 2. Falls back to string if JSON unmarshal fails
-// 3. Finally attempts to scan as any type
-func decodeValueFromOlric(gr *olriclib.GetResponse) (any, error) {
-	var value any
-
-	// First, try to get as bytes (for JSON-serialized complex types)
-	var bytesVal []byte
-	if err := gr.Scan(&bytesVal); err == nil && len(bytesVal) > 0 {
-		// Try to deserialize as JSON
-		var jsonVal any
-		if err := json.Unmarshal(bytesVal, &jsonVal); err == nil {
-			value = jsonVal
-		} else {
-			// If JSON unmarshal fails, treat as string
-			value = string(bytesVal)
-		}
-	} else {
-		// Try as string (for simple string values)
-		if strVal, err := gr.String(); err == nil {
-			value = strVal
-		} else {
-			// Fallback: try to scan as any type
-			var anyVal any
-			if err := gr.Scan(&anyVal); err == nil {
-				value = anyVal
-			} else {
-				// Last resort: try String() again, ignoring error
-				strVal, _ := gr.String()
-				value = strVal
-			}
-		}
+// encodeStoredValue is the bytes a value is stored as: its JSON. Olric keeps
+// bytes with no type, and values used to be stored as their text, so the string
+// "123", the number 123 and true were indistinguishable there and a value came
+// back as something other than what was put. The JSON carries the type: the
+// string is stored as "123", with its quotes.
+//
+// Plain JSON rather than a tagged format on purpose: a gateway from before this
+// change reads a value by parsing it as JSON, so it reads these exactly too,
+// and the gateways of a rolling upgrade (or a rollback) agree on every entry.
+func encodeStoredValue(value any) ([]byte, error) {
+	body, err := json.Marshal(value)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode the value as JSON: %w", err)
 	}
+	return body, nil
+}
 
+// decodeValueFromOlric returns the value as it was put.
+//
+// Every value written since values were typed is JSON and reads back exactly.
+// A value written before then holds raw text whose type was never recorded: it
+// is read as what it looks like, JSON when it parses, else a string. Only those
+// older entries are ambiguous.
+func decodeValueFromOlric(gr *olriclib.GetResponse) (any, error) {
+	var raw []byte
+	if err := gr.Scan(&raw); err != nil {
+		return nil, fmt.Errorf("failed to read the stored value: %w", err)
+	}
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return string(raw), nil
+	}
 	return value, nil
 }

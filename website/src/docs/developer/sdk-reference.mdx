@@ -1,911 +1,437 @@
-# SDK Reference
+# TypeScript SDK
 
-The Orama TypeScript SDK (`@debros/network-ts-sdk`) provides a unified interface for interacting with all Orama Network services. This reference covers client initialization, all service modules, and their methods.
+`@debros/orama` (version 0.3.0, MIT) is the programmatic surface of an Orama namespace. Everything a deployed application does (query its database, publish to a topic, cache a value, store a file, invoke a function) goes through one client against one gateway URL.
 
-## Installation
+The SDK reaches a deliberate subset of the gateway. Deploying an application, minting a key and managing nodes are the CLI's job. Every route and its owner is on [Gateway HTTP API](/docs/developer/api-surface). There is also a [Go client](/docs/developer/go-sdk).
+
+## Install
 
 ```bash
-npm install @debros/network-ts-sdk
-# or
-pnpm add @debros/network-ts-sdk
+npm install @debros/orama
 ```
 
-## Client Initialization
+ESM and CommonJS, in Node and in a browser bundle. Node 20.19 or later. Entry points:
 
-All interactions with Orama start by calling `createClient()`:
+| Import | What |
+|---|---|
+| `@debros/orama` | The client and everything below |
+| `@debros/orama/chain` | Read the chain, build and sign transactions. Optional peers: `@bufbuild/protobuf`, `@noble/curves`, `@noble/hashes`, `@scure/base` (all 2.x) |
+| `@debros/orama/relay` | `RelayedFetch` for relayed downloads. Node.js only |
 
-```typescript
-import { createClient } from "@debros/network-ts-sdk";
+The vault client is a separate package, `@debros/orama-vault`; see [Secrets](#secrets).
+
+## The client
+
+```ts
+import { createClient } from "@debros/orama";
 
 const client = createClient({
-  baseURL: "https://orama-devnet.network",
-  apiKey: "your-api-key",
+  baseURL: "https://ns-myapp.cluster.example.com",
+  apiKey: process.env.ORAMA_API_KEY,
 });
 ```
+
+`baseURL` is the namespace gateway (`ns-<name>.<base-domain>`) for data-plane calls, or the cluster gateway (`https://<base-domain>`) for the lobby and namespace creation.
+
+| Member | What it reaches |
+|---|---|
+| `client.auth` | Credentials, wallet login, devices, session renewal |
+| `client.db` | The namespace's RQLite database |
+| `client.pubsub` | Topics: HTTP to publish, WebSocket to subscribe |
+| `client.cache` | The Olric distributed cache |
+| `client.storage` | IPFS upload, pin, retrieve, fetch capabilities |
+| `client.functions` | Serverless function invocation |
+| `client.network` | Gateway health, cluster status, peers, the anonymity proxy |
 
 ### ClientConfig
 
-| Option | Type | Required | Default | Description |
-|--------|------|----------|---------|-------------|
-| `baseURL` | `string` | Yes | -- | Gateway HTTPS URL |
-| `apiKey` | `string` | No | -- | API key for authentication (sent as `X-API-Key` header) |
-| `jwt` | `string` | No | -- | Pre-existing JWT token (sent as `Authorization: Bearer` header) |
-| `timeout` | `number` | No | `60000` | Request timeout in milliseconds |
-| `maxRetries` | `number` | No | `3` | Maximum retry attempts for retryable errors (408, 429, 500, 502, 503, 504) |
-| `retryDelayMs` | `number` | No | `1000` | Base delay between retries (multiplied by attempt number) |
-| `debug` | `boolean` | No | `false` | Enable debug logging (includes SQL queries and args) |
-| `storage` | `StorageAdapter` | No | `MemoryStorage` | Token storage adapter for persisting auth state |
-| `fetch` | `typeof fetch` | No | `globalThis.fetch` | Custom fetch implementation |
-| `wsConfig` | `Partial<WSClientConfig>` | No | -- | WebSocket configuration for PubSub |
-| `functionsConfig` | `FunctionsClientConfig` | No | -- | Functions module configuration (requires `namespace`) |
-| `vaultConfig` | `VaultConfig` | No | -- | Vault module configuration (required for vault access) |
-| `onNetworkError` | `NetworkErrorCallback` | No | -- | Callback invoked on network errors after all retries are exhausted |
+| Option | Default | Meaning |
+|---|---|---|
+| `baseURL` | required | Gateway URL |
+| `apiKey` | | `orama_<type>_<payload>_<checksum>`. Exchanged for a token before the first request; the key itself never goes on the wire again |
+| `jwt` | | An existing session token |
+| `timeout` | `60000` | Per-request timeout, ms |
+| `maxRetries` | `3` | Attempts for a retryable status (408, 429, 5xx) |
+| `retryDelayMs` | `1000` | Base backoff, multiplied by the attempt and jittered |
+| `debug` | `false` | Print diagnostics. Off, the SDK writes nothing to the console |
+| `storage` | memory | Where tokens persist. `LocalStorageAdapter` in a browser |
+| `wsConfig` | | WebSocket options, including `reconnect` |
+| `functionsConfig` | | `namespace`, and an optional separate `gatewayURL` |
+| `fetch` | platform | Replace the fetch used for every request |
+| `onNetworkError` | | Called when a request does not reach the gateway; the place to fail over |
 
-### Return Value
+## Where a key belongs
 
-`createClient()` returns a `Client` object with service modules:
+An API key carries grants, and a key in a browser bundle is a key in the hands of everyone who loads the page.
 
-```typescript
-interface Client {
-  auth: AuthClient;
-  db: DBClient;
-  pubsub: PubSubClient;
-  network: NetworkClient;
-  cache: CacheClient;
-  storage: StorageClient;
-  functions: FunctionsClient;
-  vault: VaultClient | null; // null if no vaultConfig provided
-}
+- **Server side only: an `admin` key.** It reaches the control plane: deploys, secrets, key management, raw RQLite. It belongs in CI and on a developer's machine.
+- **Safe in a client bundle: an `app-runtime` key.** Data-plane grants only, and the gateway additionally requires a logged-in user's wallet session for storage, WebRTC and proxy (a deployed app's own workload token also qualifies on storage and WebRTC), so an extracted runtime key on its own cannot act as anybody.
+
+```bash
+orama namespace keys create --scope app-runtime --label web
+orama namespace keys create --scope invoke,pubsub,cache --label worker
+orama namespace keys create --scope admin --label ci
 ```
 
----
+The calls below need these grants. `client.db` reaches the control plane, so it needs an `admin` key or a signed-in wallet holding the `developer` role or above. `client.pubsub` needs `pubsub` and `client.cache` needs `cache`, which the `app-runtime` profile leaves out, so name them in `--scope`. `client.storage` needs `storage` plus a signed-in user's session. `client.functions` needs `invoke`.
 
-## auth
+See [Access control and keys](/docs/developer/access-control).
 
-Authentication and token lifecycle management.
+## Authentication
 
-### `auth.setApiKey(apiKey: string): void`
+Every request carries `Authorization: Bearer <token>` and nothing else.
 
-Set the API key for all subsequent requests.
+### API key
 
-### `auth.setJwt(jwt: string): void`
+```ts
+const client = createClient({ baseURL, apiKey: process.env.ORAMA_API_KEY });
+```
 
-Set the JWT for all subsequent requests.
+The key is exchanged once, before the first request, for a 15-minute token carrying the key's grants. The SDK exchanges again before it expires. The key stays in the process it was given to: not in an access log, a proxy trace, a devtools tab or a WebSocket URL. `getToken()` therefore returns a token rather than the key.
 
-### `auth.getToken(): string | undefined`
+### A deployed app
 
-Get the current active auth token (JWT or API key).
+```ts
+import { createWorkloadClient } from "@debros/orama";
+const client = await createWorkloadClient();
+```
 
-### `auth.challenge(params): Promise<ChallengeResponse>`
+It reads `ORAMA_GATEWAY_URL` and `ORAMA_TOKEN_FILE` from the environment the platform set up and renews the token before it expires. What it may reach is whatever `orama app grants set <app> …` gave it: nothing, until you do.
 
-Request a challenge nonce for wallet-based authentication.
+### Wallet login
 
-```typescript
+A user proves ownership of an address by signing a Sign-In with Ethereum message (EIP-4361), or the Solana counterpart for `chain_type: "SOL"`.
+
+```ts
 const challenge = await client.auth.challenge({
-  wallet: "0x1234...",
-  purpose: "authentication", // optional, default: "authentication"
-  namespace: "my-namespace", // optional, default: "default"
+  wallet: "0xYourWallet",
+  namespace: "acme",
+  chain_type: "ETH",            // or "SOL"
 });
-// Returns: { nonce, wallet, namespace, expires_at }
+// Sign the message verbatim. It is what the wallet shows the user.
+const signature = await wallet.signMessage(challenge.message);
+const session = await client.auth.verify({ message: challenge.message, signature });
 ```
 
-### `auth.verify(params): Promise<VerifyResponse>`
+The message carries the gateway's domain, the namespace, the nonce and a five-minute expiry; `verify` takes the message, not the fields beside it, so the wallet and namespace it acts on are read out of the bytes the user approved. `verify` stores the access token, the refresh token and the namespace. Challenges are single use. `client.auth.getApiKey({ message, signature })` mints a long-lived key the same way from its own fresh challenge.
 
-Verify a wallet signature and receive JWT + API key.
+### Sessions renew themselves
 
-```typescript
-const session = await client.auth.verify({
-  wallet: "0x1234...",
-  nonce: challenge.nonce,
-  signature: "0xsigned...",
-  namespace: "my-namespace", // optional, default: "default"
-  chain_type: "ETH",         // "ETH" or "SOL", default: "ETH"
+When the gateway answers 401 and a refresh token is stored, the SDK renews the session and replays the request once. Concurrent requests that expire together share one renewal.
+
+```ts
+await client.auth.logout();                      // tell the gateway, clear everything
+await client.auth.logout({ keepApiKey: true });  // the user signs out; the app key stays
+await client.auth.logout({ server: false });     // clear local state only
+```
+
+`client.auth.whoami()` answers `{ authenticated: false }` for a rejected credential and **throws** for anything else, so a gateway that is down is not reported as a signed-out user.
+
+### Device-bound sessions
+
+See [Devices](/docs/developer/devices) for the model. SDK calls:
+
+```ts
+client.auth.setDeviceSigner({
+  publicJwk,                                  // {kty:"EC",crv:"P-256",x,y} or {kty:"OKP",crv:"Ed25519",x}
+  sign: async (message) => base64url(await platformSign(message)),
 });
-// Returns: { access_token, refresh_token?, subject, namespace, api_key?, expires_in?, token_type? }
-```
-
-The SDK automatically stores the JWT and API key after verification.
-
-### `auth.getApiKey(params): Promise<ApiKeyResponse>`
-
-Get or create an API key for a wallet/namespace. Requires a signed challenge.
-
-```typescript
-const result = await client.auth.getApiKey({
-  wallet: "0x1234...",
-  nonce: challenge.nonce,
-  signature: "0xsigned...",
-  namespace: "my-namespace",
-  chain_type: "ETH",
+const challenge = await client.auth.challenge({ wallet, namespace: "acme", device_id: deviceIdOf(publicJwk) });
+const result = await client.auth.verify({
+  message: challenge.message,
+  signature: await wallet.signMessage(challenge.message),
+  device_key: publicJwk,
+  device_signature: base64url(await platformSign(challenge.message)),
+  device_label: "Alice's phone",
 });
-// Returns: { api_key, namespace, wallet }
 ```
 
-### `auth.whoami(): Promise<WhoAmI>`
+`deviceIdOf(publicJwk)` is the RFC 7638 thumbprint. A device-bound `verify` returns no API key; later refreshes sign a proof with the device key automatically, and without a signer `refresh()` throws `DEVICE_PROOF_REQUIRED`. When the namespace requires an existing device's approval, `verify` returns `{status: "pending_approval", user_code, device_code}` and stores nothing: show the user code, call `client.auth.approveDeviceLink(code)` on a device already signed in, then `client.auth.claimDeviceLink(device_code, namespace)` on the new one. `startDeviceLink({namespace})` starts a link with no wallet. `listDevices()` and `revokeDevice(id)` manage devices. `deviceProofMessage` is exported for a client that signs proofs itself.
 
-Get the currently authenticated user info. Returns `{ authenticated: false }` on failure.
+### Persisting tokens in a browser
 
-### `auth.refresh(): Promise<string>`
+```ts
+import { createClient, LocalStorageAdapter } from "@debros/orama";
 
-Refresh the current JWT token. Returns the new token.
-
-### `auth.logoutUser(): Promise<void>`
-
-Logout the current user (clears JWT but preserves API key). Use this for user-level logout in apps where the API key is an app-level credential.
-
-### `auth.logout(): Promise<void>`
-
-Full logout -- clears both JWT and API key.
-
-### `auth.clear(): Promise<void>`
-
-Clear all local auth state without making server calls.
-
----
-
-## db
-
-Interact with distributed RQLite databases.
-
-### `db.exec(sql, args?): Promise<ExecResult>`
-
-Execute a write or DDL SQL statement.
-
-```typescript
-await client.db.exec(
-  "INSERT INTO users (name, email) VALUES (?, ?)",
-  ["Alice", "alice@example.com"]
-);
-// Returns: { rows_affected: number, last_insert_id?: number }
+const client = createClient({ baseURL, apiKey, storage: new LocalStorageAdapter() });
 ```
 
-### `db.query<T>(sql, args?): Promise<T[]>`
+### `client.auth` methods
 
-Execute a SELECT query and return rows.
+`setApiKey`, `setJwt`, `getToken`, `renew`, `refresh`, `whoami`, `logout`, `logoutUser`, `clear`, `challenge`, `verify`, `getApiKey`, `setDeviceSigner`, `listDevices`, `revokeDevice`, `approveDeviceLink`, `startDeviceLink`, `claimDeviceLink`.
 
-```typescript
-const users = await client.db.query<User>(
-  "SELECT * FROM users WHERE name = ?",
-  ["Alice"]
-);
+## Database
+
+```ts
+const rows = await client.db.query("SELECT * FROM messages WHERE room = ?", ["general"]);
+await client.db.exec("INSERT INTO messages (room, body) VALUES (?, ?)", ["general", "hi"]);
+
+const recent = await client.db.find("messages", { room: "general" }, { limit: 20 });
+const one = await client.db.findOne("messages", { id: 42 });      // null when absent
+
+const page = await client.db.createQueryBuilder("messages")
+  .where("room = ?", ["general"]).orderBy("created_at DESC").limit(20).getMany();
+
+const messages = client.db.repository<Message>("messages");
+await messages.save({ room: "general", body: "hi" });
 ```
 
-### `db.find<T>(table, criteria?, options?): Promise<T[]>`
+A row that is not there is `null` from both `findOne` methods, never an exception. Table, primary-key and column names are validated as plain SQL identifiers (`[A-Za-z_][A-Za-z0-9_]*`); anything else is rejected with `INVALID_IDENTIFIER`. Values are parameterised.
 
-Find rows using map-based criteria.
+Methods: `exec`, `query`, `find`, `findOne`, `createQueryBuilder`, `repository`, `transaction`, `createTable`, `dropTable`, `getSchema`. See [Databases](/docs/developer/databases).
 
-```typescript
-const users = await client.db.find<User>("users", { name: "Alice" }, { limit: 10 });
-```
+## Pub/sub
 
-### `db.findOne<T>(table, criteria): Promise<T | null>`
+```ts
+await client.pubsub.publish("room:general", "hello");
+await client.pubsub.publish("room:general", new Uint8Array([1, 2, 3]));
 
-Find a single row. Returns `null` if not found.
-
-```typescript
-const user = await client.db.findOne<User>("users", { id: 1 });
-```
-
-### `db.createTable(schema): Promise<void>`
-
-Create a table from a DDL SQL string.
-
-```typescript
-await client.db.createTable(
-  "CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT, email TEXT)"
-);
-```
-
-### `db.dropTable(table): Promise<void>`
-
-Drop a table.
-
-```typescript
-await client.db.dropTable("users");
-```
-
-### `db.getSchema(): Promise<any>`
-
-Get the current database schema.
-
-### `db.transaction(ops, returnResults?): Promise<any[]>`
-
-Execute multiple operations atomically.
-
-```typescript
-const results = await client.db.transaction([
-  { kind: "exec", sql: "INSERT INTO logs (msg) VALUES (?)", args: ["entry"] },
-  { kind: "exec", sql: "UPDATE counters SET count = count + 1 WHERE id = ?", args: [1] },
-]);
-```
-
-Each operation requires a `kind` field: `"exec"` for writes (INSERT, UPDATE, DELETE) or `"query"` for reads (SELECT).
-
-### `db.createQueryBuilder(table): QueryBuilder`
-
-Create a fluent query builder for complex SELECT queries.
-
-```typescript
-const qb = client.db.createQueryBuilder("users");
-const results = await qb
-  .select("id", "name", "email")
-  .where("name = ?", ["Alice"])
-  .leftJoin("orders", "orders.user_id = users.id")
-  .orderBy("name ASC")
-  .limit(10)
-  .offset(0)
-  .getMany<User>();
-```
-
-**QueryBuilder methods:**
-
-| Method | Description |
-|--------|-------------|
-| `.select(...columns)` | Select specific columns |
-| `.where(expr, args?)` | Add a WHERE clause (AND) |
-| `.andWhere(expr, args?)` | Alias for `.where()` |
-| `.orWhere(expr, args?)` | Add a WHERE clause (OR) |
-| `.innerJoin(table, on)` | Add an INNER JOIN |
-| `.leftJoin(table, on)` | Add a LEFT JOIN |
-| `.rightJoin(table, on)` | Add a RIGHT JOIN |
-| `.groupBy(...columns)` | Group by columns |
-| `.orderBy(...columns)` | Order by columns |
-| `.limit(n)` | Limit results |
-| `.offset(n)` | Offset results |
-| `.getMany<T>()` | Execute and return all matching rows |
-| `.getOne<T>()` | Execute and return the first row or `null` |
-| `.count()` | Return the count of matching rows |
-
-### `db.repository<T>(tableName, primaryKey?): Repository<T>`
-
-Create a Repository for entity-based CRUD operations.
-
-```typescript
-const repo = client.db.repository<User>("users", "id");
-
-// Find all
-const users = await repo.find({ name: "Alice" });
-
-// Find one
-const user = await repo.findOne({ id: 1 });
-
-// Save (insert or update based on primary key)
-await repo.save({ name: "Alice", email: "alice@example.com" });
-
-// Remove
-await repo.remove({ id: 1 });
-
-// Use query builder
-const qb = repo.createQueryBuilder();
-```
-
----
-
-## pubsub
-
-Real-time messaging over WebSockets.
-
-### `pubsub.publish(topic, data): Promise<void>`
-
-Publish a message to a topic via HTTP. Data can be a `string` or `Uint8Array`.
-
-```typescript
-await client.pubsub.publish("chat:room1", JSON.stringify({ text: "Hello!" }));
-```
-
-### `pubsub.topics(): Promise<string[]>`
-
-List active topics in the current namespace.
-
-```typescript
-const topicList = await client.pubsub.topics();
-```
-
-### `pubsub.getPresence(topic): Promise<PresenceResponse>`
-
-Get current presence members for a topic without subscribing.
-
-```typescript
-const presence = await client.pubsub.getPresence("chat:room1");
-// Returns: { members: PresenceMember[] }
-```
-
-### `pubsub.subscribe(topic, options?): Promise<Subscription>`
-
-Subscribe to a topic via WebSocket. Creates one WebSocket connection per topic.
-
-```typescript
-const sub = await client.pubsub.subscribe("chat:room1", {
+const subscription = await client.pubsub.subscribe("room:general", {
   onMessage: (msg) => {
-    console.log(msg.topic, msg.data, msg.timestamp);
+    msg.data;       // payload decoded as UTF-8
+    msg.bytes;      // payload exactly as published
+    msg.timestamp;  // server-assigned
   },
-  onError: (err) => console.error(err),
-  onClose: (code, reason) => console.log("Closed:", code, reason),
-  presence: {
-    enabled: true,
-    memberId: "user-123",
-    meta: { name: "Alice" },
-    onJoin: (member) => console.log("Joined:", member.memberId),
-    onLeave: (member) => console.log("Left:", member.memberId),
-  },
+  onError: (error) => report(error),
+  onClose: () => teardown(),
 });
-
-// Later:
-sub.close();
+subscription.close();
 ```
 
-**Subscription methods:**
-
-| Method | Description |
-|--------|-------------|
-| `.onMessage(handler)` | Register a message handler (returns unsubscribe function) |
-| `.onError(handler)` | Register an error handler |
-| `.onClose(handler)` | Register a close handler |
-| `.getPresence()` | Get current presence members (requires `presence.enabled`) |
-| `.hasPresence()` | Check if presence is enabled |
-| `.isConnected()` | Check if the WebSocket is still connected |
-| `.close()` | Close the subscription and WebSocket |
-
----
-
-## network
-
-Network health and connectivity.
-
-### `network.health(): Promise<boolean>`
-
-Check if the gateway is healthy. Returns `true` or `false`.
-
-### `network.status(): Promise<NetworkStatus>`
-
-Get network status information.
-
-```typescript
-const status = await client.network.status();
-// Returns: { node_id, connected, peer_count, database_size, uptime }
-```
-
-### `network.peers(): Promise<PeerInfo[]>`
-
-Get connected peers.
-
-```typescript
-const peers = await client.network.peers();
-// Each peer: { id, addresses, lastSeen? }
-```
-
-### `network.connect(peerAddr): Promise<void>`
-
-Connect to a peer by address.
-
-### `network.disconnect(peerId): Promise<void>`
-
-Disconnect from a peer by ID.
-
-### `network.proxyAnon(request): Promise<ProxyResponse>`
-
-Proxy an HTTP request through the Anyone privacy relay network. Requires authentication.
-
-```typescript
-const response = await client.network.proxyAnon({
-  url: "https://api.example.com/data",
-  method: "GET",
-  headers: { "Accept": "application/json" },
-  body: undefined, // optional string body for POST/PUT
-});
-
-console.log(response.status_code);
-console.log(response.headers);
-console.log(response.body);
-```
-
----
-
-## cache
-
-Distributed caching powered by Olric. All operations require a `dmap` (distributed map) name and a key.
-
-### `cache.health(): Promise<CacheHealthResponse>`
-
-Check cache service health.
-
-### `cache.get(dmap, key): Promise<CacheGetResponse | null>`
-
-Get a value from cache. Returns `null` on cache miss (key not found or expired).
-
-```typescript
-const result = await client.cache.get("my-map", "user:123");
-// Returns: { key, value, dmap } or null
-```
-
-### `cache.put(dmap, key, value, ttl?): Promise<CachePutResponse>`
-
-Put a value into cache with an optional TTL.
-
-```typescript
-await client.cache.put("my-map", "user:123", { name: "Alice" }, "1h");
-// TTL format: "30s", "5m", "1h", "24h"
-```
-
-### `cache.delete(dmap, key): Promise<CacheDeleteResponse>`
-
-Delete a value from cache.
-
-### `cache.multiGet(dmap, keys): Promise<Map<string, any | null>>`
-
-Get multiple values in a single request. Returns a Map where missing keys have `null` values.
-
-```typescript
-const values = await client.cache.multiGet("my-map", ["key1", "key2", "key3"]);
-// values.get("key1") => value or null
-```
-
-### `cache.scan(dmap, match?): Promise<CacheScanResponse>`
-
-Scan keys in a distributed map, optionally matching a regex pattern.
-
-```typescript
-const result = await client.cache.scan("my-map", "user:.*");
-// Returns: { keys: string[], count: number, dmap: string }
-```
-
----
-
-## storage
-
-Decentralized file storage on IPFS.
-
-### `storage.upload(file, name?, options?): Promise<StorageUploadResponse>`
-
-Upload content to IPFS. Files are automatically pinned by default.
-
-```typescript
-// Browser
-const result = await client.storage.upload(fileInput.files[0], "photo.jpg");
-
-// Node.js
-import { readFileSync } from "fs";
-const buffer = readFileSync("image.jpg");
-const result = await client.storage.upload(buffer, "image.jpg", { pin: true });
-// Returns: { cid, name, size }
-```
-
-Supported input types: `File`, `Blob`, `ArrayBuffer`, `Uint8Array`, `ReadableStream<Uint8Array>`.
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `pin` | `boolean` | `true` | Whether to pin the content on IPFS |
-
-### `storage.pin(cid, name?): Promise<StoragePinResponse>`
-
-Pin an existing CID.
-
-```typescript
-await client.storage.pin("QmHash...", "my-file");
-```
-
-### `storage.status(cid): Promise<StorageStatus>`
-
-Get the pin status for a CID.
-
-```typescript
-const status = await client.storage.status("QmHash...");
-// Returns: { cid, name, status, replication_min, replication_max, replication_factor, peers, error? }
-// status values: "pinned", "pinning", "queued", "unpinned", "error"
-```
-
-### `storage.get(cid): Promise<ReadableStream<Uint8Array>>`
-
-Retrieve content from IPFS as a readable stream. Includes automatic retry with exponential backoff for content that is still propagating.
-
-```typescript
-const stream = await client.storage.get("QmHash...");
-const reader = stream.getReader();
-while (true) {
-  const { done, value } = await reader.read();
-  if (done) break;
-  // process chunk
-}
-```
-
-### `storage.getBinary(cid): Promise<Response>`
-
-Retrieve content and return the full `Response` object (useful for headers like `content-length`).
-
-```typescript
-const response = await client.storage.getBinary("QmHash...");
-const contentLength = response.headers.get("content-length");
-```
-
-### `storage.unpin(cid): Promise<void>`
-
-Unpin a CID from IPFS.
-
----
-
-## functions
-
-Serverless WASM function invocation.
-
-### Constructor Config
-
-The functions client requires a `functionsConfig` with a `namespace`:
-
-```typescript
-const client = createClient({
-  baseURL: "https://orama-devnet.network",
-  apiKey: "your-api-key",
-  functionsConfig: {
-    namespace: "my-namespace",
-    gatewayURL: undefined, // optional override, defaults to baseURL
-  },
+`data` is lossy for a payload that is not text; read `bytes` for anything binary. A dropped connection is re-established with exponential backoff (ten attempts by default) and the subscription resumes; `onClose` fires only when it is finished for good. Presence is opt-in:
+
+```ts
+await client.pubsub.subscribe("room:general", {
+  presence: { enabled: true, memberId: userId, onJoin: show, onLeave: hide },
 });
 ```
 
-### `functions.invoke<TInput, TOutput>(functionName, input): Promise<TOutput>`
+`onLeave` fires for a close, a dropped connection, or a client that stops answering the gateway's pings (dropped after 75 seconds of silence). Methods: `publish`, `topics`, `getPresence`, `subscribe`; a subscription has `onMessage`, `onError`, `onClose`, `getPresence`, `hasPresence`, `isConnected`, `close`. See [Pub/sub](/docs/developer/pubsub).
 
-Invoke a serverless function by name.
+## Cache
+
+```ts
+await client.cache.put("sessions", userId, { seen: Date.now() }, "1h");
+const hit = await client.cache.get("sessions", userId);    // null on a miss
+await client.cache.delete("sessions", userId);
+```
+
+Methods: `health`, `get`, `put`, `delete`, `multiGet`, `scan`. Limits and TTLs are on [Cache](/docs/developer/cache).
+
+## Storage
+
+```ts
+const { cid } = await client.storage.upload(file, file.name);
+const status = await client.storage.status(cid);
+const stream = await client.storage.get(cid);              // ReadableStream
+const response = await client.storage.getBinary(cid);      // Response, with headers
+await client.storage.unpin(cid);
+```
+
+A read that closely follows a write can legitimately 404 while the pin propagates, so reads retry a 404 for about eighteen seconds, but only while the gateway marks it retryable (a CID uploaded or pinned in the last two minutes). Methods: `upload`, `pin`, `status`, `get`, `getBinary`, `unpin`, `mintFetchCaps`, `revokeFetchCap`, `directTransport`, `fetchWith`. Error codes: [Storage](/docs/developer/storage). Downloading without the storage node learning your address: [Relayed fetch](#relayed-fetch) below and [the privacy page](/docs/privacy/relayed-fetch).
+
+## Functions
+
+```ts
+const client = createClient({ baseURL, apiKey, functionsConfig: { namespace: "myapp" } });
+const result = await client.functions.invoke("resize", { cid, width: 400 });
+```
+
+`functionsConfig.gatewayURL` sends invocations to a different origin with the same credentials. Writing and deploying functions: [Functions](/docs/developer/functions).
+
+## Relayed fetch
+
+A relayed fetch downloads a CID without the storage node learning the caller's
+address. The owner mints capabilities; the downloader presents one through a
+relay. The model and its limits are on [Relayed fetch](/docs/privacy/relayed-fetch);
+this section is the SDK's side of it.
 
 ```typescript
-const result = await client.functions.invoke("hello-world", {
-  name: "Alice",
+// Owner (device-bound session): mint one token per fetch, 3600..604800 s lifetime.
+const { caps } = await client.storage.mintFetchCaps(cid, { count: 3, ttlSeconds: 86400 });
+// Each capability carries `revokeKey`, the proof that you issued its id; keep it with the owner.
+await client.storage.revokeFetchCap(caps[0].id, caps[0].revokeKey);
+
+// Downloader, Node.js only:
+import { RelayedFetch } from "@debros/orama/relay";
+
+const transport = new RelayedFetch({
+  relays: ["https://node-1.relays.example", "https://node-2.relays.example"],
+  namespaceHost: "ns-myapp.cluster.example.com", // a plain hostname (letters, digits, hyphens); anything else throws
+  jitterMs: 2000,        // optional: random 0..2 s before the request is sent
+  circuit: "fresh",      // "session" reuses one Tor circuit across a batch
 });
+const bytes = await client.storage.fetchWith(transport, cid, caps[1], { signal });
+
+// The non-private baseline: the client's own credential, no relay.
+const direct = await client.storage.fetchWith(client.storage.directTransport(), cid, caps[2]);
 ```
 
-Functions are managed through the CLI (see [Functions](/docs/developer/functions) for the full workflow including `orama function init`, `build`, `deploy`, and `invoke`).
+For each fetch the SDK picks one relay uniformly at random (never the namespace
+host), opens `GET /v1/proxy/relay` on it with no credential, runs TLS to the
+namespace host inside that WebSocket's byte stream, and sends
+`GET /v1/storage/relayed/<cid>` with `X-Orama-Fetch-Cap`. The relay carries
+ciphertext.
 
----
+What it hides, and what it does not:
 
-## vault
+| Party | Sees | Does not see |
+|---|---|---|
+| Relay | your IP address; the namespace host; the size and timing of the stream | the CID, the capability, the content |
+| Storage node | the CID and the capability; a Tor exit address | your IP address |
+| Anyone watching both ends | timing and size can correlate a fetch (`jitterMs` blunts this, it does not remove it) | |
 
-Encrypted secret storage distributed across guardian nodes using Shamir secret sharing. Only available when `vaultConfig` is provided to `createClient()`.
+A relay run by the same operator as the storage node, or in the same cluster, is
+not a privacy boundary: together they hold both halves. Choose relays from a
+different operator than the namespace.
 
-### VaultConfig
+- **Node.js only.** `RelayedFetch` needs `node:tls` and `ws`, so it lives in the
+  `@debros/orama/relay` entry and the core import stays bundleable for React
+  Native and browsers. Those apps need a native helper that runs TLS to the
+  namespace host over the relay stream.
+- **No direct fallback.** A relay or tunnel failure throws and is never retried
+  as a direct request, which would send your address to the storage node.
+  Falling back is the application's decision, made by calling `fetchWith` with
+  another transport.
+- **A response must say how long it is.** A `200` with neither `Content-Length`
+  nor chunked encoding is refused (`RELAY_PROTOCOL_ERROR`): a body that ends when
+  the connection does cannot be told from one a reset cut short.
+- **Pin propagation.** `fetchWith` re-asks on a retryable 404 exactly as `get`
+  does, through the same transport, choosing a relay afresh each time.
+- A fetch buffers the body (default limit 64 MiB, the relay's per-stream cap;
+  deadline 5 minutes: `maxBodyBytes`, `timeoutMs`). Pass `ca` to trust a private
+  CA for the namespace host.
 
-```typescript
-interface VaultConfig {
-  guardians: GuardianEndpoint[]; // { address: string, port: number }
-  hmacKey: Uint8Array;           // HMAC key for authentication
-  identityHex: string;           // Identity hash (hex string, 64 chars)
-  timeoutMs?: number;            // Request timeout, default: 10000ms
-}
-```
+Errors:
 
-### `vault.store(name, data, version): Promise<StoreResult>`
+| Error | `code` | Meaning |
+|---|---|---|
+| `FetchCapError` | `FETCH_CAP_INVALID` (403) | Forged, expired, for another CID or namespace |
+| `FetchCapError` | `FETCH_CAP_REVOKED` (403) | The owner revoked it |
+| `FetchCapError` | `FETCH_CAP_MISSING` (401) | No capability header reached the storage node |
+| `ScopeError` | `FETCH_CAP_REVOKE_KEY_INVALID` (403) | `revokeFetchCap` was given a `revokeKey` that was not issued for that id (no key at all throws `VALIDATION_FAILED` before the call) |
+| `RelayError` | `RELAY_DESTINATION_NOT_ALLOWED` (400) | The relay does not serve this namespace host |
+| `RelayError` | `RATE_LIMITED` (429) | Relay limit; `retryAfterSeconds` says when |
+| `RelayError` | `RELAY_UNAVAILABLE` (503) | The relay cannot carry a stream now |
+| `RelayError` | `RELAY_CONNECT_FAILED` | Relay unreachable, TLS to the namespace host failed, or the stream closed early |
+| `RelayError` | `RELAY_PROTOCOL_ERROR`, `RELAY_RESPONSE_TOO_LARGE`, `RELAY_NONE_CONFIGURED`, `RELAY_UNSUPPORTED_RUNTIME` | Malformed answer; body over `maxBodyBytes`; no usable relay; not Node |
 
-Store a secret across guardian nodes using Shamir splitting.
+## Network
 
-```typescript
-const result = await client.vault.store(
-  "API_KEY",
-  new TextEncoder().encode("sk-secret-value"),
-  1 // monotonic version number, must be > previous
-);
-// Returns: { ackCount, totalContacted, failCount, quorumMet, guardianResults }
-```
+`client.network` has `health`, `status`, `peers`, `connect`, `disconnect` and `proxyAnon` (the Tor anonymity proxy; see [Tor](/docs/privacy/tor)).
 
-### `vault.retrieve(name): Promise<RetrieveResult>`
+## Cancelling work
 
-Retrieve and reconstruct a secret from guardian nodes.
+Every request method takes an `AbortSignal`. A cancelled request rejects with a `NetworkError` whose `code` is `ABORTED`, is never retried and is not reported through `onNetworkError`.
 
-```typescript
-const result = await client.vault.retrieve("API_KEY");
-const secret = new TextDecoder().decode(result.data);
-// Returns: { data: Uint8Array, sharesCollected: number }
-```
+## Errors
 
-### `vault.list(): Promise<ListResult>`
+Every failure is an `SDKError`.
 
-List all secrets for the current identity.
+| Class | When | Extra |
+|---|---|---|
+| `AuthError` | 401: credential missing, expired, or not enough alone | `requiredScope` |
+| `RevokedCredentialError` | 401 `AUTH_REVOKED`: sign in again, do not retry | |
+| `ScopeError` | 403: the credential's grants do not cover the operation | `requiredScope` |
+| `NamespaceError` | 403 `NAMESPACE_MISMATCH`: wrong gateway, or the key came from the wrong environment | `namespace`, `credentialNamespace` |
+| `NotFoundError` | 404 | |
+| `NetworkError` | No HTTP response. `httpStatus` is 0 | `code` is `NETWORK_ERROR`, `TIMEOUT` or `ABORTED` |
 
-```typescript
-const result = await client.vault.list();
-// Returns: { secrets: [{ name, version, size }] }
-```
+`error.code` is the gateway's own (full list in [Sign-in and sessions](/docs/developer/sign-in#error-codes)). `error.retryable` is `true` or `false` when the gateway says, otherwise `undefined`. `Scope` and `Role` are exported types, so a grant name that does not exist is a compile error.
 
-### `vault.delete(name): Promise<DeleteResult>`
-
-Delete a secret from all guardian nodes.
-
-```typescript
-const result = await client.vault.delete("API_KEY");
-// Returns: { ackCount, totalContacted, quorumMet }
-```
-
-### `vault.clearSessions(): void`
-
-Clear all cached authentication sessions with guardians.
-
----
-
-## Exports
-
-The SDK exports the following classes, utilities, and types:
-
-```typescript
-import {
-  // Core
-  createClient,
-  HttpClient,
-  WSClient,
-  SDKError,
-
-  // Auth
-  AuthClient,
-  MemoryStorage,
-  LocalStorageAdapter,
-
-  // Database
-  DBClient,
-  QueryBuilder,
-  Repository,
-
-  // PubSub
-  PubSubClient,
-  Subscription,
-
-  // Network
-  NetworkClient,
-
-  // Cache
-  CacheClient,
-
-  // Storage
-  StorageClient,
-
-  // Functions
-  FunctionsClient,
-
-  // Vault
-  VaultClient,
-  VaultAuthClient,
-  GuardianClient,
-  GuardianError,
-
-  // Vault crypto utilities
-  encrypt,
-  decrypt,
-  encryptString,
-  decryptString,
-  serializeEncrypted,
-  deserializeEncrypted,
-  encryptAndSerialize,
-  deserializeAndDecrypt,
-  encryptedToHex,
-  encryptedFromHex,
-  encryptedToBase64,
-  encryptedFromBase64,
-  generateKey,
-  generateNonce,
-  clearKey,
-  isValidEncryptedData,
-  shamirSplit,
-  shamirCombine,
-  deriveKeyHKDF,
-  KEY_SIZE,
-  NONCE_SIZE,
-  TAG_SIZE,
-
-  // Vault transport utilities
-  fanOut,
-  fanOutIndexed,
-  withTimeout,
-  withRetry,
-  adaptiveThreshold,
-  writeQuorum,
-} from "@debros/network-ts-sdk";
-```
-
----
-
-## Error Handling
-
-The SDK throws `SDKError` for all failure scenarios:
-
-```typescript
-import { createClient, SDKError } from "@debros/network-ts-sdk";
-
+```ts
+import { NetworkError, ScopeError } from "@debros/orama";
 try {
-  await client.db.query("SELECT * FROM nonexistent");
+  await client.storage.upload(file, file.name);
 } catch (error) {
-  if (error instanceof SDKError) {
-    console.error(error.message);    // Human-readable message
-    console.error(error.httpStatus); // HTTP status code (0 for network errors)
-    console.error(error.code);       // Error code string
-    console.error(error.details);    // Additional error details (Record<string, any>)
-  }
+  if (error instanceof ScopeError) console.error(`this key needs the ${error.requiredScope} grant`);
+  else if (error instanceof NetworkError) console.error("the gateway was not reached");
+  else throw error;
 }
 ```
 
-### Global Network Error Handler
+### Grants
 
-Handle network errors globally to implement gateway failover:
+```ts
+import { SCOPES, PROFILE_SCOPES, satisfiesScope } from "@debros/orama";
+PROFILE_SCOPES["app-runtime"];          // ["invoke", "storage", "push", "webrtc", "proxy"]
+satisfiesScope(["admin"], "storage");   // true: admin is a wildcard
+```
 
-```typescript
+The grants are `admin`, `cache`, `invoke`, `proxy`, `pubsub`, `push`, `storage` and `webrtc`. They mirror the gateway's own list, and a test in the SDK fails if the two ever disagree.
+
+## Retries and failover
+
+A retryable status (408, 429, 500, 502, 503, 504) is retried up to `maxRetries` times. A `Retry-After` header is honoured, capped at thirty seconds; otherwise the delay grows with the attempt and carries up to 25% jitter. Failing over to another gateway is the application's decision, made in `onNetworkError`:
+
+```ts
 const client = createClient({
-  baseURL: "https://orama-devnet.network",
-  onNetworkError: (error, context) => {
-    console.error(`Network error on ${context.method} ${context.path}`);
-    console.error(`Attempt: ${context.attempt}, isRetry: ${context.isRetry}`);
-    // Trigger failover to a different gateway node
-  },
+  baseURL: gateways[0],
+  apiKey,
+  onNetworkError: (error, context) => { if (error.httpStatus === 0) rotateGateway(context.path); },
 });
 ```
 
-The `NetworkErrorContext` provides:
+## Secrets
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `method` | `"GET" \| "POST" \| "PUT" \| "DELETE" \| "WS"` | HTTP method |
-| `path` | `string` | Request path |
-| `isRetry` | `boolean` | Whether this was a retry attempt |
-| `attempt` | `number` | Attempt number |
+The vault client is `@debros/orama-vault`. It talks to guardian daemons on the WireGuard overlay, which an application outside the cluster cannot reach. An application reaches the vault through the gateway's `/v1/vault/push` and `/v1/vault/pull`, which do the Shamir split server side and authenticate each request with a per-request Ed25519 ownership signature. See [Vault](/docs/developer/vault).
 
----
+## A gateway with an untrusted certificate
 
-## REST API Endpoints
+A test cluster on Let's Encrypt staging presents a certificate your runtime does not trust. Supply a `fetch` that relaxes verification for that connection only:
 
-All SDK methods map to REST API endpoints on the gateway. For direct HTTP integration without the SDK:
+```ts
+import { Agent, fetch as undiciFetch } from "undici";
+const dispatcher = new Agent({ connect: { rejectUnauthorized: false } });
+const client = createClient({
+  baseURL, apiKey,
+  fetch: (input, init) => undiciFetch(input, { ...init, dispatcher }) as unknown as Promise<Response>,
+});
+```
 
-### Authentication
+The SDK never changes the process's TLS settings on your behalf: that would disable verification for every other HTTPS client in the process.
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/v1/auth/challenge` | Request a challenge nonce |
-| POST | `/v1/auth/verify` | Verify wallet signature, get JWT |
-| POST | `/v1/auth/api-key` | Issue or return API key for a wallet |
-| POST | `/v1/auth/token` | Exchange API key for JWT |
-| POST | `/v1/auth/refresh` | Refresh JWT token |
-| POST | `/v1/auth/logout` | Invalidate session |
-| GET | `/v1/auth/whoami` | Get authenticated user info |
-| POST | `/v1/auth/register` | Register a new wallet |
-| GET | `/v1/auth/jwks` | Get JSON Web Key Set |
-| POST | `/v1/auth/phantom/session` | Start Phantom (Solana) auth session |
-| GET | `/v1/auth/phantom/session/{id}` | Check Phantom session status |
-| POST | `/v1/auth/phantom/complete` | Complete Phantom auth |
+## The chain module
 
-### Database (RQLite)
+`@debros/orama/chain` reads the Orama chain, builds and signs its transactions, and describes them for an approval screen.
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/v1/rqlite/exec` | Execute write/DDL statement |
-| POST | `/v1/rqlite/query` | Execute SELECT query |
-| POST | `/v1/rqlite/find` | Find rows by criteria |
-| POST | `/v1/rqlite/find-one` | Find a single row |
-| POST | `/v1/rqlite/select` | Advanced SELECT with joins, grouping |
-| POST | `/v1/rqlite/transaction` | Execute atomic transaction |
-| POST | `/v1/rqlite/create-table` | Create a table |
-| POST | `/v1/rqlite/drop-table` | Drop a table |
-| GET | `/v1/rqlite/schema` | Get database schema |
-| GET | `/v1/rqlite/export` | Export RQLite database |
-| POST | `/v1/rqlite/import` | Import RQLite database |
+```ts
+import { LocalSigner, MSG, OramaChainClient, describeTx } from "@debros/orama/chain";
 
-### SQLite Databases
+const chain = new OramaChainClient({
+  gatewayURL: "https://cluster.example.com",   // the read-only /v1/chain/ proxy
+  restURL: "http://127.0.0.1:31003",           // a node's REST API: accounts, balances, broadcast
+});
+const signer = new LocalSigner(privateKeyHex);  // or any OramaSigner, such as RootWallet
+const msg = MSG.nodesFundHotKey.create({ operator: signer.address, nodeId: "node-1", amount: "2500000000" });
+const { signed, result } = await chain.signAndBroadcast([msg], signer, {
+  chainId: "orama-stagenet-1", gasLimit: 300_000, feeNorama: 300_000,
+});
+console.log(result.txHash, describeTx(signed.txBytes).messages[0].summary);
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/v1/db/sqlite/create` | Create a SQLite database |
-| POST | `/v1/db/sqlite/query` | Execute a SQL query |
-| GET | `/v1/db/sqlite/list` | List databases |
-| POST | `/v1/db/sqlite/backup` | Backup database to IPFS |
-| GET | `/v1/db/sqlite/backups` | List backups for a database |
+// Use earnings: withdraw them to your balance, then pay in the open by saying so.
+const tx = { chainId: "orama-stagenet-1", gasLimit: 200_000, feeNorama: 200_000 };
+await chain.withdrawEarnings(25_000_000_000n, signer, tx);                       // 25 ORAMA
+const paid = await chain.transfer({ to: recipient, amount: 5_000_000_000n, public: true }, { signer, tx });
+console.log(paid.warning);   // the sender, the recipient and the amount are visible on the chain
+```
 
-### Cache (Olric)
+- **Reads.** The gateway proxy serves `status`, `block`, `blocks`, `tx`, `validators`, `supply`, `stakingPool` and the indexer's `indexStatus`, `indexBlock`, `indexTx`, `indexAccountTxs`, `cnftAsset`, `cnftOwnerAssets`. A node's REST API adds `account`, `balances` and `broadcast`. Module state speaks gRPC only, so `moduleQuery(service, method, request, { height })` reads any query through the gateway, with typed reads for `x/nodes` (`nodesParams`, `operator`, `node`, `nodeCluster`, `nodeUnbondings`, `nodeByName`, `nameOfNode`, `nodeNames`), `x/storage` (`storageParams`, `deal`, `slot`, `storageAuthorization`, `storageChallenges`, `storageEpochMint`, `storageQueue`), `x/fees` (`feesParams`, `baseFee`, `earnings`, `feesDeposit`), `x/archive` (`archiveParams`, `archiveRange`, `lastArchivedHeight`, `retainHeight`) and `x/relay` (`relayParams`, `relayReporters`, `relay`, `relayEpochResult`). uint64 fields come back as decimal strings; a key not on chain is an `SDKError` with `httpStatus` 404. `x/houses` and the other modules are reachable through `moduleQuery`, and a read that needs a base URL the config does not have fails and names it.
+- **A wallet with only a gateway.** A wallet shows an address and sends from it through `gatewayURL` alone, with no node and no `restURL`. Balances, delegations and unbonding are wallet queries on `/v1/chain/query/`: `bankBalance`, `bankAllBalances`, `bankSpendableBalances`, `authAccount`, `authAccountInfo`, `stakingDelegation`, `stakingDelegatorDelegations`, `stakingUnbondingDelegation`, `stakingDelegatorUnbondingDelegations`, `stakingValidator`, `stakingParams`, `distributionDelegationRewards`, `distributionDelegationTotalRewards`, `contractInfo` and `isContract`. Then `simulateTx(txBytes)` returns the gas and fee (`gasWanted` is the limit the transaction declares; both gas figures are `bigint`s), `broadcastTx(txBytes)` submits and answers once the node's mempool has checked the transaction, and `tx(hash)` polls until the transaction is in a block (a `NotFoundError` until then). The listings take `{ limit, key }` (limit 1 to 100, key the previous page's `pagination.next_key`). `isContract` is `false` on the gateway's typed 404 for an address that is not a contract. A transaction the chain refuses, on either call, is a `ChainTxRefusedError` (an `SDKError` with `code` `CHAIN_TX_REJECTED`, `httpStatus` 422, and `chainCode`, `codespace`, `log` and, for a broadcast, `txHash`); the `log` is the gateway's sanitised copy of the reason. `signAndBroadcast` still uses `restURL`.
+- **Building.** `buildSignDoc` makes the `SIGN_MODE_DIRECT` body, auth info and `SignDoc` for one signer; `signTx` has an `OramaSigner` sign it and checks the signature; `verifyTx` verifies an encoded transaction the way the chain does. `MSG` is the message set: 69 messages, 59 of them Orama's own, plus bank send, staking, unjail, reward withdrawal and the two CosmWasm messages a wallet signs. The fee is always norama.
+- **Sending ORAMA: private by default, public by choice.** `chain.transfer({ to, amount }, options)` sends privately unless the request says `public: true`. Only the boolean `true` pays in the open: an absent or `false` flag is private, and any other value (`"false"`, `1`, `null`) is a `TypeError`, so a transfer cannot turn public by omission or by a mistyped string. `amount` is a positive whole number of norama (a `bigint`, a safe-integer `number` or a decimal string); a fraction or a zero is a `RangeError`. A private transfer needs a shielded wallet, which proves with the owner's shielded spending key and so never lives in this SDK: pass it as `options.shielded` (`{ build({ to, amount }) }` returns the signer-less transactions in broadcast order, and the SDK broadcasts them through `gatewayURL`). Without one the call throws `PrivateTransferUnavailableError` (`code` `PRIVATE_TRANSFER_UNAVAILABLE`) and sends nothing; it never falls back to a public payment. A public transfer needs `options.signer` and `options.tx` (`chainId`, `gasLimit`, `feeNorama`), signs a bank send, and returns `{ privacy: "public", txHash, warning }`, where `warning` is `PUBLIC_TRANSFER_WARNING`: the sender, the recipient and the amount are visible on the chain to everyone, permanently. Show it to the person who chose to pay publicly. If a later transaction of a private transfer fails after earlier ones were broadcast, the error is `PRIVATE_TRANSFER_INCOMPLETE` and names the hashes already sent. Every broadcast (`broadcast`, `broadcastTx`, `signAndBroadcast`, `transfer`) computes the transaction's hash itself (`txHashOf`) and throws `CHAIN_TX_HASH_MISMATCH` when the node or gateway answers another, and the chain's reason text is stripped of control characters before it reaches an error. RootWallet does not yet build shielded bundles, so today a wallet-driven transfer is a public one.
+- **Using earnings.** `chain.withdrawEarnings(amount, signer, tx)` builds `MsgWithdrawEarnings` for the signer: the chain moves that much of the signer's earnings to the signer's own bank balance, and there is no destination parameter. Withdrawing is visible on the chain. From the balance, send it publicly with `transfer({ ..., public: true })`, or shield it.
+- **Signers.** `OramaSigner` is `{ address, publicKey, signDirect(signDoc) }`. The builder hands the signer the serialized `SignDoc`, never a key, so a wallet can decode it and show the user what they approve. `LocalSigner` holds a key in memory, for tests and servers that own their key.
+- **Approval text.** `describeTx` and `describeMessage` summarize each message, with notes for what a signer must see (a token's powers, a deal allowance's limits and expiry, a collection's royalty, a contract call's decoded body) and a `sensitive` flag. A message type the SDK does not hold is described as unknown and sensitive.
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/v1/cache/health` | Cache service health |
-| POST | `/v1/cache/get` | Get a cached value |
-| POST | `/v1/cache/mget` | Batch get multiple values |
-| POST | `/v1/cache/put` | Put a value with optional TTL |
-| POST | `/v1/cache/delete` | Delete a cached value |
-| POST | `/v1/cache/scan` | Scan keys by regex pattern |
+**Generated code and the Go side.** `src/chain/gen` is generated from `chain/proto` by `pnpm gen:chain` (protoc and `ts-proto`, pinned). A test regenerates it and fails on a difference. `chain/client/tx/testdata/tx_vectors.json` is written by the Go builder: every case is rebuilt in TypeScript and must match the body, auth info, `SignDoc`, signature and transaction bytes. `wallet_msgs.json` lists every message the chain registers; the SDK must decode all of them.
 
-### Storage (IPFS)
+## Testing against a gateway
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/v1/storage/upload` | Upload a file (multipart) |
-| POST | `/v1/storage/pin` | Pin an existing CID |
-| GET | `/v1/storage/status/{cid}` | Get pin status |
-| GET | `/v1/storage/get/{cid}` | Download content by CID |
-| DELETE | `/v1/storage/unpin/{cid}` | Unpin a CID |
+```bash
+export GATEWAY_BASE_URL=https://ns-myapp.cluster.example.com
+export GATEWAY_API_KEY=<a test key>
+pnpm test:e2e
+```
 
-### PubSub
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| WS | `/v1/pubsub/ws?topic={topic}` | WebSocket subscription |
-| POST | `/v1/pubsub/publish` | Publish a message |
-| GET | `/v1/pubsub/topics` | List active topics |
-| GET | `/v1/pubsub/presence?topic={topic}` | Get presence for a topic |
-
-### Deployments
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/v1/deployments/static/upload` | Deploy a static site |
-| POST | `/v1/deployments/static/update` | Update a static site |
-| POST | `/v1/deployments/nextjs/upload` | Deploy a Next.js app |
-| POST | `/v1/deployments/nextjs/update` | Update a Next.js app |
-| POST | `/v1/deployments/go/upload` | Deploy a Go backend |
-| POST | `/v1/deployments/go/update` | Update a Go backend |
-| POST | `/v1/deployments/nodejs/upload` | Deploy a Node.js backend |
-| POST | `/v1/deployments/nodejs/update` | Update a Node.js backend |
-| GET | `/v1/deployments/list` | List all deployments |
-| GET | `/v1/deployments/get?name={name}` | Get deployment details |
-| DELETE | `/v1/deployments/delete?name={name}` | Delete a deployment |
-| POST | `/v1/deployments/rollback?name={name}` | Rollback a deployment |
-| GET | `/v1/deployments/versions?name={name}` | List deployment versions |
-| GET | `/v1/deployments/logs?name={name}` | Get deployment logs |
-| GET | `/v1/deployments/stats?name={name}` | Get deployment stats |
-| GET | `/v1/deployments/events?name={name}` | Get deployment events |
-
-### Custom Domains
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/v1/deployments/domains/add` | Add a custom domain |
-| POST | `/v1/deployments/domains/verify` | Verify domain ownership |
-| GET | `/v1/deployments/domains/list` | List custom domains |
-| DELETE | `/v1/deployments/domains/remove` | Remove a custom domain |
-
-### Serverless Functions
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/v1/functions` | List all functions |
-| POST | `/v1/functions` | Deploy a function |
-| GET | `/v1/functions/{name}` | Get function info |
-| DELETE | `/v1/functions/{name}` | Delete a function |
-| POST | `/v1/functions/{name}/invoke` | Invoke a function |
-| GET | `/v1/functions/{name}/versions` | List function versions |
-| GET | `/v1/functions/{name}/logs` | Get function logs |
-| POST | `/v1/invoke/{namespace}/{name}` | Direct function invocation (used by SDK) |
-| PUT | `/v1/functions/secrets` | Set a secret |
-| GET | `/v1/functions/secrets` | List secrets |
-| DELETE | `/v1/functions/secrets/{name}` | Delete a secret |
-| POST | `/v1/functions/{name}/triggers` | Add a trigger |
-| GET | `/v1/functions/{name}/triggers` | List triggers |
-| DELETE | `/v1/functions/{name}/triggers/{id}` | Remove a trigger |
-
-### Network
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/v1/health` | Gateway health check |
-| GET | `/v1/status` | Gateway status |
-| GET | `/v1/version` | Gateway version |
-| GET | `/v1/network/status` | Network status |
-| GET | `/v1/network/peers` | Connected peers |
-| POST | `/v1/network/connect` | Connect to a peer |
-| POST | `/v1/network/disconnect` | Disconnect from a peer |
-| POST | `/v1/proxy/anon` | Anonymous proxy request (via Anyone relay) |
-
-### Vault
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/v1/vault/push` | Push secret share to guardian |
-| POST | `/v1/vault/pull` | Pull secret share from guardian |
-| GET | `/v1/vault/health` | Vault guardian health |
-| GET | `/v1/vault/status` | Vault guardian status |
-
-### Namespaces
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/v1/namespace/status` | Namespace cluster provisioning status |
-| DELETE | `/v1/namespace/delete` | Delete a namespace |
-| GET | `/v1/namespace/list` | List namespaces owned by wallet |
-| POST | `/v1/namespace/webrtc/enable` | Enable WebRTC for a namespace |
-| POST | `/v1/namespace/webrtc/disable` | Disable WebRTC for a namespace |
-| GET | `/v1/namespace/webrtc/status` | Get WebRTC status for a namespace |
-
-### WebRTC
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/v1/webrtc/turn/credentials` | Get TURN server credentials |
-| POST | `/v1/webrtc/signal` | WebRTC signaling |
-| GET | `/v1/webrtc/rooms` | List WebRTC rooms |
+Without `GATEWAY_API_KEY` those tests report as skipped; the unit suite needs nothing.

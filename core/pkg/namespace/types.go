@@ -2,6 +2,8 @@ package namespace
 
 import (
 	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/constants"
 )
 
 // ClusterStatus represents the current state of a namespace cluster
@@ -80,12 +82,35 @@ const (
 	// NamespacePortRangeEnd is the end of the reserved port range for namespace services
 	NamespacePortRangeEnd = 10099
 
-	// PortsPerNamespace is the number of ports required per namespace instance on a node
+	// PortsPerNamespace is the tenant-default port block size (rqlite+olric+gateway).
+	// Must equal BlueprintTenant().PortNeedCount(). Other blueprints may use fewer.
 	// RQLite HTTP (0), RQLite Raft (1), Olric HTTP (2), Olric Memberlist (3), Gateway HTTP (4)
 	PortsPerNamespace = 5
 
-	// MaxNamespacesPerNode is the maximum number of namespace instances a single node can host
+	// MaxNamespacesPerNode is how many tenant-default (5-port) instances fit in 10000–10099.
 	MaxNamespacesPerNode = (NamespacePortRangeEnd - NamespacePortRangeStart + 1) / PortsPerNamespace // 20
+
+	// Index internals occupy 10100–10199. Do not place these in the tenant
+	// pool (10000–10099). Edge ports stay outside this block.
+	IndexRQLiteHTTPPort      = constants.RQLiteHTTPPort
+	IndexRQLiteRaftPort      = constants.RQLiteRaftPort
+	IndexOlricHTTPPort       = constants.OlricHTTPPort
+	IndexOlricMemberlistPort = constants.OlricMemberlistPort
+	IndexGatewayHTTPPort     = constants.GatewayAPIPort
+	IndexPubsubPort          = constants.PubsubAPIPort
+	IndexVaultPort           = constants.VaultHTTPPort
+	IndexIPFSAPIPort         = constants.IPFSAPIPort
+	IndexIPFSClusterAPIPort  = constants.IPFSClusterAPIPort
+	IndexNtfyPort            = constants.NtfyListenPort
+
+	// Host-stack edge / singleton ports. Not in 10100.
+	IndexWireGuardPort  = constants.WireGuardPort
+	IndexCaddyHTTPPort  = 80
+	IndexCaddyHTTPSPort = 443
+	IndexTorSOCKSPort   = constants.TorSOCKSPort
+
+	// NameserverDNSPort is CoreDNS on the nameserver blueprint. Edge; not 10100.
+	NameserverDNSPort = 53
 )
 
 // WebRTC port allocation constants
@@ -132,19 +157,24 @@ const (
 
 // NamespaceCluster represents a dedicated cluster for a namespace
 type NamespaceCluster struct {
-	ID               string        `json:"id" db:"id"`
-	NamespaceID      int           `json:"namespace_id" db:"namespace_id"`
-	NamespaceName    string        `json:"namespace_name" db:"namespace_name"`
-	Status           ClusterStatus `json:"status" db:"status"`
-	RQLiteNodeCount  int           `json:"rqlite_node_count" db:"rqlite_node_count"`
-	OlricNodeCount   int           `json:"olric_node_count" db:"olric_node_count"`
-	GatewayNodeCount int           `json:"gateway_node_count" db:"gateway_node_count"`
-	ProvisionedBy    string        `json:"provisioned_by" db:"provisioned_by"`
-	ProvisionedAt    time.Time     `json:"provisioned_at" db:"provisioned_at"`
-	ReadyAt          *time.Time    `json:"ready_at,omitempty" db:"ready_at"`
-	LastHealthCheck  *time.Time    `json:"last_health_check,omitempty" db:"last_health_check"`
-	ErrorMessage     string        `json:"error_message,omitempty" db:"error_message"`
-	RetryCount       int           `json:"retry_count" db:"retry_count"`
+	ID            string        `json:"id" db:"id"`
+	NamespaceID   int           `json:"namespace_id" db:"namespace_id"`
+	NamespaceName string        `json:"namespace_name" db:"namespace_name"`
+	Status        ClusterStatus `json:"status" db:"status"`
+	// Per-service replica counts among selected members. They can differ
+	// (10 members, RQLite on 3). Today's tenant writes 3/3/3.
+	RQLiteNodeCount  int        `json:"rqlite_node_count" db:"rqlite_node_count"`
+	OlricNodeCount   int        `json:"olric_node_count" db:"olric_node_count"`
+	GatewayNodeCount int        `json:"gateway_node_count" db:"gateway_node_count"`
+	ProvisionedBy    string     `json:"provisioned_by" db:"provisioned_by"`
+	ProvisionedAt    time.Time  `json:"provisioned_at" db:"provisioned_at"`
+	ReadyAt          *time.Time `json:"ready_at,omitempty" db:"ready_at"`
+	LastHealthCheck  *time.Time `json:"last_health_check,omitempty" db:"last_health_check"`
+	ErrorMessage     string     `json:"error_message,omitempty" db:"error_message"`
+	RetryCount       int        `json:"retry_count" db:"retry_count"`
+	// DeprovisioningAt is when a teardown last claimed the cluster (registry
+	// clock); see resumeStaleDeprovisioning.
+	DeprovisioningAt *time.Time `json:"-" db:"deprovisioning_at"`
 
 	// Populated by queries, not stored directly
 	Nodes []ClusterNode `json:"nodes,omitempty"`
@@ -224,7 +254,22 @@ type ProvisioningResponse struct {
 type ClusterError struct {
 	Message string
 	Cause   error
+	// Code names the condition for callers that cannot import this package
+	// (the gateway: it would close an import cycle through pkg/install). Empty
+	// for errors no caller tells apart.
+	Code string
 }
+
+// ErrorCode is the condition's name, read by callers through an interface.
+func (e *ClusterError) ErrorCode() string { return e.Code }
+
+// Codes of the ClusterErrors a caller outside this package tells apart.
+const (
+	CodeClusterNotFound             = "cluster_not_found"
+	CodeWebRTCNotEnabled            = "webrtc_not_enabled"
+	CodeWebRTCStealthAlreadyEnabled = "webrtc_stealth_already_enabled"
+	CodeWebRTCStealthNotEnabled     = "webrtc_stealth_not_enabled"
+)
 
 func (e *ClusterError) Error() string {
 	if e.Cause != nil {
@@ -238,19 +283,25 @@ func (e *ClusterError) Unwrap() error {
 }
 
 var (
-	ErrNoPortsAvailable            = &ClusterError{Message: "no ports available on node"}
-	ErrNodeAtCapacity              = &ClusterError{Message: "node has reached maximum namespace instances"}
-	ErrInsufficientNodes           = &ClusterError{Message: "insufficient nodes available for cluster"}
-	ErrClusterNotFound             = &ClusterError{Message: "namespace cluster not found"}
+	ErrNoPortsAvailable  = &ClusterError{Message: "no ports available on node"}
+	ErrNodeAtCapacity    = &ClusterError{Message: "node has reached maximum namespace instances"}
+	ErrInsufficientNodes = &ClusterError{Message: "insufficient nodes available for cluster"}
+	// ErrTwoNodeFleet is a 2-node fleet: not eval (1) and not HA (3). Even-sized
+	// Raft is a split-brain, and vault at N=2 has no spare share. Add a third node.
+	ErrTwoNodeFleet = &ClusterError{Message: "a 2-node fleet is not eval (1) and not HA (3); add a third node"}
+	// ErrEvalClusterNoReplacement: an N=1 eval tenant lives on one machine. There
+	// is no spare VPS to fail over onto; bounce is local restore, not replace.
+	ErrEvalClusterNoReplacement    = &ClusterError{Message: "eval cluster of size 1 cannot be replaced onto another machine; waiting for this node to return"}
+	ErrClusterNotFound             = &ClusterError{Message: "namespace cluster not found", Code: CodeClusterNotFound}
 	ErrClusterAlreadyExists        = &ClusterError{Message: "namespace cluster already exists"}
 	ErrProvisioningFailed          = &ClusterError{Message: "cluster provisioning failed"}
 	ErrNamespaceNotFound           = &ClusterError{Message: "namespace not found"}
 	ErrInvalidClusterStatus        = &ClusterError{Message: "invalid cluster status for operation"}
 	ErrRecoveryInProgress          = &ClusterError{Message: "recovery already in progress for this cluster"}
 	ErrWebRTCAlreadyEnabled        = &ClusterError{Message: "WebRTC is already enabled for this namespace"}
-	ErrWebRTCNotEnabled            = &ClusterError{Message: "WebRTC is not enabled for this namespace"}
-	ErrWebRTCStealthAlreadyEnabled = &ClusterError{Message: "WebRTC stealth is already enabled for this namespace"}
-	ErrWebRTCStealthNotEnabled     = &ClusterError{Message: "WebRTC stealth is not enabled for this namespace"}
+	ErrWebRTCNotEnabled            = &ClusterError{Message: "WebRTC is not enabled for this namespace", Code: CodeWebRTCNotEnabled}
+	ErrWebRTCStealthAlreadyEnabled = &ClusterError{Message: "WebRTC stealth is already enabled for this namespace", Code: CodeWebRTCStealthAlreadyEnabled}
+	ErrWebRTCStealthNotEnabled     = &ClusterError{Message: "WebRTC stealth is not enabled for this namespace", Code: CodeWebRTCStealthNotEnabled}
 	ErrNoWebRTCPortsAvailable      = &ClusterError{Message: "no WebRTC ports available on node"}
 )
 
@@ -308,3 +359,7 @@ type WebRTCPortBlock struct {
 
 	AllocatedAt time.Time `json:"allocated_at" db:"allocated_at"`
 }
+
+// RetiredNodeLastSeen is constants.RetiredNodeLastSeen, the last_seen a
+// retired node's dns_nodes row is given.
+const RetiredNodeLastSeen = constants.RetiredNodeLastSeen

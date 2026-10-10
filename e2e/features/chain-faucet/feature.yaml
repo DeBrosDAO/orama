@@ -1,0 +1,34 @@
+# Stage 8: the test-network faucet, `orama chain faucet`. A fresh key (an
+# account that never existed) is dripped through the CLI, which signs on a
+# validator node with its operator key (nothing secret leaves the node), and
+# its bank balance is exactly the amount, as the CLI's JSON report and the
+# node's own bank query show it. A second drip to the same recipient inside
+# the cooldown is refused with the chain's reason and pays nothing; one norama
+# over faucet_max_drip is refused, exactly the maximum is paid; arguments the
+# CLI can judge (not an orama address, zero, negative, fractional or oversized
+# amount) are usage errors before any transaction. Genesis enables the faucet
+# on every run chain (chain-deploy.sh) and on stagenet (deploy.sh,
+# FAUCET_ENABLED). The faucet signs with the validator operator key of the
+# last node; the other chain packages sign with the keys of nodes 0..2.
+id: chain-faucet
+title: Test-network faucet - orama chain faucet
+area: chain
+subtasks: []
+stage: 8
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: true
+covers:
+  cli:
+    - orama chain faucet
+  msgs:
+    - orama.emission.v1.MsgFaucet
+  queries:
+    - orama.emission.v1.Params
+  claims:
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-chain-faucet: sends test ORAMA to an account on a test network; --amount is norama; prints the transaction hash and the recipient's bank balance"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-chain-faucet: the chain refuses a drip over its maximum and a second drip to the same recipient inside its cooldown"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-chain-faucet: refuses an address that is not orama1... and an amount that is not a positive whole number of norama before it signs"
+    - "website/src/docs/contributor/deployment.mdx#stagenet-the-chain-and-the-global-services: FAUCET_ENABLED=1 (default) sets emission faucet_enabled in the stagenet genesis"

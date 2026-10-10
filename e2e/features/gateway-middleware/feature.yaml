@@ -1,0 +1,34 @@
+# The gateway's middleware chain as a client meets it from the internet and
+# from a node: forged X-Internal-Auth-* headers (every one, garbage MACs of
+# every version) grant nothing on the public name, a namespace host, the
+# cluster gateway's loopback or a namespace gateway on the overlay, and the
+# gate logs the drop; the namespace host served identically through every
+# node's own Caddy with a cross-namespace credential refused on each; CORS
+# preflights echoing only the cluster's origins with refusals readable;
+# security headers on every response class; open endpoints that name no node
+# (addresses, peer ids, multiaddrs, hostnames); the status page, its CSP and
+# assets; WebSocket Origin validation; malformed, oversized and smuggling
+# requests; bounded bodies. Floods (429s), XFF handling and the circuit
+# breaker are in gateway-middleware-chaos, which runs alone.
+id: gateway-middleware
+title: Gateway middleware at the edge
+area: network-edge
+subtasks: [2829]
+stage: 3
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  routes:
+    - /status/assets/
+    - /v1/internal/ping
+  claims:
+    - "docs/whitepaper/technical-reference/vol1/12-gateway-architecture.md#internal-routes: X-Internal-Auth-* headers without a valid MAC are deleted by the first middleware; the source address is not consulted"
+    - "docs/whitepaper/technical-reference/vol1/12-gateway-architecture.md#health-status-and-the-public-status-page: /health, /v1/health, /status, /v1/status and /v1/internal/ping show no address, peer id, hostname or error text"
+    - "docs/whitepaper/technical-reference/vol1/27-rate-limits-and-egress-controls.md#the-gateway-wide-buckets: WebSocket upgraders validate Origin; clients without Origin are allowed"
+    - "website/src/docs/contributor/architecture-reference.mdx#middleware-stack: security headers and CORS run before routing and authentication"
+    - "website/src/docs/operator/monitoring.mdx#public-status-page: /status is the page to a browser and JSON otherwise, under a CSP that allows nothing else; a subdomain's /status is its deployment's"
+    - "website/src/docs/contributor/architecture-reference.mdx#data-flow: the namespace host is proxied to the namespace's gateways from every node"
+    - "docs/whitepaper/technical-reference/vol1/14-authorization.md#consistency-and-caching: every /v1/* response is Cache-Control: no-store unless the route chooses its own (/v1/status is public, max-age=5)"

@@ -8,8 +8,10 @@ const router = @import("router.zig");
 const response = @import("response.zig");
 const posix = std.posix;
 
-const MAX_REQUEST_SIZE = 1024 * 1024; // 1 MB max request
-const READ_BUF_SIZE = 64 * 1024; // 64 KB read buffer
+const MAX_REQUEST_SIZE = 1024 * 1024; // 1 MB max request body
+const READ_BUF_SIZE = 64 * 1024; // 64 KB read buffer (legacy)
+/// Per-connection request/response buffer: max body plus header/framing headroom.
+const REQUEST_CAP = MAX_REQUEST_SIZE + 16 * 1024;
 
 /// Rate limit: max requests per IP per window
 const RATE_LIMIT_MAX = 120;
@@ -156,10 +158,15 @@ fn cleanupRateMap(rate_map: *std.StringHashMap(RateEntry), now: i64, allocator: 
 fn handleConnection(conn: std.net.Server.Connection, ctx: *const router.RouteContext) !void {
     defer conn.stream.close();
 
-    // Read the full request into a buffer
-    var buf: [READ_BUF_SIZE]u8 = undefined;
-    var total: usize = 0;
+    // Heap request/response buffers sized for the max body (1 MiB) plus header
+    // headroom. The previous 64 KiB fixed stack buffer silently truncated any
+    // request or response larger than ~64 KiB, making the 512 KiB share limit
+    // dead code and corrupting large pushes/pulls. Single-threaded server, so
+    // the per-connection allocation is freed before the next accept.
+    const buf = ctx.allocator.alloc(u8, REQUEST_CAP) catch return;
+    defer ctx.allocator.free(buf);
 
+    var total: usize = 0;
     while (total < buf.len) {
         const n = conn.stream.read(buf[total..]) catch |err| {
             if (err == error.ConnectionResetByPeer) return;
@@ -171,33 +178,28 @@ fn handleConnection(conn: std.net.Server.Connection, ctx: *const router.RouteCon
         if (std.mem.indexOf(u8, buf[0..total], "\r\n\r\n")) |headers_end| {
             const req = router.parseRequest(buf[0..total]) orelse break;
             const body_start = headers_end + 4;
-            const body_received = total - body_start;
-            if (body_received >= req.content_length) break;
+            if (total - body_start >= req.content_length) break;
         }
     }
 
     if (total == 0) return;
 
     const req = router.parseRequest(buf[0..total]) orelse {
-        var resp_stream = conn.stream;
         var write_buf: [4096]u8 = undefined;
         var fbs = std.io.fixedBufferStream(&write_buf);
-        const writer = fbs.writer();
-        try response.badRequest(writer, "malformed request");
-        const written = fbs.getWritten();
-        resp_stream.writeAll(written) catch {};
+        response.badRequest(fbs.writer(), "malformed request") catch return;
+        conn.stream.writeAll(fbs.getWritten()) catch {};
         return;
     };
 
-    var resp_buf: [READ_BUF_SIZE]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&resp_buf);
-    const writer = fbs.writer();
+    const resp_buf = ctx.allocator.alloc(u8, REQUEST_CAP) catch return;
+    defer ctx.allocator.free(resp_buf);
 
-    router.route(req, writer, ctx) catch |err| {
+    var fbs = std.io.fixedBufferStream(resp_buf);
+    router.route(req, fbs.writer(), ctx) catch |err| {
         log.warn("handler error for {s}: {}", .{ req.path, err });
-        var err_fbs = std.io.fixedBufferStream(&resp_buf);
-        const err_writer = err_fbs.writer();
-        response.internalError(err_writer) catch return;
+        var err_fbs = std.io.fixedBufferStream(resp_buf);
+        response.internalError(err_fbs.writer()) catch return;
         conn.stream.writeAll(err_fbs.getWritten()) catch {};
         return;
     };

@@ -1,9 +1,16 @@
 package ipfs
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/multiformats/go-multiaddr"
+	"go.uber.org/zap"
+
+	"github.com/DeBrosOfficial/network/pkg/config"
 )
 
 func TestExtractIPFromMultiaddr(t *testing.T) {
@@ -62,7 +69,7 @@ func TestExtractIPFromMultiaddr_Nil(t *testing.T) {
 
 // TestWireGuardIPFiltering verifies that only 10.0.0.x IPs would be selected
 // for peer discovery queries. This tests the filtering logic used in
-// DiscoverClusterPeersFromLibP2P.
+// DiscoverClusterPeers.
 func TestWireGuardIPFiltering(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -85,11 +92,147 @@ func TestWireGuardIPFiltering(t *testing.T) {
 				t.Fatalf("failed to parse multiaddr: %v", err)
 			}
 			ip := extractIPFromMultiaddr(ma)
-			// Replicate the filtering logic from DiscoverClusterPeersFromLibP2P
+			// Replicate the filtering logic from DiscoverClusterPeers
 			accepted := ip != "" && len(ip) >= 7 && ip[:7] == "10.0.0."
 			if accepted != tt.accepted {
 				t.Errorf("IP %q: accepted=%v, want %v", ip, accepted, tt.accepted)
 			}
 		})
+	}
+}
+
+// Bugboard #153 blocker.
+//
+// IPFS-Cluster runs CRDT consensus, where an untrusted peer's writes are
+// silently dropped by every peer that does not trust it. The trust set used to
+// be an allowlist assembled per node from a file: a joining node received the
+// current file from whichever node it joined through and appended itself, so it
+// trusted {bootstrap set} ∪ {self} — and nothing ever added the joiner to the
+// nodes already running. The bootstrap node therefore trusted only itself.
+//
+// The consequence was silent and severe: a pin or unpin served by any other
+// node returned HTTP 200, applied locally, and was discarded everywhere else.
+// Tenant traffic is spread across nodes by round-robin DNS, so most storage
+// writes and deletes never replicated, and privacy-grade immediate reclaim
+// could not work because the blocks it evicted were still pinned elsewhere.
+//
+// Membership is gated by the shared cluster secret, the WireGuard mesh and
+// invite-token enrolment. Every peer that clears those is a trusted writer.
+func TestEnsureConfig_trustsEveryAuthenticatedPeer(t *testing.T) {
+	dir := t.TempDir()
+	clusterPath := filepath.Join(dir, "ipfs-cluster")
+	if err := os.MkdirAll(clusterPath, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// A pre-existing allowlist naming ONE peer — the exact state that broke
+	// replication on devnet.
+	secretsDir := filepath.Join(dir, "secrets")
+	if err := os.MkdirAll(secretsDir, 0o755); err != nil {
+		t.Fatalf("mkdir secrets: %v", err)
+	}
+	trustedFile := filepath.Join(secretsDir, "ipfs-cluster-trusted-peers")
+	if err := os.WriteFile(trustedFile, []byte("12D3KooWOnlyTheBootstrapPeer\n"), 0o600); err != nil {
+		t.Fatalf("write trusted peers: %v", err)
+	}
+
+	// A pre-existing service.json so EnsureConfig edits it in place instead of
+	// shelling out to `ipfs-cluster-service init`.
+	serviceJSON := filepath.Join(clusterPath, "service.json")
+	if err := os.WriteFile(serviceJSON, []byte(`{"cluster":{},"consensus":{"crdt":{"trusted_peers":["12D3KooWOnlyTheBootstrapPeer"]}}}`), 0o600); err != nil {
+		t.Fatalf("write service.json: %v", err)
+	}
+	// identity.json so the peer ID is still recorded into the shared file.
+	if err := os.WriteFile(filepath.Join(clusterPath, "identity.json"),
+		[]byte(`{"id":"12D3KooWThisNode"}`), 0o600); err != nil {
+		t.Fatalf("write identity.json: %v", err)
+	}
+
+	cfg := &config.Config{}
+	cfg.Database.IPFS.ClusterAPIURL = "http://localhost:9094"
+	cfg.Database.IPFS.APIURL = "http://localhost:4501"
+	cfg.Node.DataDir = dir
+	cfg.Node.ID = "node-1"
+
+	cm := &ClusterConfigManager{
+		cfg:              cfg,
+		logger:           zap.NewNop(),
+		clusterPath:      clusterPath,
+		secret:           "test-secret",
+		trustedPeersPath: trustedFile,
+	}
+	if err := cm.EnsureConfig(); err != nil {
+		t.Fatalf("EnsureConfig: %v", err)
+	}
+
+	raw, err := os.ReadFile(serviceJSON)
+	if err != nil {
+		t.Fatalf("read service.json: %v", err)
+	}
+	var out struct {
+		Consensus struct {
+			CRDT struct {
+				TrustedPeers []string `json:"trusted_peers"`
+			} `json:"crdt"`
+		} `json:"consensus"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("decode service.json: %v", err)
+	}
+	got := out.Consensus.CRDT.TrustedPeers
+	if len(got) != 1 || got[0] != "*" {
+		t.Errorf("trusted_peers = %v, want [\"*\"] — a per-node allowlist cannot stay consistent across joins, and an untrusted peer's pins and unpins are silently dropped by everyone else", got)
+	}
+
+	// The shared peer-ID file is still maintained for the join handshake.
+	peersFile, err := os.ReadFile(trustedFile)
+	if err != nil {
+		t.Fatalf("read peers file: %v", err)
+	}
+	if !strings.Contains(string(peersFile), "12D3KooWThisNode") {
+		t.Errorf("this node's cluster peer ID was not recorded for the join handshake; file = %q", peersFile)
+	}
+}
+
+// The Kubo config used to be rewritten in place with os.WriteFile. A crash
+// before the data reached disk left a zero-filled config, and Kubo then
+// crash-looped on "invalid character '\x00'" (stagenet superman, 2026-09-29).
+// The config is now replaced by a synced rename: a new inode, never a partial file.
+func TestUpdateIPFSPeeringConfig_replacesTheConfigByRename(t *testing.T) {
+	dir := t.TempDir()
+	repo := filepath.Join(dir, "ipfs", "repo")
+	if err := os.MkdirAll(repo, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(repo, "config")
+	if err := os.WriteFile(configPath, []byte(`{"Peering":{"Peers":[{"ID":"12D3KooWexisting","Addrs":["/ip4/10.0.0.2/tcp/4101"]}]}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{}
+	cfg.Node.DataDir = dir
+	cm := &ClusterConfigManager{cfg: cfg, logger: zap.NewNop()}
+	if err := cm.UpdateIPFSPeeringConfig(nil); err != nil {
+		t.Fatalf("UpdateIPFSPeeringConfig: %v", err)
+	}
+	after, err := os.Stat(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.SameFile(before, after) {
+		t.Fatal("the IPFS config was rewritten in place; a crash could leave it zero-filled")
+	}
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("config is not JSON after the write: %v", err)
+	}
+	if after.Mode().Perm() != 0o600 {
+		t.Fatalf("config mode %o", after.Mode().Perm())
 	}
 }

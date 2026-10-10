@@ -1,11 +1,10 @@
 import { HttpClient } from "../core/http";
+import { SDKError } from "../errors";
 import { QueryBuilder } from "./qb";
 import { Repository } from "./repository";
 import {
   QueryResponse,
   TransactionOp,
-  TransactionRequest,
-  Entity,
   FindOptions,
 } from "./types";
 
@@ -58,15 +57,27 @@ export class DBClient {
 
   /**
    * Find a single row with map-based criteria.
+   *
+   * A row that is not there is `null`, not an exception. The return type has
+   * always said `T | null` while a 404 from the gateway propagated as an error,
+   * so the two ways of reading one row disagreed: this threw and
+   * `Repository.findOne` returned null.
    */
   async findOne<T = any>(
     table: string,
     criteria: Record<string, any>
   ): Promise<T | null> {
-    return this.httpClient.post<T | null>("/v1/rqlite/find-one", {
-      table,
-      criteria,
-    });
+    try {
+      return await this.httpClient.post<T | null>("/v1/rqlite/find-one", {
+        table,
+        criteria,
+      });
+    } catch (error) {
+      if (error instanceof SDKError && error.httpStatus === 404) {
+        return null;
+      }
+      throw error;
+    }
   }
 
   /**

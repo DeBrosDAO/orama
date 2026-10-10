@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 )
@@ -77,7 +78,10 @@ func TestClaimsFromInternalAuthHeaders_roundTrip(t *testing.T) {
 	h := http.Header{}
 	setInternalAuthJWTHeaders(h, original)
 
-	got := claimsFromInternalAuthHeaders(h, "anchat-test")
+	got, err := claimsFromInternalAuthHeaders(h, "anchat-test", time.Now())
+	if err != nil {
+		t.Fatalf("claimsFromInternalAuthHeaders: %v", err)
+	}
 	if got == nil {
 		t.Fatal("recovered claims is nil")
 	}
@@ -97,7 +101,7 @@ func TestClaimsFromInternalAuthHeaders_roundTrip(t *testing.T) {
 // gateway leaves ctxKeyJWT unset.
 func TestClaimsFromInternalAuthHeaders_noSubReturnsNil(t *testing.T) {
 	h := http.Header{}
-	if got := claimsFromInternalAuthHeaders(h, "ns"); got != nil {
+	if got, err := claimsFromInternalAuthHeaders(h, "ns", time.Now()); got != nil || err != nil {
 		t.Errorf("expected nil claims when no Sub header present, got %#v", got)
 	}
 }
@@ -109,7 +113,10 @@ func TestClaimsFromInternalAuthHeaders_invalidCustomIgnored(t *testing.T) {
 	h.Set(HeaderInternalAuthJWTSub, "0xabc")
 	h.Set(HeaderInternalAuthJWTCustom, "not-valid-base64!!!")
 
-	got := claimsFromInternalAuthHeaders(h, "ns")
+	got, err := claimsFromInternalAuthHeaders(h, "ns", time.Now())
+	if err != nil {
+		t.Fatalf("claimsFromInternalAuthHeaders: %v", err)
+	}
 	if got == nil {
 		t.Fatal("recovered claims is nil despite valid Sub header")
 	}

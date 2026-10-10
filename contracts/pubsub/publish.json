@@ -1,0 +1,22 @@
+{
+  "route": "/v1/pubsub/publish",
+  "method": "POST",
+  "sdk": "pubsub.publish()",
+  "goStruct": "pubsub.PublishRequest",
+  "call": {
+    "module": "pubsub",
+    "method": "publish",
+    "args": [
+      "room:general",
+      "hello"
+    ]
+  },
+  "request": {
+    "topic": "room:general",
+    "data_base64": "aGVsbG8="
+  },
+  "response": {
+    "status": "ok"
+  },
+  "returns": null
+}

@@ -1,0 +1,29 @@
+direction: down
+
+off: "Offline machine (air-gapped, tor + tor-gencert)" {
+  cer: "orama global tor ceremony\n--authority NICK=IPv4 (3 or more)\npassphrase file 0600, 16+ chars"
+  k1: "per authority: tor --list-fingerprint\n-> relay RSA + ed25519 identity;\ncross-check SHA-1 of secret_id_key"
+  k2: "tor-gencert --create-identity-key -m 12\n-> identity key (must be ENCRYPTED),\nsigning key, certificate"
+  cer -> k1 -> k2
+}
+out: "Output directory (must be new or empty)" {
+  idk: "offline/NICK/authority_identity_key\n-> encrypted media, two places" {shape: cylinder}
+  dep: "deploy/NICK/keys/ (signing key, cert, relay identity)" {shape: cylinder}
+  net: "tor-network.json (public)" {shape: page}
+  tr: "TRANSCRIPT.txt (read aloud, signed)" {shape: page}
+}
+off.k2 -> out.idk
+off.k2 -> out.dep
+off.k2 -> out.net
+off.k2 -> out.tr
+
+host: "orama global install --services dirauth (on the authority host)" {
+  p1: "planGlobalTor: parse network file\nbefore any change"
+  p2: "authority at --tor-address? ports 31020/31021?"
+  p3: "bundle checks: RSA key hashes to published fingerprint;\ned25519 public = ed25519_id; cert v3 identity matches;\ncert not expired"
+  p4: "identity keys already installed with other bytes? refuse"
+  p5: "write network file, DataDirectory 0700 (role account),\ntorrc 0644 (root, beside DataDirectory), keys 0600"
+  p1 -> p2 -> p3 -> p4 -> p5
+}
+out.dep -> host.p1: "--tor-authority-keys"
+out.net -> host.p1: "--staged-dir"

@@ -1,0 +1,87 @@
+# Cluster administration
+
+The wallets on a cluster's **operator list** can change cluster-wide settings, manage who creates namespaces, rotate keys and see the whole cluster's health. This page covers those commands. Day-to-day node commands are in [Node management](/docs/operator/node-management).
+
+Operator commands need two things: the admin grant and a wallet on the operator list. A namespace's own admin key is not enough. Every change is written to the audit trail.
+
+## Operators
+
+The wallet that installed the cluster is its first operator. Add others:
+
+```bash
+orama maint operator list
+orama maint operator add 0xAnotherWallet
+orama maint operator remove 0xAnotherWallet
+```
+
+`orama status`, `orama status` and the other cluster-level views read the gateway's operator telemetry API, so they need a sign-in as an operator wallet. When no gateway answers, `orama status --ssh` and `orama status --ssh --env <env>` read the nodes directly over SSH. `orama status` always needs `--env`.
+
+## Who may create namespaces
+
+A new cluster allows only its operators to create a namespace. A cluster that already had a namespace besides the seeded default, a node, or an operator when it was upgraded to this behaviour stays open (any signed-in wallet) until an operator changes it.
+
+```bash
+orama maint cluster settings show
+orama maint cluster settings set namespace-creation operators      # only wallets on the operator list
+orama maint cluster settings set namespace-creation allowlist      # only wallets added below
+orama maint cluster settings set namespace-creation open           # any signed-in wallet
+orama maint cluster creators add 0xWallet
+orama maint cluster creators list
+orama maint cluster creators remove 0xWallet
+orama maint cluster settings set max-namespaces-per-wallet 25      # 1 to 10000, default 10
+```
+
+The cap binds every way a wallet comes to own a namespace. A transfer to a wallet already at the cap is refused `403 TRANSFER_REFUSED` (a generic answer that does not name the wallet or the limit; the audit trail does) and the owner keeps the namespace; if the cap cannot be read, the transfer answers a retryable 503. A transfer does not check who may create namespaces: the cap is the only limit the recipient is held to.
+
+An operator is not on the allowlist unless added. An empty list lets nobody create a namespace, and removing the last wallet does not lock operators out. Creating a namespace on this cluster also requires an EVM wallet (a `0x` address).
+
+## Update policy
+
+The same `orama maint cluster settings` command holds the cluster's automatic-update policy: `release-repo`, `update-channel`, `update-window` and `auto-update` (`off`, `notify` or `auto`). The default is `notify`, and nothing updates until `release-repo` is set. [Upgrades](/docs/operator/upgrades#automatic-updates) explains what each node does with them.
+
+## Removing a namespace its owner cannot delete
+
+The owner deletes with `orama namespace delete`. If the owner's wallet is lost, or it belonged to a test run's throwaway wallet, the namespace keeps its port blocks and processes on three nodes until an operator removes it:
+
+```bash
+orama cluster namespace remove myapp --reason "owner wallet lost"
+```
+
+`--reason` is required and is written to the audit trail with your wallet (`namespace.operator_remove`). You must type the namespace name unless you pass `--force`. It removes the namespace's cluster on every node, its deployments, its stored content (unless another namespace holds the same), its keys and its grants.
+
+## Key rotation
+
+```bash
+orama maint operator rotate-signing-key
+orama maint operator rotate-secrets            # re-encrypt stored secrets onto the current envelope
+orama maint operator rotate-secrets --rotate   # also generate a new encryption root
+```
+
+**Signing key.** Every gateway signs tokens with its own Ed25519 key and publishes the public half. Rotation generates a new key and starts signing with it. Nobody is signed out: the outgoing key keeps verifying tokens it already signed until they expire, so both are accepted for one access-token lifetime (15 minutes).
+
+**Secrets.** Function secrets, push tokens, TURN secrets, deployment environments and agent tokens are stored encrypted (AES-256-GCM) under a versioned key hierarchy. Without `--rotate` the root does not change: leftover plaintext and the legacy format are rewritten onto the versioned envelope (`enc:v1:<id>:`), so a captured snapshot of the old format is no longer the live one. A deployment's environment is written as `enc:v2:<id>:`, sealed to its namespace and deployment id, so a ciphertext copied onto another deployment's row does not open there. With `--rotate` a new root is generated and existing ciphertext is re-encrypted under it; a disk holding only the previous root cannot open the new rows. IPFS Cluster and the mesh bearer are not touched. Do not run it until every gateway is on a binary that can read `enc:v2:`. It is also what turns on bound writes on a cluster upgraded from an earlier release: until it has run, such a cluster keeps writing deployment environments in the form an older gateway can read. A cluster created on this release has bound writes from its first row; a node of an existing cluster that has no root file yet starts at the older level. It is idempotent: if interrupted, run it again.
+
+## A public row on the chain
+
+```bash
+orama cluster register-onchain ...    # an optional public row: operator, cluster id, base domain, endpoints
+orama cluster retire-onchain ...
+```
+
+The row names no node, tenant or secret, and joins no node to anything. See [Nodes, roles and bonds](/docs/blockchain/nodes) and the [flags](/docs/developer/cli/cluster).
+
+## Gateway settings
+
+Gateway behaviour that is a cluster operator's choice lives in the node's `node.yaml` (`/opt/orama/.orama/configs/node.yaml`), under `http_gateway`. The ones that matter:
+
+| Key | Meaning |
+|---|---|
+| `base_domain` | The cluster's base domain. The gateway refuses to start without one |
+| `relay_allowed_suffixes` | Hosts the anonymous relay may reach (a host equal to or under one of them on whole labels, port 443). Empty means this cluster's base domain. Listing another cluster's base domain makes this node a relay for that cluster's fetches. Each entry is a lowercase domain of at least two labels and must not be a public suffix (`co.uk`, `github.io`), or the gateway refuses to start. A list **replaces** the default, so keep your own base domain in it if the node should still relay for it. Only the index gateway serves the relay. A change takes effect on `orama node restart`. See [Relayed fetch](/docs/privacy/relayed-fetch) |
+| `ntfy_base_url` | The shared push server, derived as `https://push.<base>` |
+
+Other node-level switches: `sni_router.enabled` (stealth TURN, see [Stealth TURN](/docs/privacy/stealth-turn)) and `tls.acme_ca` (see [TLS and certificates](/docs/operator/tls-certificates)). Change them in the source of truth for the node and roll the change out; do not hand-edit a server and forget it. 
+
+## Per-namespace policy
+
+Namespace owners and admins, not cluster operators, set a namespace's sign-in policy and who may join it. See [Sign-in and sessions](/docs/developer/sign-in#sign-in-policy) and [Access control](/docs/developer/access-control).

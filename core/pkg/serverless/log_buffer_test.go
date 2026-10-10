@@ -59,7 +59,8 @@ func TestWithLogBuffer_nilIsNoop(t *testing.T) {
 // TestLogBufferFromCtx_nilCtxIsSafe — defensive guard. ctx-key lookup
 // on a nil ctx panics if not handled.
 func TestLogBufferFromCtx_nilCtxIsSafe(t *testing.T) {
-	if got := LogBufferFromCtx(nil); got != nil {
+	var noCtx context.Context
+	if got := LogBufferFromCtx(noCtx); got != nil {
 		t.Errorf("LogBufferFromCtx(nil) = %p; want nil", got)
 	}
 }

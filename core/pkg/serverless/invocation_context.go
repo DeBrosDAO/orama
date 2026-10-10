@@ -100,3 +100,32 @@ func AddPublishCount(ctx context.Context, n int) int64 {
 	}
 	return -1
 }
+
+// webrtcCounterKey is the unexported context-value key for the per-invocation
+// webrtc_* call counter.
+type webrtcCounterKey struct{}
+
+// webrtcCounter tracks how many webrtc_admit, webrtc_kick and webrtc_mute calls
+// a single invocation has made.
+type webrtcCounter struct{ n atomic.Int64 }
+
+// WithWebRTCCounter returns a derived ctx carrying a FRESH per-invocation
+// counter of webrtc_* host calls, for the same reason as WithPublishCounter:
+// the rate limiter gates invocation frequency, not host-call volume, and each
+// call writes the namespace's database and makes an HTTP call to every SFU.
+func WithWebRTCCounter(ctx context.Context) context.Context {
+	return context.WithValue(ctx, webrtcCounterKey{}, &webrtcCounter{})
+}
+
+// AddWebRTCCount adds one to the invocation's webrtc_* call counter and returns
+// the new running total. Returns -1 when the ctx carries no counter (an
+// untracked path) so callers can skip enforcement rather than reject.
+func AddWebRTCCount(ctx context.Context) int64 {
+	if ctx == nil {
+		return -1
+	}
+	if wc, ok := ctx.Value(webrtcCounterKey{}).(*webrtcCounter); ok {
+		return wc.n.Add(1)
+	}
+	return -1
+}

@@ -25,6 +25,12 @@ func (w *statusResponseWriter) Write(b []byte) (int, error) {
 	return n, err
 }
 
+// Unwrap lets http.ResponseController reach the real connection. Without it
+// the controller finds no deadline to move on this wrapper, and
+// httputil.ExtendIO, which treats that as a writer with none, silently leaves
+// every whole-database transfer on the server's 60s read and 120s write timeout.
+func (w *statusResponseWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
 // Ensure websocket upgrades work by preserving Hijacker/Flusher/Pusher
 // interfaces when the underlying ResponseWriter supports them.
 func (w *statusResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {

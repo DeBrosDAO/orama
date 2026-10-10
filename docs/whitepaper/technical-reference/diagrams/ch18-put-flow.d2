@@ -1,0 +1,23 @@
+shape: sequence_diagram
+
+c: "tenant client"
+gw: "namespace gateway"
+sup: "Gateway.cachePutHandler"
+h: "CacheHandlers.SetHandler"
+ol: "Olric member\n(owner of the partition)"
+
+c -> gw: "POST /v1/cache/put (credential)"
+gw -> gw: "route policy: cache write grant\nmiddleware computes the permission set"
+gw -> sup: "route is always registered"
+sup -> sup: "no client? 503 'cache service unavailable'"
+sup -> h: "handler built on the current client"
+h -> h: "read body (10 MiB cap); dmap and key required"
+h -> h: "authorizeKey(dmap/key, write): 403 if the grant's selector refuses"
+h -> h: "value required; foldKey: 413 if folded key over 255 bytes"
+h -> h: "ttl: parse, reject negative or over 10 years"
+h -> h: "encode value as JSON; 413 if key+value+29 not under 1 MiB"
+h -> ol: "Put gateway_cache:ns, folded key, bytes, EX ttl\n(10 s context, 10 s I/O deadline, no retry)"
+ol -> h: "ok"
+h -> c: "200 status ok, key, dmap"
+ol -> h: "transport failure"
+h -> c: "503 'cache unavailable; retry', Retry-After 5"

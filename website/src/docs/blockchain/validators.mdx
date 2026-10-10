@@ -1,0 +1,103 @@
+# Validators and staking
+
+Bonds live in `x/staking`. The voting power CometBFT uses is computed by `x/power` at the end of every block. Staking's own validator-set updates are discarded, so `x/power` is the only module that tells CometBFT who validates.
+
+## Becoming a validator
+
+An outsider creates a validator with the normal staking message (`MsgCreateValidator`) and delegators bond to it with `MsgDelegate`. Both can top up a bank shortfall from the signer's own earnings, inside the message and all or nothing.
+
+| Staking and slashing setting | Value |
+|---|---|
+| Unbonding time | 21 days (1,814,400 seconds) |
+| Maximum validators | 100 |
+| Maximum unbonding entries | 7 |
+| Minimum commission rate | 0 |
+| Double-sign slash | 5% |
+| Downtime slash | 0.01% |
+| Signed-blocks window | 10,000, minimum 50% signed |
+| Downtime jail | 600 seconds |
+| Minimum delegation to earn rewards | 1 ORAMA |
+
+The size of the active set (60 to 100) is not final: the benchmark that decides it has not run.
+
+## Power is not raw stake
+
+Each validator gets a power figure `P = (1 - lambda) x B + lambda x C`:
+
+- `B` is the bootstrap share, `1/n` for each member of the bootstrap committee.
+- `C` is the validator's share of bonded stake after the limits below.
+- `lambda` slides from 0 to 1 as the network matures (next section).
+
+The limits on `C`:
+
+**A cap per operator.** No operator's capped share can exceed 5% of the set, however many validators it runs. Once more than 60 operators are active, the cap becomes 3%. It returns to 5% only after the active count has stayed under 50 for 30 epochs. Power removed from a capped operator is redistributed by water-filling.
+
+An operator is the account that registered the `x/nodes` node whose `consensus` binding holds the validator's ed25519 consensus key (see [Nodes](/docs/blockchain/nodes#the-records)). The chain adds up the stake of all of an operator's validators, applies the cap to the sum, and splits the operator's capped share back over its validators in proportion to their stake. One operator with 20 validators therefore holds 5% in total, not 20 shares of 5%, and a validator never holds more than its operator does. The ramp applies to each validator's stake as before, so adding a validator to a capped operator moves no power until its stake is admitted, and then only inside the operator's cap.
+
+A validator whose consensus key no live node binds belongs to no operator. All such validators share one bucket and one cap, so leaving a validator unregistered gains nothing over registering it. `oramad query power validator-power <valoper>` shows the operator a validator counts toward, or `unlinked`. Retiring the node unlinks its validators. `orama setup` binds the consensus key of the validator it creates, and of every seat of a network it creates ([the consensus binding](/docs/operator/setup#the-consensus-binding)).
+
+The chain cannot tell two operator accounts apart: anyone can register a second operator, a second node and a second consensus binding. The cap therefore bounds a declared operator and raises the cost of splitting. It does not stop a determined party who registers separate operators.
+
+**A ramp.** A validator that has just become eligible does not receive its full share at once. The share ramps in over 30 epochs.
+
+**A redistribution bound.** Power moved off a capped validator cannot lift another validator above twice that validator's own raw stake share (`max_redistribution_multiplier` = 2).
+
+**A per-block limit.** Power increases are limited to one third (total variation) per block. Decreases apply immediately.
+
+CometBFT receives `floor(P x 1e9)`, with a floor of 1 for any positive share. Jailed and tombstoned validators are excluded.
+
+A "useful-work multiplier" parameter exists with default 1.0 and `activated = false`. Nothing reads it. It does not change power today. A governance proposal can activate it (see [Governance](/docs/blockchain/governance)), but nothing consumes the setting yet.
+
+## The bootstrap committee and the hand-over
+
+A new chain has no stake, so it starts with a *bootstrap committee*: validators declared in genesis (`oramad genesis add-bootstrap-validator`) who hold equal power without any stake. A production chain id requires at least 30 of them. A devnet, stagenet or localnet may have fewer. `orama setup --create-network` runs these commands for the machines you give it, with the committee size set to their number ([Create a network](/docs/operator/setup#create-a-network)).
+
+`lambda` starts at 0 and only ever goes up. It is recomputed once per closed epoch:
+
+```
+lambda = min(1, max(lambda_previous,
+                    bonded stake / 271,000 ORAMA,
+                    epochs since genesis / 365))
+```
+
+So the committee fades out when bonded stake reaches 271,000 ORAMA or at epoch 365, whichever comes first. 271,000 ORAMA is about 5% of the first year's maximum emission: a year is 365 epochs of 14,848 ORAMA, 5,419,520 ORAMA, and 5% of that is 270,976 ORAMA (`bootstrap_exit_stake` in `chain/x/power/types/params.go`). Two protections:
+
+- Until the active operator count reaches a gate (twice the operators needed to fill 100% at the current cap), lambda is held at 0.95. Crossing the gate sets a flag permanently.
+- Each step is shortened if needed so ramped shares and capped-stake shifts stay within one third per block.
+
+At lambda = 1 a seat that exists only on the committee drops to zero power.
+
+**Force-bonding.** While lambda is below 1, half of a committee member's reward is self-delegated into its own validator until the self-bond reaches twice the minimum (2 x 1,000 ORAMA = 2,000 ORAMA). A guard stops a committee member undelegating below that amount while lambda is below 1. Force-bonding is skipped if the member has no validator record yet, is jailed, or has an invalid exchange rate; the whole reward then stays in earnings, so one bad validator cannot halt an epoch.
+
+## Rewards
+
+At the end of an epoch `x/emission` mints the 60% validator share and `x/power` pays it on the same power figures CometBFT used. Rewards are paid on *capped* power, not on the stock distribution module.
+
+Each validator's amount is split by its commission. The commission plus the operator's own self-delegation share goes to the operator. The rest is split across delegators in proportion to their shares. Everyone is credited in an earnings account, and each owner moves their own earnings to their bank balance with `MsgWithdrawEarnings` (`orama chain withdraw-earnings`) when they choose; see [Fees](/docs/blockchain/fees#using-your-rewards). A delegation smaller than 1 ORAMA is skipped.
+
+## Slashing and jailing
+
+Downtime is slashed 0.01% inside a window of 10,000 blocks. A double-sign is slashed 5% and tombstones the validator. Jailing and undelegation go through `x/staking`. Slashing applies to every CometBFT validator including bootstrap-committee seats.
+
+A node that has a bonded role in `x/nodes` is separately slashed there when it fails a storage challenge. See [Nodes](/docs/blockchain/nodes).
+
+## Operating a validator key
+
+Moving a validator to a new machine without a double-sign is the most dangerous routine job on the chain. The CLI does it in steps (all under `orama maint global validator`):
+
+| Command | What it does |
+|---|---|
+| `export-key` | Writes `priv_validator_key.json` sealed to your public key |
+| `reseal` | Turns a key backup into a migration bundle for a new host |
+| `migrate prepare` | On the new host: prints the host's migration key |
+| `migrate export` | On the old host: stops the chain and seals the key and its sign state |
+| `migrate import` | On the new host: installs the key and records its sign floor |
+| `migrate cancel` | Removes a prepared migration key |
+| `check-sign-floor` | Fails when the chain must not start: the key moved away, or state is behind its floor |
+| `unjail`, `edit` | Build or send `MsgUnjail` and `MsgEditValidator` |
+
+The chain's systemd unit runs `check-sign-floor` before every start, so a stale copy of a key cannot sign. Full runbook: [Global nodes](/docs/operator/global-nodes#validators).
+
+## Queries
+
+`x/power` has no messages. Queries: `params`, `bootstrap-committee`, `lambda`, `validator-power` (`comet_power` and the `operator` the validator counts toward are filled) and `invariants`. `orama chain validator` lists the set. See [Reading the chain](/docs/blockchain/reading-the-chain).

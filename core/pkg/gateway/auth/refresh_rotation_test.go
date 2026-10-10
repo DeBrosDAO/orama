@@ -32,12 +32,16 @@ type rotationMockORMDB struct {
 	mu             sync.Mutex
 	subjectByToken map[string]string // hashedToken -> subject (nil/missing = "invalid")
 	claimsByToken  map[string]string // hashedToken -> custom_claims JSON (bugboard #548)
+	// claimsBySubject: subject -> last-known-good custom_claims JSON. Serves the
+	// lastKnownCustomClaims lookup (bugboard #143): the anti-fragmentation reuse
+	// reads the most recent stored account_id for a wallet at login.
+	claimsBySubject map[string]string
 	// graceableTokens: hashedToken -> subject for tokens that are revoked but
 	// still inside the reuse-grace window (bugboard #125). The grace SELECT
 	// (detected by the grace_used_at predicate) reads from here.
 	graceableTokens map[string]string
-	inserted       int               // count of INSERTs (new refresh-token rows)
-	subjects       map[string]string // subject -> last hashed token inserted
+	inserted        int               // count of INSERTs (new refresh-token rows)
+	subjects        map[string]string // subject -> last hashed token inserted
 	// selectErrRemaining: number of upcoming "SELECT subject" calls that
 	// should return selectErr (simulates a transient rqlite leader outage).
 	// Decremented per matching call; 0 = serve normally (bugboard #125).
@@ -55,6 +59,19 @@ func (m *rotationMockORMDB) Query(_ context.Context, sql string, args ...interfa
 	}
 	if containsCI(sql, "SELECT id FROM namespaces") {
 		return &client.QueryResult{Count: 1, Rows: [][]interface{}{{int64(1)}}}, nil
+	}
+	// lastKnownCustomClaims lookup (bugboard #143): SELECT custom_claims by
+	// subject. Distinguished from the token-keyed selects by selecting
+	// custom_claims (not subject) and keying on subject (args[1]).
+	if containsCI(sql, "SELECT custom_claims") && containsCI(sql, "FROM refresh_tokens") {
+		if len(args) < 2 {
+			return &client.QueryResult{Count: 0}, nil
+		}
+		subj, _ := args[1].(string)
+		if cc, ok := m.claimsBySubject[subj]; ok && cc != "" {
+			return &client.QueryResult{Count: 1, Rows: [][]interface{}{{cc}}}, nil
+		}
+		return &client.QueryResult{Count: 0}, nil
 	}
 	// Grace-path SELECT (bugboard #125): SELECT subject for a recently-revoked,
 	// grace-available token. Distinguished from the active-path SELECT by the
@@ -123,16 +140,25 @@ func (m *rotationMockORMDB) Query(_ context.Context, sql string, args ...interfa
 				m.subjectByToken = map[string]string{}
 			}
 			m.subjectByToken[hashedTok] = subj
-			// custom_claims is the LAST arg (bugboard #548) — capture it so
-			// rotation-propagation tests can assert it carries forward.
+			// custom_claims is the fifth arg (bugboard #548), before the
+			// device and session ids — capture it so rotation-propagation
+			// tests can assert it carries forward.
 			if m.claimsByToken == nil {
 				m.claimsByToken = map[string]string{}
 			}
-			if cc, ok := args[len(args)-1].(string); ok {
-				m.claimsByToken[hashedTok] = cc
+			if len(args) > 4 {
+				if cc, ok := args[4].(string); ok {
+					m.claimsByToken[hashedTok] = cc
+				}
 			}
 		}
 		return &client.QueryResult{Count: 1}, nil
+	}
+	// The member check a refresh makes (checkSignInStillOpen): every session
+	// in these tests belongs to a runtime member, which a refresh leaves be
+	// whatever the namespace's sign-in policy says.
+	if containsCI(sql, "FROM grants AS g") {
+		return &client.QueryResult{Count: 1, Rows: [][]interface{}{{"runtime", nil, nil, "", "test", ""}}}, nil
 	}
 	return &client.QueryResult{Count: 0}, nil
 }
@@ -285,7 +311,7 @@ func TestRefreshToken_HappyPath_rotatesAndReturnsNewToken(t *testing.T) {
 	const oldRefresh = "old-refresh-token"
 	ormDB.subjectByToken[sha256Hex(oldRefresh)] = "0xWALLET"
 
-	access, newRefresh, subj, exp, err := s.RefreshToken(context.Background(), oldRefresh, "anchat-test")
+	access, newRefresh, subj, exp, err := s.RefreshToken(context.Background(), oldRefresh, "anchat-test", nil)
 	if err != nil {
 		t.Fatalf("RefreshToken: %v", err)
 	}
@@ -328,7 +354,7 @@ func TestRefreshToken_CASLost_returnsReplayError(t *testing.T) {
 	// Force the next UPDATE to claim "0 rows affected" — race lost.
 	rq.rowsAffectedNext = []int64{0}
 
-	_, _, _, _, err := s.RefreshToken(context.Background(), stolen, "anchat-test")
+	_, _, _, _, err := s.RefreshToken(context.Background(), stolen, "anchat-test", nil)
 	if !errors.Is(err, ErrRefreshTokenReplay) {
 		t.Fatalf("err = %v, want ErrRefreshTokenReplay", err)
 	}
@@ -343,7 +369,7 @@ func TestRefreshToken_InvalidToken_returnsAuthError(t *testing.T) {
 	// No row exists for this token — SELECT returns 0 rows.
 	s, _, _ := newRotationTestService(t)
 
-	_, _, _, _, err := s.RefreshToken(context.Background(), "never-existed", "anchat-test")
+	_, _, _, _, err := s.RefreshToken(context.Background(), "never-existed", "anchat-test", nil)
 	if err == nil {
 		t.Fatal("expected error for invalid token, got nil")
 	}
@@ -360,7 +386,7 @@ func TestRefreshToken_NoRqliteClient_refusesToRotate(t *testing.T) {
 	// atomicity. It MUST refuse rather than rotate non-atomically.
 	s := createDualKeyService(t) // mockDatabaseClient via shared helper; no rqlite injected
 
-	_, _, _, _, err := s.RefreshToken(context.Background(), "anything", "anchat-test")
+	_, _, _, _, err := s.RefreshToken(context.Background(), "anything", "anchat-test", nil)
 	if !errors.Is(err, ErrRotationNotConfigured) {
 		t.Fatalf("err = %v, want ErrRotationNotConfigured", err)
 	}
@@ -386,7 +412,7 @@ func TestRefreshToken_ConcurrentRotation_exactlyOneWins(t *testing.T) {
 		go func() {
 			defer endWg.Done()
 			startWg.Wait() // launch all goroutines simultaneously
-			_, _, _, _, err := s.RefreshToken(context.Background(), sharedToken, "anchat-test")
+			_, _, _, _, err := s.RefreshToken(context.Background(), sharedToken, "anchat-test", nil)
 			wins <- err
 		}()
 	}
@@ -439,7 +465,7 @@ func TestRefreshToken_RotatedTokenReplayFails(t *testing.T) {
 	ormDB.subjectByToken[sha256Hex(oldRefresh)] = "0xWALLET"
 
 	// First call rotates successfully.
-	_, newRefresh, _, _, err := s.RefreshToken(context.Background(), oldRefresh, "anchat-test")
+	_, newRefresh, _, _, err := s.RefreshToken(context.Background(), oldRefresh, "anchat-test", nil)
 	if err != nil {
 		t.Fatalf("first RefreshToken: %v", err)
 	}
@@ -453,7 +479,7 @@ func TestRefreshToken_RotatedTokenReplayFails(t *testing.T) {
 	delete(ormDB.subjectByToken, sha256Hex(oldRefresh))
 
 	// Try to reuse the rotated-away token.
-	_, _, _, _, err = s.RefreshToken(context.Background(), oldRefresh, "anchat-test")
+	_, _, _, _, err = s.RefreshToken(context.Background(), oldRefresh, "anchat-test", nil)
 	if err == nil {
 		t.Fatal("expected error reusing rotated token, got nil")
 	}
@@ -471,7 +497,7 @@ func TestRefreshToken_transientSelectError_returnsTransient(t *testing.T) {
 	ormDB.selectErr = errors.New("rqlite: leadership lost")
 	ormDB.selectErrRemaining = 99
 
-	_, _, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test")
+	_, _, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test", nil)
 	if !errors.Is(err, ErrRefreshTransient) {
 		t.Fatalf("err = %v, want ErrRefreshTransient (a valid token must not 401 during a leader outage)", err)
 	}
@@ -486,7 +512,7 @@ func TestRefreshToken_selectRecoversAfterRetry(t *testing.T) {
 	ormDB.selectErr = errors.New("rqlite: leadership lost")
 	ormDB.selectErrRemaining = refreshSelectRetries - 1 // fail all but the last attempt
 
-	access, newRefresh, subj, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test")
+	access, newRefresh, subj, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test", nil)
 	if err != nil {
 		t.Fatalf("RefreshToken should recover after transient blips: %v", err)
 	}
@@ -502,7 +528,7 @@ func TestRefreshToken_transientUpdateError_returnsTransient(t *testing.T) {
 	ormDB.subjectByToken[sha256Hex(refresh)] = "0xWALLET"
 	rq.execErrNext = []error{errors.New("rqlite: write failed, no leader")}
 
-	_, _, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test")
+	_, _, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test", nil)
 	if !errors.Is(err, ErrRefreshTransient) {
 		t.Fatalf("err = %v, want ErrRefreshTransient on a transient CAS write error", err)
 	}
@@ -512,7 +538,7 @@ func TestRefreshToken_transientUpdateError_returnsTransient(t *testing.T) {
 // transient — the distinction is the whole point of the #125 fix.
 func TestRefreshToken_unknownToken_isNotTransient(t *testing.T) {
 	s, _, _ := newRotationTestService(t)
-	_, _, _, _, err := s.RefreshToken(context.Background(), "never-existed", "anchat-test")
+	_, _, _, _, err := s.RefreshToken(context.Background(), "never-existed", "anchat-test", nil)
 	if err == nil {
 		t.Fatal("expected error for unknown token")
 	}
@@ -526,6 +552,106 @@ type mockClaimsResolver struct{ claims map[string]string }
 
 func (m mockClaimsResolver) ResolveClaims(_ context.Context, _, _ string) map[string]string {
 	return m.claims
+}
+
+// ----------------------------------------------------------------------------
+// Bugboard #143 — durable anti-fragmentation: last-known-good custom-claims
+// reuse at login. When a namespace's claims provider fails open (transient
+// cold-WASM stall) yielding no account_id, that login's push devices would
+// register under the wallet Sub instead of the stable account_id and never
+// receive fan-out. IssueTokens must reuse the last account_id the wallet ever
+// resolved so the device stays on the stable identity.
+// ----------------------------------------------------------------------------
+
+// lastKnownCustomClaims returns the most recent stored claims for a subject.
+func TestLastKnownCustomClaims_returnsStoredClaims(t *testing.T) {
+	s, ormDB, _ := newRotationTestService(t)
+	ormDB.claimsBySubject = map[string]string{"0xWALLET": `{"account_id":"uuid-X"}`}
+
+	nsID, err := s.ResolveNamespaceID(context.Background(), "anchat-test")
+	if err != nil {
+		t.Fatalf("ResolveNamespaceID: %v", err)
+	}
+	got := s.lastKnownCustomClaims(context.Background(), nsID, "0xWALLET")
+	if got["account_id"] != "uuid-X" {
+		t.Fatalf("expected last-known account_id, got %v", got)
+	}
+}
+
+// No stored history → nil (fail-soft, mints without custom claims).
+func TestLastKnownCustomClaims_emptyReturnsNil(t *testing.T) {
+	s, _, _ := newRotationTestService(t)
+	nsID, _ := s.ResolveNamespaceID(context.Background(), "anchat-test")
+	if got := s.lastKnownCustomClaims(context.Background(), nsID, "0xNOHISTORY"); got != nil {
+		t.Fatalf("expected nil for no history, got %v", got)
+	}
+}
+
+// The core #143 fix: the provider returns EMPTY at login (transient failure),
+// but the wallet has a stored account_id — the minted access token must still
+// carry it, and the new refresh row must persist it.
+func TestIssueTokens_reusesLastKnownClaims_whenResolverEmpty(t *testing.T) {
+	s, ormDB, _ := newRotationTestService(t)
+	// Namespace HAS a provider, but it fails open (returns nil this login).
+	s.SetClaimsResolver(mockClaimsResolver{claims: nil})
+	// The wallet resolved account_id on a PRIOR login (stored in refresh_tokens).
+	ormDB.claimsBySubject = map[string]string{"0xWALLET": `{"account_id":"uuid-X"}`}
+
+	access, refresh, _, err := s.IssueTokens(context.Background(), "0xWALLET", "anchat-test")
+	if err != nil {
+		t.Fatalf("IssueTokens: %v", err)
+	}
+	claims, err := s.ParseAndVerifyJWT(access)
+	if err != nil {
+		t.Fatalf("ParseAndVerifyJWT: %v", err)
+	}
+	if claims.Custom["account_id"] != "uuid-X" {
+		t.Errorf("access token lost account_id after reuse; custom=%v", claims.Custom)
+	}
+	if got := ormDB.claimsByToken[sha256Hex(refresh)]; got != `{"account_id":"uuid-X"}` {
+		t.Errorf("reused claims not persisted to new refresh row; got %q", got)
+	}
+}
+
+// Guard: with NO provider configured (claimsResolver == nil), the reuse path is
+// skipped entirely — single-credential apps are unaffected even if an unrelated
+// stored blob exists for the subject.
+func TestIssueTokens_noResolver_doesNotReuse(t *testing.T) {
+	s, ormDB, _ := newRotationTestService(t)
+	// No SetClaimsResolver call → claimsResolver is nil.
+	ormDB.claimsBySubject = map[string]string{"0xWALLET": `{"account_id":"uuid-X"}`}
+
+	access, _, _, err := s.IssueTokens(context.Background(), "0xWALLET", "anchat-test")
+	if err != nil {
+		t.Fatalf("IssueTokens: %v", err)
+	}
+	claims, err := s.ParseAndVerifyJWT(access)
+	if err != nil {
+		t.Fatalf("ParseAndVerifyJWT: %v", err)
+	}
+	if _, present := claims.Custom["account_id"]; present {
+		t.Errorf("no-provider app must not reuse stored claims; custom=%v", claims.Custom)
+	}
+}
+
+// Guard: when the resolver DOES return claims, reuse must not run (the fresh
+// resolution wins). Store a DIFFERENT stale value and assert the fresh one is used.
+func TestIssueTokens_resolverNonEmpty_skipsReuse(t *testing.T) {
+	s, ormDB, _ := newRotationTestService(t)
+	s.SetClaimsResolver(mockClaimsResolver{claims: map[string]string{"account_id": "fresh"}})
+	ormDB.claimsBySubject = map[string]string{"0xWALLET": `{"account_id":"stale"}`}
+
+	access, _, _, err := s.IssueTokens(context.Background(), "0xWALLET", "anchat-test")
+	if err != nil {
+		t.Fatalf("IssueTokens: %v", err)
+	}
+	claims, err := s.ParseAndVerifyJWT(access)
+	if err != nil {
+		t.Fatalf("ParseAndVerifyJWT: %v", err)
+	}
+	if claims.Custom["account_id"] != "fresh" {
+		t.Errorf("fresh resolution must win over stored; custom=%v", claims.Custom)
+	}
 }
 
 // Bugboard #548: claims resolved at IssueTokens (login) must be stored with the
@@ -546,7 +672,7 @@ func TestRefreshToken_propagatesCustomClaims(t *testing.T) {
 
 	// Refresh — the rotated access token must carry account_id, and the NEW
 	// refresh row must propagate the stored claims.
-	access, newRefresh, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test")
+	access, newRefresh, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test", nil)
 	if err != nil {
 		t.Fatalf("RefreshToken: %v", err)
 	}
@@ -563,7 +689,7 @@ func TestRefreshToken_propagatesCustomClaims(t *testing.T) {
 
 	// Second rotation hop (N+1 → N+2): the claim must survive repeated
 	// rotations, not just the first — the propagation is the whole point.
-	access2, _, _, _, err := s.RefreshToken(context.Background(), newRefresh, "anchat-test")
+	access2, _, _, _, err := s.RefreshToken(context.Background(), newRefresh, "anchat-test", nil)
 	if err != nil {
 		t.Fatalf("second RefreshToken: %v", err)
 	}
@@ -573,6 +699,121 @@ func TestRefreshToken_propagatesCustomClaims(t *testing.T) {
 	}
 	if claims2.Custom["account_id"] != "u-999" {
 		t.Errorf("account_id lost across the second rotation; custom=%v", claims2.Custom)
+	}
+}
+
+// ----------------------------------------------------------------------------
+// Bugboard #154 — an empty-claims session (claims resolved empty at login
+// mint, e.g. a JWT minted before the account row existed) must SELF-HEAL on
+// refresh by re-resolving the provider, instead of replaying emptiness for the
+// whole ~30-day refresh chain. Scoped to empty-claims sessions only — a healthy
+// session must never re-invoke the provider on the hot path.
+// ----------------------------------------------------------------------------
+
+// countingClaimsResolver records how many times it is invoked so tests can
+// prove the empty-only scoping (healthy sessions must not call it).
+type countingClaimsResolver struct {
+	mu     sync.Mutex
+	calls  int
+	claims map[string]string
+}
+
+func (c *countingClaimsResolver) ResolveClaims(_ context.Context, _, _ string) map[string]string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls++
+	return c.claims
+}
+
+// The core #154 fix: an empty-claims session re-resolves on refresh; once the
+// provider can answer (account row has committed), the rotated access token
+// carries account_id and the new refresh row persists it.
+func TestRefreshToken_reResolvesEmptyClaims_onRefresh(t *testing.T) {
+	s, ormDB, _ := newRotationTestService(t)
+	const refresh = "empty-claims-refresh"
+	ormDB.subjectByToken[sha256Hex(refresh)] = "0xWALLET" // stored claims empty
+	resolver := &countingClaimsResolver{claims: map[string]string{"account_id": "uuid-healed"}}
+	s.SetClaimsResolver(resolver)
+
+	access, newRefresh, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test", nil)
+	if err != nil {
+		t.Fatalf("RefreshToken: %v", err)
+	}
+	if resolver.calls != 1 {
+		t.Errorf("provider calls = %d, want 1 (empty-claims session must re-resolve)", resolver.calls)
+	}
+	claims, err := s.ParseAndVerifyJWT(access)
+	if err != nil {
+		t.Fatalf("ParseAndVerifyJWT: %v", err)
+	}
+	if claims.Custom["account_id"] != "uuid-healed" {
+		t.Errorf("rotated access token did not pick up re-resolved account_id; custom=%v", claims.Custom)
+	}
+	if got := ormDB.claimsByToken[sha256Hex(newRefresh)]; got != `{"account_id":"uuid-healed"}` {
+		t.Errorf("re-resolved claims not persisted to new refresh row; got %q", got)
+	}
+}
+
+// A HEALTHY session (non-empty stored claims) must NOT invoke the provider on
+// refresh — the empty-only guard keeps the hot path free of provider cost.
+func TestRefreshToken_healthySession_doesNotReResolve(t *testing.T) {
+	s, ormDB, _ := newRotationTestService(t)
+	const refresh = "healthy-refresh"
+	ormDB.subjectByToken[sha256Hex(refresh)] = "0xWALLET"
+	ormDB.claimsByToken = map[string]string{sha256Hex(refresh): `{"account_id":"u-1"}`}
+	resolver := &countingClaimsResolver{claims: map[string]string{"account_id": "SHOULD-NOT-APPEAR"}}
+	s.SetClaimsResolver(resolver)
+
+	access, _, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test", nil)
+	if err != nil {
+		t.Fatalf("RefreshToken: %v", err)
+	}
+	if resolver.calls != 0 {
+		t.Errorf("provider calls = %d, want 0 (healthy session must not re-resolve)", resolver.calls)
+	}
+	claims, _ := s.ParseAndVerifyJWT(access)
+	if claims.Custom["account_id"] != "u-1" {
+		t.Errorf("healthy session lost/changed account_id; custom=%v", claims.Custom)
+	}
+}
+
+// Re-resolve is fail-open: if the provider is STILL empty at refresh time, the
+// rotation must succeed (no error), just without claims.
+func TestRefreshToken_emptyClaims_providerStillEmpty_succeeds(t *testing.T) {
+	s, ormDB, _ := newRotationTestService(t)
+	const refresh = "still-empty-refresh"
+	ormDB.subjectByToken[sha256Hex(refresh)] = "0xWALLET"
+	resolver := &countingClaimsResolver{claims: nil}
+	s.SetClaimsResolver(resolver)
+
+	access, _, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test", nil)
+	if err != nil {
+		t.Fatalf("RefreshToken must succeed even when re-resolve yields empty: %v", err)
+	}
+	if resolver.calls != 1 {
+		t.Errorf("provider calls = %d, want 1", resolver.calls)
+	}
+	claims, _ := s.ParseAndVerifyJWT(access)
+	if _, present := claims.Custom["account_id"]; present {
+		t.Errorf("no claims expected when provider empty; custom=%v", claims.Custom)
+	}
+}
+
+// A namespace with NO provider (claimsResolver nil) must not attempt re-resolve
+// and must rotate normally.
+func TestRefreshToken_emptyClaims_noResolver_untouched(t *testing.T) {
+	s, ormDB, _ := newRotationTestService(t)
+	const refresh = "no-resolver-refresh"
+	ormDB.subjectByToken[sha256Hex(refresh)] = "0xWALLET"
+	// No SetClaimsResolver → claimsResolver nil; the guard skips re-resolution.
+
+	access, _, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test", nil)
+	if err != nil {
+		t.Fatalf("RefreshToken: %v", err)
+	}
+	claims, _ := s.ParseAndVerifyJWT(access)
+	if len(claims.Custom) != 0 {
+		t.Errorf("expected no custom claims; custom=%v", claims.Custom)
 	}
 }
 
@@ -593,7 +834,7 @@ func TestRefreshToken_reuseGrace_recoversLostResponse(t *testing.T) {
 	// ... but eligible for grace (revoked recently, grace unused).
 	ormDB.graceableTokens = map[string]string{sha256Hex(lostTok): "0xWALLET"}
 
-	access, newRefresh, subj, exp, err := s.RefreshToken(context.Background(), lostTok, "anchat-test")
+	access, newRefresh, subj, exp, err := s.RefreshToken(context.Background(), lostTok, "anchat-test", nil)
 	if err != nil {
 		t.Fatalf("grace recovery should succeed, got error: %v", err)
 	}
@@ -630,7 +871,7 @@ func TestRefreshToken_reuseGrace_singleUse_secondAttemptIs401(t *testing.T) {
 	// Force the grace CAS to report "already consumed".
 	rq.graceCASNext = []int64{0}
 
-	_, _, _, _, err := s.RefreshToken(context.Background(), tok, "anchat-test")
+	_, _, _, _, err := s.RefreshToken(context.Background(), tok, "anchat-test", nil)
 	if err == nil {
 		t.Fatal("a consumed grace must NOT recover — expected an invalid-token error")
 	}
@@ -648,7 +889,7 @@ func TestRefreshToken_noGrace_genuineBadToken_stays401(t *testing.T) {
 	s, ormDB, _ := newRotationTestService(t)
 	// graceableTokens left empty: nothing is grace-eligible.
 
-	_, _, _, _, err := s.RefreshToken(context.Background(), "never-seen-this-token", "anchat-test")
+	_, _, _, _, err := s.RefreshToken(context.Background(), "never-seen-this-token", "anchat-test", nil)
 	if err == nil {
 		t.Fatal("a never-seen token must be rejected")
 	}
@@ -677,7 +918,7 @@ func TestRevokeToken_burnsGrace_blocksLogoutBypass(t *testing.T) {
 	}
 
 	// A refresh with the just-logged-out token must be rejected, not resurrected.
-	_, _, _, _, err := s.RefreshToken(context.Background(), tok, "anchat-test")
+	_, _, _, _, err := s.RefreshToken(context.Background(), tok, "anchat-test", nil)
 	if err == nil {
 		t.Fatal("LOGOUT-BYPASS: a logged-out token was resurrected via reuse grace")
 	}
@@ -686,5 +927,37 @@ func TestRevokeToken_burnsGrace_blocksLogoutBypass(t *testing.T) {
 	}
 	if ormDB.inserted != 0 {
 		t.Errorf("no session should be minted for a logged-out token; inserts=%d", ormDB.inserted)
+	}
+}
+
+// A gateway that cannot reach its own registry must say so as a retryable
+// failure (503), never as a rejected token (401): the CLI ends a session only
+// on a rejection.
+func TestRefreshToken_registryUnavailableIsTransient(t *testing.T) {
+	s, _, _ := newRotationTestService(t)
+	s.orm = nil
+	_, _, _, _, err := s.RefreshToken(context.Background(), "any", "anchat-test", nil)
+	if !errors.Is(err, ErrRefreshTransient) {
+		t.Fatalf("err = %v, want ErrRefreshTransient", err)
+	}
+}
+
+// A refresh naming no namespace minted a token naming none, which the
+// permission check did not read as the lobby (security review, 2026-09-30).
+func TestRefreshToken_noNamespaceIsTheLobby(t *testing.T) {
+	s, ormDB, _ := newRotationTestService(t)
+	const old = "lobby-refresh-token"
+	ormDB.subjectByToken[sha256Hex(old)] = "0xWALLET"
+
+	access, _, _, _, err := s.RefreshToken(context.Background(), old, "  ", nil)
+	if err != nil {
+		t.Fatalf("RefreshToken: %v", err)
+	}
+	claims, err := s.ParseAndVerifyJWT(access)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if claims.Namespace != LobbyNamespace {
+		t.Fatalf("token names namespace %q, want %q", claims.Namespace, LobbyNamespace)
 	}
 }

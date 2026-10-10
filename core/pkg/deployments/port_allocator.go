@@ -26,7 +26,8 @@ func NewPortAllocator(db rqlite.Client, logger *zap.Logger) *PortAllocator {
 }
 
 // AllocatePort finds and allocates the next available port for a deployment on a specific node
-// Port range: 10100-19999 (10000-10099 reserved for system use)
+// Port range: 10200-19999. 10000-10099 is the tenant block and 10100-10199
+// is the index block (rqlite, Olric, gateway, IPFS); both are already bound.
 func (pa *PortAllocator) AllocatePort(ctx context.Context, nodeID, deploymentID string) (int, error) {
 	// Use internal auth for port allocation operations
 	internalCtx := client.WithInternalAuth(ctx)
@@ -93,7 +94,7 @@ func (pa *PortAllocator) tryAllocatePort(ctx context.Context, nodeID, deployment
 		allocatedPorts[row.Port] = true
 	}
 
-	// Find first available port (starting from UserMinPort = 10100)
+	// Find first available port (starting from UserMinPort = 10200)
 	port := UserMinPort
 	for port <= MaxPort {
 		if !allocatedPorts[port] {

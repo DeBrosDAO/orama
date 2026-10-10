@@ -1,0 +1,31 @@
+direction: down
+
+start: "reconcileTenantsOnce (60 s, one goroutine per node)"
+guard: "localNodeID set?" {shape: diamond}
+skip: "log and return"
+
+perNode: "Per-node leg: what this node owes its own units" {
+  s1: "1 RestoreLocalClusters\nspawn missing rqlite, olric, gateway"
+  s2: "2 reconcileLocalDrift\nrewrite olric and gateway config"
+  s3: "3 reconcileRQLiteLiveness\ndegrade after 3 sweeps with the unit down"
+  s4: "4 reapOrphanedTenants\nteardown what the registry does not assign"
+  s1 -> s2 -> s3 -> s4
+}
+
+shared: "Registry legs: claimed or guarded, any node may run them" {
+  s5: "5 replayPendingCleanups\nrow claim, 5 min lease"
+  s6: "6 resumeStaleDeprovisioning\nguarded UPDATE of the stamp"
+  s7: "7 failStaleProvisioning\nguarded UPDATE of the status"
+  s5 -> s6 -> s7
+}
+
+coord: "Coordinator leg: one node per namespace" {
+  s8: "8 reconcileClusterMembership\nlowest sorted live member prunes, evicts, removes from raft"
+}
+
+start -> guard
+guard -> skip: "no"
+guard -> perNode.s1: "yes"
+perNode.s4 -> shared.s5
+shared.s7 -> coord.s8
+coord.s8 -> start: "next tick (sweeps never overlap)"

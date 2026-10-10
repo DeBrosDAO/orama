@@ -47,10 +47,10 @@ func checkWGPerNode(nd *inspector.NodeData, data *inspector.ClusterData) []inspe
 
 	// 5.2 Service active
 	if wg.ServiceActive {
-		r = append(r, inspector.Pass("wg.service_active", "wg-quick@wg0 service active", wgSub, node,
+		r = append(r, inspector.Pass("wg.service_active", "wireguard @index service active", wgSub, node,
 			"service is active", inspector.Critical))
 	} else {
-		r = append(r, inspector.Warn("wg.service_active", "wg-quick@wg0 service active", wgSub, node,
+		r = append(r, inspector.Warn("wg.service_active", "wireguard @index service active", wgSub, node,
 			"service not active (interface up but service not managed by systemd?)", inspector.High))
 	}
 

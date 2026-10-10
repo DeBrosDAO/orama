@@ -1,0 +1,70 @@
+# Namespaces as a customer and an operator use them: creation through the API
+# (202, poll URL, status route, ready = a real request through ns-<name>) and
+# the CLI, the name matrix (invalid, reserved, boundaries, normalisation),
+# taken names and a creation race with exactly one winner, who may create,
+# port blocks in range and disjoint, tenant services listening only on the
+# WireGuard address and closed in the firewall, unit confinement and private
+# config files, cross-namespace credentials (NAMESPACE_MISMATCH), the five key
+# commands and --namespace, repair on a node (idempotent, refused off a node),
+# WebRTC enable/status/disable, session policy, rate-limit overrides that
+# answer 429, owner-only transfer, and deletion: every unit, directory,
+# environment file, port, DNS record and key gone on every node, deletion while
+# in use, refusals, and the name reusable afterwards. Health-probe DNS
+# withdrawal, the reconciler and capacity are in namespaces-chaos and
+# namespaces-capacity, which run alone.
+id: namespaces
+title: Namespace lifecycle, isolation and management
+area: tenancy
+subtasks: [2830]
+stage: 2
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  cli:
+    - orama namespace
+    - orama namespace create
+    - orama namespace delete
+    - orama namespace disable
+    - orama namespace enable
+    - orama namespace keys
+    - orama namespace keys create
+    - orama namespace keys list
+    - orama namespace keys revoke
+    - orama namespace keys revoke-legacy
+    - orama namespace keys rotate
+    - orama namespace list
+    - orama namespace repair
+    - orama namespace webrtc-status
+  routes:
+    - /v1/namespaces
+    - /v1/namespace/delete
+    - /v1/namespace/keys
+    - /v1/namespace/keys/
+    - /v1/namespace/list
+    - /v1/namespace/members
+    - /v1/namespace/members/
+    - /v1/namespace/rate-limit
+    - /v1/namespace/session-policy
+    - /v1/namespace/status
+    - /v1/namespace/webrtc/disable
+    - /v1/namespace/webrtc/enable
+    - /v1/namespace/webrtc/status
+    - /v1/internal/namespace/repair
+  units:
+    - orama-namespace-gateway@.service
+    - orama-namespace-olric@.service
+    - orama-namespace-rqlite@.service
+  claims:
+    - "docs/whitepaper/technical-reference/appendices/i-api-surface.md#namespace-management: creating a namespace writes the owner grant and starts provisioning (202 with a poll URL)"
+    - "docs/whitepaper/technical-reference/vol1/09-namespaces.md: namespace names are validated as a DNS label, a unit instance and a directory; platform names are reserved"
+    - "website/src/docs/contributor/architecture-reference.mdx: each namespace gets a five-port block in 10000-10099 on every member"
+    - "docs/whitepaper/technical-reference/vol1/20-pubsub.md: tenant services listen on the WireGuard address, never on loopback or every interface"
+    - "docs/whitepaper/technical-reference/vol1/05-privilege-and-filesystem-trust.md#per-service-accounts: a tenant gateway writes only its own namespace directory; its YAML is 0600"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-namespace-keys-rotate: the original key keeps working for the overlap"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-namespace-repair: repair runs on a node and is refused elsewhere"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-members-transfer: only the owner transfers; the old owner keeps admin"
+    - "docs/whitepaper/technical-reference/appendices/i-api-surface.md#namespace-management: deleting a namespace removes its units, data, DNS names, ports and keys"
+    - "website/src/docs/contributor/architecture-reference.mdx: a namespace delete runs on a context of its own, so a client that disconnects mid-delete does not stop it, and a second delete while the first runs is refused 409 NAMESPACE_DELETE_IN_PROGRESS (retryable)"

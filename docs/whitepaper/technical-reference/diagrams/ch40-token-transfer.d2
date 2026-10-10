@@ -1,0 +1,23 @@
+direction: down
+
+msg: "MsgTransfer(sender, from, to, denom, amount)"
+c1: "amount positive, from != to,\ntoken exists"
+c2: "paused? non-transferable?"
+c3: "from == sender, or sender is the\npermanent delegate"
+c4: "from or to frozen?"
+c5: "balance(from) >= amount?"
+hook: "transfer hook set?\nsudo call on a cache branch,\ngas meter capped at 100,000;\nerror or out of gas refuses"
+send: "bank send of amount - fee\n(scoped: send restriction passes)"
+fee: "fee = floor(amount x bps / 10,000)\nmoved to x/token account and burned,\nissued -= fee"
+commit: "hook writes committed\nonly now"
+refuse: "refused: nothing moved,\nhook writes dropped" {shape: circle}
+
+msg -> c1 -> c2 -> c3 -> c4 -> c5 -> hook
+c2 -> refuse: "yes"
+c3 -> refuse: "no"
+c4 -> refuse: "yes"
+c5 -> refuse: "no"
+hook -> refuse: "rejects / over cap"
+hook -> send: "allowed or none"
+send -> fee
+fee -> commit

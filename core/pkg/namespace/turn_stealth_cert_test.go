@@ -5,111 +5,79 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"go.uber.org/zap"
 )
-
-// feat-124 — resolveTURNSCert semantics.
-//
-// On machines without a Caddyfile (tests, dev laptops) the Let's Encrypt
-// branch fails fast with "failed to read Caddyfile", exercising exactly the
-// fallback decision this function owns: primary domains degrade to a
-// self-signed pair, the stealth domain must hard-fail instead.
 
 func testSpawner(t *testing.T) *SystemdSpawner {
 	t.Helper()
 	return &SystemdSpawner{logger: zap.NewNop()}
 }
 
-func TestResolveTURNSCert_primaryFallsBackToSelfSigned(t *testing.T) {
-	s := testSpawner(t)
-	dir := t.TempDir()
-
-	certPath, keyPath, err := s.resolveTURNSCert("ns-test", "turn.ns-test.example.com", "203.0.113.7", dir, true)
-	if err != nil {
-		t.Fatalf("expected self-signed fallback, got error: %v", err)
+// writeWildcard puts a *.<base> wildcard pair where the gateway exports it.
+func writeWildcard(t *testing.T, s *SystemdSpawner, base string) (string, string) {
+	t.Helper()
+	crt, key := s.wildcardCertPaths()
+	if err := os.MkdirAll(filepath.Dir(crt), 0o755); err != nil {
+		t.Fatalf("mkdir wildcard dir: %v", err)
 	}
-	if certPath != filepath.Join(dir, "turn-cert.pem") || keyPath != filepath.Join(dir, "turn-key.pem") {
-		t.Errorf("unexpected fallback paths: %s / %s", certPath, keyPath)
-	}
-	if _, statErr := os.Stat(certPath); statErr != nil {
-		t.Errorf("self-signed cert not written: %v", statErr)
-	}
-}
-
-func TestResolveTURNSCert_existingSelfSignedReused(t *testing.T) {
-	s := testSpawner(t)
-	dir := t.TempDir()
-
-	first, _, err := s.resolveTURNSCert("ns-test", "", "203.0.113.7", dir, true)
-	if err != nil {
-		t.Fatalf("first resolve: %v", err)
-	}
-	info1, err := os.Stat(first)
-	if err != nil {
-		t.Fatalf("stat first cert: %v", err)
-	}
-
-	second, _, err := s.resolveTURNSCert("ns-test", "", "203.0.113.7", dir, true)
-	if err != nil {
-		t.Fatalf("second resolve: %v", err)
-	}
-	info2, err := os.Stat(second)
-	if err != nil {
-		t.Fatalf("stat second cert: %v", err)
-	}
-	if first != second || info1.ModTime() != info2.ModTime() {
-		t.Error("existing self-signed pair was regenerated instead of reused")
-	}
-}
-
-func TestResolveTURNSCert_stealthNeverFallsBackToSelfSigned(t *testing.T) {
-	s := testSpawner(t)
-	dir := t.TempDir()
-
-	_, _, err := s.resolveTURNSCert("ns-test", "cdn-abc123def456.example.com", "203.0.113.7", dir, false)
-	if err == nil {
-		t.Fatal("stealth cert resolution must hard-fail without Let's Encrypt — a self-signed stealth cert is indistinguishable from being blocked")
-	}
-	if !strings.Contains(err.Error(), "cdn-abc123def456.example.com") {
-		t.Errorf("error must name the stealth domain for the operator; got: %v", err)
-	}
-	if _, statErr := os.Stat(filepath.Join(dir, "turn-cert.pem")); !os.IsNotExist(statErr) {
-		t.Error("stealth failure must not write a self-signed pair")
-	}
-}
-
-func TestResolveTURNSCert_noDomainNoFallbackErrors(t *testing.T) {
-	s := testSpawner(t)
-	_, _, err := s.resolveTURNSCert("ns-test", "", "203.0.113.7", t.TempDir(), false)
-	if err == nil {
-		t.Fatal("empty domain with self-signed disallowed must error")
-	}
-}
-
-// Security (feat-124): the Caddyfile sink must refuse any domain that isn't a
-// clean DNS name, so a crafted value can't break out of the generated block
-// and inject Caddy directives.
-func TestProvisionTURNCertViaCaddy_rejectsNonDNSName(t *testing.T) {
-	bad := []string{
-		"example.com {\n  reverse_proxy evil:1234\n}\n#",
-		"has space.com",
-		"UPPER.example.com",
-		"nodots",
-		"trailing-.example.com",
-		"",
-	}
-	for _, d := range bad {
-		if _, _, err := provisionTURNCertViaCaddy(d, "http://localhost:6001/v1/internal/acme", time.Second); err == nil {
-			t.Errorf("provisionTURNCertViaCaddy(%q) accepted a non-DNS-name domain", d)
+	for _, p := range []string{crt, key} {
+		if err := os.WriteFile(p, []byte("pem"), 0o600); err != nil {
+			t.Fatalf("write %s: %v", p, err)
 		}
+	}
+	return crt, key
+}
+
+// The wildcard covers every TURNS host of the shared listener; it is the cert.
+func TestResolveTURNSCert_usesTheWildcard(t *testing.T) {
+	s := &SystemdSpawner{logger: zap.NewNop(), oramaDirOverride: t.TempDir()}
+	base := "orama-devnet.network"
+	wantCrt, wantKey := writeWildcard(t, s, base)
+
+	crt, key, err := s.resolveTURNSCert(base)
+	if err != nil {
+		t.Fatalf("resolveTURNSCert: %v", err)
+	}
+	if crt != wantCrt || key != wantKey {
+		t.Errorf("got %s/%s, want the wildcard %s/%s", crt, key, wantCrt, wantKey)
+	}
+}
+
+// No wildcard is an error naming where it was looked for — never a self-signed
+// pair, which clients reject.
+func TestResolveTURNSCert_missingWildcardErrors(t *testing.T) {
+	s := &SystemdSpawner{logger: zap.NewNop(), oramaDirOverride: t.TempDir()}
+
+	_, _, err := s.resolveTURNSCert("example.com")
+	if err == nil {
+		t.Fatal("a missing wildcard must be an error")
+	}
+	if crt, _ := s.wildcardCertPaths(); !strings.Contains(err.Error(), crt) || !strings.Contains(err.Error(), "*.example.com") {
+		t.Errorf("the error should name the missing certificate and where it was looked for; got: %v", err)
+	}
+}
+
+// A cert without its key is not a usable pair.
+func TestResolveTURNSCert_missingKeyErrors(t *testing.T) {
+	s := &SystemdSpawner{logger: zap.NewNop(), oramaDirOverride: t.TempDir()}
+	_, key := writeWildcard(t, s, "example.com")
+	if err := os.Remove(key); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.resolveTURNSCert("example.com"); err == nil {
+		t.Fatal("a wildcard cert without its key must be an error")
+	}
+}
+
+func TestResolveTURNSCert_noBaseDomainErrors(t *testing.T) {
+	if _, _, err := testSpawner(t).resolveTURNSCert(""); err == nil {
+		t.Fatal("no base domain means no wildcard; it must be an error")
 	}
 }
 
 // feat-124 stealth cert reuse: the stealth TURNS host reuses Caddy's existing
-// *.<base> wildcard cert instead of writing the Caddyfile (the orama-node
-// service can't, ProtectSystem=strict). These pin the validation logic.
+// *.<base> wildcard cert. These pin the validation logic.
 
 func TestIsSingleLabelSubdomain(t *testing.T) {
 	cases := []struct {
@@ -129,14 +97,12 @@ func TestIsSingleLabelSubdomain(t *testing.T) {
 	}
 }
 
-func TestCaddyWildcardCertPaths_shape(t *testing.T) {
-	crt, key := caddyWildcardCertPaths("orama-devnet.network")
-	wantCrt := "/var/lib/caddy/caddy/certificates/acme-v02.api.letsencrypt.org-directory/wildcard_.orama-devnet.network/wildcard_.orama-devnet.network.crt"
-	if crt != wantCrt {
-		t.Errorf("cert path = %q; want %q", crt, wantCrt)
-	}
-	if !strings.HasSuffix(key, "wildcard_.orama-devnet.network.key") {
-		t.Errorf("key path = %q; want a wildcard .key", key)
+// The exported pair's path does not depend on the CA that issued it, so the
+// TURN server's reloader keeps watching the right file across a change of CA.
+func TestWildcardCertPaths_productionShape(t *testing.T) {
+	crt, key := testSpawner(t).wildcardCertPaths()
+	if crt != "/opt/orama/.orama/data/tls/wildcard.crt" || key != "/opt/orama/.orama/data/tls/wildcard.key" {
+		t.Errorf("paths = %q, %q", crt, key)
 	}
 }
 
@@ -154,10 +120,9 @@ func TestResolveStealthCert_rejectsMultiLabelHost(t *testing.T) {
 }
 
 func TestResolveStealthCert_missingWildcardErrors(t *testing.T) {
-	s := testSpawner(t)
-	// Valid single-label host but the wildcard cert almost certainly does not
-	// exist at the absolute Caddy storage path during tests → hard error
-	// naming the path, never a self-signed fallback.
+	s := &SystemdSpawner{logger: zap.NewNop(), oramaDirOverride: t.TempDir()}
+	// Valid single-label host but no exported wildcard → hard error naming
+	// the path, never a self-signed fallback.
 	_, _, err := s.resolveStealthCert("cdn-deadbeef0000.test-nonexistent-base.invalid", "test-nonexistent-base.invalid")
 	if err == nil {
 		t.Fatal("missing wildcard cert must hard-fail")
@@ -171,5 +136,20 @@ func TestResolveStealthCert_emptyBaseErrors(t *testing.T) {
 	s := testSpawner(t)
 	if _, _, err := s.resolveStealthCert("cdn-x.example.com", ""); err == nil {
 		t.Fatal("empty base domain must error")
+	}
+}
+
+// The stealth host reuses the same wildcard resolveTURNSCert does, from the
+// same place.
+func TestResolveStealthCert_usesTheWildcard(t *testing.T) {
+	s := &SystemdSpawner{logger: zap.NewNop(), oramaDirOverride: t.TempDir()}
+	wantCrt, wantKey := writeWildcard(t, s, "example.com")
+
+	crt, key, err := s.resolveStealthCert("cdn-abc123.example.com", "example.com")
+	if err != nil {
+		t.Fatalf("resolveStealthCert: %v", err)
+	}
+	if crt != wantCrt || key != wantKey {
+		t.Errorf("got %s/%s, want %s/%s", crt, key, wantCrt, wantKey)
 	}
 }

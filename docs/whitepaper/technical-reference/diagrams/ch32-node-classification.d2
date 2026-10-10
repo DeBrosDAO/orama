@@ -1,0 +1,16 @@
+direction: down
+
+collected: "peer answered with a report\nage <= 90 s" 
+healthy: "healthy\ngateway answers + raft Leader/Follower"
+degraded: "degraded\nanswers, but gateway down\nor raft not settled"
+unreachable: "unreachable\nno report: error, timeout,\nstale > 90 s, or unknown > 2 h"
+unknown: "unknown\npeer answered 401:\nolder release, no telemetry route"
+
+collected -> healthy: "Health()"
+collected -> degraded: "Health()"
+unknown -> unreachable: "still unknown after 2 h\n(telemetryMaxUnknown)"
+unknown -> collected: "node upgraded"
+unreachable -> collected: "report arrives"
+healthy -> degraded: "gateway or raft fails"
+degraded -> healthy: "both recover"
+healthy -> unreachable: "collection stops (90 s)"

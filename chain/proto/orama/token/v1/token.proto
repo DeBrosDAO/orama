@@ -1,0 +1,97 @@
+syntax = "proto3";
+package orama.token.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/token/types";
+
+import "gogoproto/gogo.proto";
+
+// Params are x/token's genesis-set parameters. There is no message that
+// changes them after genesis (no module admin key). creation_fee does not
+// track a dollar price: plans/open-network.md P4 only says about $10-25
+// equivalent and does not fix a norama amount.
+message Params {
+  // creation_fee is the norama burned when a token is created. The genesis
+  // default is 10 ORAMA (10_000_000_000 norama).
+  string creation_fee = 1 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable)   = false
+  ];
+  // deposit_per_byte is the norama locked, per metadata byte, to cover the
+  // token record. The genesis default is the integer form of P3's
+  // approximately 0.07 ORAMA per KB. It is not a price oracle.
+  string deposit_per_byte = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable)   = false
+  ];
+}
+
+// Extension is one creation-time capability. Each one that was set can only
+// be renounced; none can be added or reassigned later.
+enum Extension {
+  option (gogoproto.goproto_enum_prefix) = false;
+
+  EXTENSION_UNSPECIFIED       = 0;
+  EXTENSION_MINT              = 1;
+  EXTENSION_FREEZE            = 2;
+  EXTENSION_PERMANENT_DELEGATE = 3;
+  EXTENSION_TRANSFER_FEE      = 4;
+  EXTENSION_NON_TRANSFERABLE  = 5;
+  EXTENSION_PAUSE             = 6;
+  EXTENSION_TRANSFER_HOOK     = 7;
+}
+
+// Extensions is the set of capabilities still held. A false flag, an empty
+// permanent_delegate or transfer_hook, or a zero transfer_fee_bps means that
+// capability is absent (never set, or already renounced).
+message Extensions {
+  bool mint = 1;
+  bool freeze = 2;
+  // permanent_delegate is the account that may transfer the token out of any
+  // holder. Empty means the capability is absent.
+  string permanent_delegate = 3;
+  // transfer_fee_bps is the share of each transfer, in basis points of the
+  // token itself, that is burned. Zero means the capability is absent.
+  // 10_000 burns the whole transfer amount.
+  uint32 transfer_fee_bps = 4;
+  bool non_transferable = 5;
+  bool pause = 6;
+  // transfer_hook is the bech32 address of the CosmWasm contract the chain calls
+  // (sudo) on every x/token MsgTransfer of this token, under a gas cap. It is
+  // fixed at creation and can only be renounced. Empty means the capability is
+  // absent.
+  string transfer_hook = 7;
+}
+
+// Token is one factory denom. Balances are not stored here; they live in
+// x/bank. issued is this module's running total of that denom, which the
+// supply invariant compares to bank supply.
+message Token {
+  string denom = 1;
+  string creator = 2;
+  string name = 3;
+  string symbol = 4;
+  string description = 5;
+  Extensions extensions = 6 [(gogoproto.nullable) = false];
+  bool paused = 7;
+  // shieldable is a one-way flag. This module does not perform a shielded
+  // transfer. The flag cannot be set while freeze, permanent_delegate, or
+  // pause is still held.
+  bool shieldable = 8;
+  string issued = 9 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable)   = false
+  ];
+  // deposit_amount is the norama locked in x/fees for this token's metadata.
+  string deposit_amount = 10 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable)   = false
+  ];
+}
+
+// FrozenAccount is one account blocked from sending, receiving, minting to,
+// or burning this denom, while the freeze capability exists or after it was
+// renounced (renouncing stops new freezes; it does not clear old ones).
+message FrozenAccount {
+  string denom = 1;
+  string account = 2;
+}

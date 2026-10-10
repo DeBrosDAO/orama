@@ -1,0 +1,2 @@
+# Built by build.sh or `orama function build`; deploy builds it again when absent.
+functions/*/function.wasm

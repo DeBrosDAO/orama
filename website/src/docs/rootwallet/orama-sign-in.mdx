@@ -1,0 +1,61 @@
+# Signing in to Orama with RootWallet
+
+Orama identifies you by a wallet address and proves it with a signature. RootWallet is the wallet the `orama` CLI uses to produce that signature, and the place the CLI's SSH keys and release signatures come from. This page follows one sign-in from the keyboard to the gateway, and lists every other thing the CLI asks RootWallet for.
+
+## `orama auth login`
+
+```bash
+orama auth login
+orama auth login --namespace myapp
+```
+
+1. The CLI checks that RootWallet's agent socket is safe to use: it refuses a symlink, anything that is not a socket, a socket owned by another user, and a group- or world-writable one. A missing socket means the desktop app is not running.
+2. It asks the agent for your **EVM address** (`wallet:address`, approved once per `orama` binary).
+3. It asks the gateway for a challenge (`POST /v1/auth/challenge`): an EIP-4361 (Sign-In with Ethereum) message that names the gateway's domain, the namespace, a single-use nonce and a five-minute expiry.
+4. It asks the agent to sign that message (`wallet:sign`, EIP-191). **Your key never leaves RootWallet.** The agent signs only an ordinary message: any message that starts like an Orama build-archive, release or chain-transaction format is refused by `wallet:sign`, so a login signature can never be turned into one of those approvals.
+5. It sends the message and signature to `POST /v1/auth/verify` and stores the resulting **session**: a 15-minute access token and a 30-day rotating refresh token. See [Sign-in and sessions](/docs/developer/sign-in).
+
+If the agent is locked, the CLI waits up to two minutes for an unlock and answers with an instruction ([Troubleshooting](/docs/operator/troubleshooting#rootwallet-agent-locked-waiting-or-unreachable)). A first run against a locked wallet can take four minutes.
+
+### Device-bound sessions
+
+`orama auth login --device-key <file>` binds the session to an Ed25519 key on this machine ([Devices](/docs/developer/devices)). The wallet signs the sign-in message; the device key signs the same message; neither alone binds anything.
+
+## No wallet on this machine
+
+On a server over SSH, in a container or in CI there is no RootWallet. `orama auth login` then prints a code and waits:
+
+```text
+    Your code:  BCDF-GHJK
+
+  On a machine where RootWallet is running, run:
+
+    orama auth approve BCDF-GHJK
+```
+
+Run the `approve` command on a machine that has RootWallet. It costs the same wallet signature that signing in does, which is why the code on its own is worthless. `--deny` refuses. The waiting machine collects its session once.
+
+## What else the CLI asks RootWallet for
+
+| What | CLI command | Capability | Approval |
+|---|---|---|---|
+| SSH keys for your nodes | `orama node setup`, `ssh`, `push`, `rollout`, `monitor`, `inspect`, `sandbox` | `vault:ssh` | Once per binary |
+| VPS passwords | `orama node setup --password` | `vault:password` | Once per binary |
+| Signing a build archive | `orama maint build` | `wallet:sign:orama-archive` | Shows version, commit, date and signers |
+| Signing release metadata (TUF) | The release process | `wallet:sign:orama-release` | Every signature, desktop app only |
+| Signing a chain transaction | `orama global`, `orama storage`, `orama cluster register-onchain` | `wallet:sign:orama-tx` | Every request, with the decoded transaction |
+| Keepalive during long jobs | `orama maint rollout` and similar | | |
+
+The CLI never stores an SSH key or a password. It asks the agent, writes a key to a `0600` temp file for the length of one command, and wipes it. Approval is keyed on the hash of the calling binary, so every rebuilt `orama` asks once. The agent is described on [The agent](/docs/rootwallet/agent).
+
+## A test cluster and the headless agent
+
+For end-to-end tests there is a headless agent that serves a throwaway wallet and signs unattended under strict limits ([The agent](/docs/rootwallet/agent#the-headless-development-agent)). `ORAMA_E2E=1` makes the CLI refuse every agent request unless `RW_AGENT_SOCK` points at that test agent, so a test run cannot reach your real wallet.
+
+## RootWallet's own sign-in to Orama
+
+RootWallet itself uses an Orama namespace (`rootwallet`) for blockchain RPC, NFT lookups and swap quotes, so that no provider API key ships in any build. Each install proves itself with a device key (not your wallet address) and receives a 15-minute token that is attached only to function calls on that namespace. The device key is held in the macOS Keychain on desktop (Linux has no keychain support yet), in secure storage on mobile, and in `~/.rootwallet/orama-device.json` for the CLI. See [Security](/docs/rootwallet/security#privacy).
+
+## For your own app
+
+An application that lets its users sign in with a wallet implements the same handshake with the user's wallet of choice: ask `client.auth.challenge`, have the wallet sign `challenge.message` verbatim, call `client.auth.verify` ([SDK](/docs/developer/sdk-reference#wallet-login)). Any wallet that signs EIP-4361 (EVM) or SIWS (Solana) messages works. RootWallet's desktop, mobile and CLI do this today for EVM; there is no WalletConnect on any surface, and a "Sign in with RootWallet" flow for third-party apps is on the RootWallet roadmap and **not built**.

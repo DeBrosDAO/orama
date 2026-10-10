@@ -1,0 +1,73 @@
+# Backups and restore
+
+A **sealed backup** captures a whole namespace in one file that only you can open. The cluster is given only your *public* key, so it can write backups it cannot read.
+
+There are three kinds of backup, for three kinds of data.
+
+| What | Command | Notes |
+|---|---|---|
+| A whole namespace (database, pinned content list, secrets) | `orama namespace backup` | Sealed to your X25519 public key |
+| The namespace's RQLite database as a file | `orama namespace rqlite export` | A plain SQLite file |
+| One SQLite database | `orama db backup <name>` | Stored in IPFS |
+| The cluster registry (operators only) | Automatic, hourly | See [Upgrades](/docs/operator/upgrades#back-up-the-registry-first) |
+
+## Take a sealed backup
+
+Create an X25519 key pair you keep (the private half never goes to the cluster), then, signed in as the namespace's owner:
+
+```bash
+orama namespace backup --key <public key hex> --out myapp.orbk
+```
+
+The gateway puts three things in the file:
+
+1. The namespace's RQLite snapshot (the same `/db/backup` that `orama namespace rqlite export` downloads).
+2. Every CID the namespace holds pinned: stored objects and each deployment's content and build.
+3. Its stored secrets: function secrets, push tokens and credentials, the TURN secret, deployment environment. These are decrypted by the source cluster, because they are encrypted under its encryption root and no other cluster can read them. **If the source cluster dies before a backup was taken, its secrets are gone.**
+
+`orama namespace backup-seal` and `backup-open` seal and open any file with the same keys.
+
+## Restore onto another cluster
+
+Create the namespace on the destination, sign in to it as its owner, and run:
+
+```bash
+orama namespace restore-key            # prints the destination gateway's restore public key
+orama namespace restore --in myapp.orbk --key-file ./backup.key \
+  --namespace myapp --dest-key <restore public key hex>
+```
+
+`restore` opens the backup **on your machine**; the private key never leaves it. It seals each secret to the destination gateway's restore key for that namespace (derived from the cluster's encryption root and the namespace name, so it changes when the root is rotated). Each sealed secret carries its namespace and row, and the gateway checks them, so secrets cannot be replayed into another namespace or row.
+
+The gateway **refuses before writing anything** when: the key is wrong, the file is corrupt or truncated, the backup is of a different namespace, the gateway's RQLite client cannot run atomic batches, or the restore would put the namespace over its storage quota on this cluster. Then it replaces the namespace's RQLite with the snapshot, puts back this cluster's own storage quota (a backup never brings its quota with it), writes the secrets under its own encryption root, checks the quota again, and pins the CIDs, eight at a time, within ten minutes. A failure after the database was replaced says so; running the same restore again is safe.
+
+**What a restore does not bring back.** Live keys, grants and sessions are not restored: they are in the cluster's registry, not in the namespace's database. A key revoked since the backup stays revoked and one minted since still works; mint the keys the new cluster needs with `orama namespace keys create`. It does not create the namespace, redeploy deployments or functions onto the new cluster's nodes, or copy the pinned content (IPFS Cluster accepts each pin; the content only arrives if it is still reachable on IPFS). Backups are taken when you run the command: there is no schedule and no storage deal.
+
+## The database image is checked first
+
+A database image (a restore's, or an `orama namespace rqlite import`'s) is checked before RQLite loads it, because once loaded every gateway of the namespace serves writes against it. The gateway writes it to a temporary file and opens it read-only in SQLite. It refuses the image with 400, writing nothing, unless it is an intact SQLite database with no trigger (tenant SQL cannot create one), no view over a platform table, and no stored-object record naming content that the registry records only against other namespaces (such a record would let you read another tenant's content). Older backups may still carry plaintext `api_keys` rows and stored-object records of other namespaces; nothing reads them, so they are accepted, and after the load the gateway removes them.
+
+## Limits and behaviour
+
+- Each gateway runs **one** whole-database transfer at a time (`backup`, `restore`, `rqlite export`, `rqlite import`) and answers 429 while one is running.
+- Because a backup and its restore request are held in memory whole, they are capped: a namespace database over **256 MiB**, more than **50,000 pinned CIDs**, or more than **8 MiB** of pins and secrets together is refused with 413, and so is an `rqlite import` over 256 MiB. While it seals a backup the gateway holds about three copies of the database.
+- These four routes run on the **namespace's own gateway**, so the commands go to `ns-<name>.<base-domain>`. With `ORAMA_TOKEN`, set `ORAMA_API_URL` to that host. Both read and write deadlines are five minutes on these routes (a database of 256 MiB needs about 1 MiB/s).
+- RQLite 8 forwards `/db/backup` and `/db/load` from a follower to the leader itself. The gateway never follows a redirect (a redirected POST would be re-sent without its body) and reports one as an error.
+
+## Export and import the database alone
+
+```bash
+orama namespace rqlite export --output myapp.sqlite
+orama namespace rqlite import --input myapp.sqlite     # DESTRUCTIVE: replaces the namespace database
+```
+
+Import is checked the same way as a restore.
+
+## Per-database backups (SQLite)
+
+```bash
+orama db backup appdb
+orama db backups appdb
+```
+
+Backups of the per-namespace SQLite databases are stored in IPFS. See [Databases](/docs/developer/databases).

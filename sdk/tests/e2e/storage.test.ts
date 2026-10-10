@@ -1,13 +1,7 @@
-import { describe, it, expect, beforeAll } from "vitest";
-import { createTestClient, skipIfNoGateway } from "./setup";
+import { describe, it, expect } from "vitest";
+import { createTestClient, hasGateway } from "./setup";
 
-describe("Storage", () => {
-  beforeAll(() => {
-    if (skipIfNoGateway()) {
-      console.log("Skipping storage tests");
-    }
-  });
-
+describe.skipIf(!hasGateway())("Storage", () => {
   it("should upload a file", async () => {
     const client = await createTestClient();
     const testContent = "Hello, IPFS!";

@@ -1,144 +1,116 @@
-# Security
+# Hardening checklist
 
-The Orama Network implements defense-in-depth security across network, authentication, data storage, and process isolation layers. This page covers the security architecture and hardening measures that protect your node and the cluster.
+The reasons are on [Security model](/docs/architecture/security-model) and [Secrets and keys](/docs/architecture/secrets-and-keys). This page is what to check on a node you operate, with the command for each, and what the installer already does for you.
 
-## Network Isolation
+Run these on the node (`orama ssh <ip>`), as root or with `sudo`. Most are also watched by `orama status`, which raises an alert when one drifts.
 
-### WireGuard Mesh
+## What the installer sets up
 
-All inter-node communication travels over an encrypted WireGuard VPN mesh (`10.0.0.0/24`). No cluster ports are exposed publicly — only SSH (22), HTTPS (443), WireGuard (51820), and optionally Anyone relay (9001).
+You do not configure these. Install and upgrade write them, and `orama status` warns if they drift.
 
-Internal services (RQLite, Olric, IPFS, Gateway) bind to WireGuard IPs and are unreachable from the public internet.
+| Area | What is in place |
+|---|---|
+| Network | Firewall `ufw` with only 22, 53 (nameservers), 80, 443, 51820/udp, plus TURN ports when WebRTC is on; the mesh admitted on `wg0` only; IPv6 disabled system-wide; every Orama rule tagged `orama` |
+| Listeners | RQLite, Olric, gateways, pub/sub, Kubo and IPFS Cluster on loopback or the WireGuard address only |
+| Authentication | RQLite always started with `-auth` (a missing auth file refuses to start); every internal endpoint requires an overlay source address and a MAC made from the cluster secret. Coordination stamps (v3) bind the method, path, body, a nonce and the destination port, so a stamp for the index gateway is no good at a namespace gateway on the same node; node-api and ACME stamps carry a single-use nonce that the receiver remembers for two minutes. Stamps from the previous release (v2, un-nonced) are still accepted for one release during a rolling upgrade, and a captured one can be replayed once inside that window |
+| Vault | Guardians require a session token and an Ed25519 ownership signature on every share read and write, and the guardian port is reachable only over WireGuard ([Vault guardians](/docs/operator/vault-guardians)) |
+| Accounts | Services as `orama` (CoreDNS as `orama-coredns`, the SFU as `orama-sfu`, Tor as `debian-tor`, ntfy as `ntfy`); `/opt/orama/bin` is `root:orama` 0750 |
+| systemd | `ProtectSystem=strict`, `NoNewPrivileges`, `PrivateDevices` and more on the namespace units |
+| Memory | `MemorySwapMax=0` on secret-bearing units, swap off, suid core dumps off, core dumps discarded, apport masked, `kernel.yama.ptrace_scope=1` |
+| Software | Archives verified against `/etc/orama/archive-signers` before anything is installed |
 
-### IPv6
+## Verify
 
-IPv6 is disabled system-wide to prevent services bound to `0.0.0.0` from being reachable via IPv6, which would bypass the IPv4 firewall rules.
+### The firewall and listeners
 
-### CIDR Enforcement
-
-The WireGuard subnet uses a strict `/24` mask across all components (firewall, rate limiter, auth module, iptables rules). This prevents other tenants on shared VPS providers from reaching cluster services via overlapping `10.x.x.x` address ranges.
-
-## Authentication
-
-### Wallet-Based Auth
-
-Client authentication uses cryptographic wallet signatures (EVM via RootWallet, Solana via Phantom):
-
-1. Client requests a challenge nonce
-2. Client signs the nonce with their wallet private key
-3. Server verifies the signature and issues a JWT
-4. JWT is used for subsequent requests (15-minute expiry, refresh token support)
-
-### API Keys
-
-API keys provide long-lived credentials scoped to a namespace. Keys are stored as **HMAC-SHA256 hashes** using a server-side secret — the raw key is never stored in the database and is only shown once at creation time. Save it securely.
-
-### Refresh Tokens
-
-Refresh tokens are stored as **SHA-256 hashes**. If the database is compromised, attackers cannot use the hashes to impersonate users.
-
-### Internal Service Auth
-
-All internal services require authentication:
-
-- **RQLite** — HTTP basic auth on all queries and writes
-- **Olric** — Memberlist gossip encrypted with a shared 32-byte key
-- **IPFS Cluster** — TrustedPeers restricted to known cluster peer IDs
-- **Internal WG endpoints** — Cluster secret required for peer management
-- **Vault** — Session token required for push/pull operations
-- **WebSockets** — Origin header validated against the node's domain
-
-## Data Protection
-
-### At Rest
-
-- **TURN secrets** encrypted with AES-256-GCM in the database (key derived from cluster secret)
-- **OramaOS nodes** — Full-disk LUKS2 encryption with Shamir key distribution (see the OramaOS page)
-- **Refresh tokens and API keys** — Stored as cryptographic hashes, not plaintext
-
-### In Transit
-
-- **Client ↔ Gateway** — TLS 1.3 via Caddy with automatic ACME certificates
-- **Node ↔ Node** — WireGuard (ChaCha20-Poly1305)
-- **Olric gossip** — Memberlist encryption key
-- **Node join** — TOFU certificate pinning (CA fingerprint embedded in invite token)
-
-## Process Isolation
-
-### Dedicated User
-
-All services run as the `orama` user instead of root. Services that need privileged ports (Caddy on 80/443, CoreDNS on 53) use Linux capabilities (`CAP_NET_BIND_SERVICE`) instead of running as root.
-
-### systemd Hardening
-
-Every service unit includes security directives:
-
-```
-ProtectSystem=strict       — read-only filesystem except explicit paths
-ProtectHome=yes            — no access to /home
-NoNewPrivileges=yes        — cannot escalate privileges
-PrivateDevices=yes         — no access to physical devices
-ProtectKernelTunables=yes  — cannot modify kernel parameters
-ProtectKernelModules=yes   — cannot load kernel modules
-RestrictNamespaces=yes     — cannot create new namespaces
-ReadWritePaths=/opt/orama/.orama  — only writable path
+```bash
+sudo ufw status verbose            # only the ports above, rules tagged "orama"
+sudo ss -tlnup                     # nothing from Orama listens on 0.0.0.0 except 80, 443, 53, 22, 51820
 ```
 
-### OramaOS Sandboxing
+Anything else on a public interface is a finding. Rules without the `orama` comment are yours; Orama never removes them. Do not add rules for the internal ports (10000 and up).
 
-On OramaOS nodes, services get additional isolation via Linux namespaces and seccomp:
+### The mesh
 
-- **Mount namespace** — each service only sees its own data directory as writable
-- **UTS namespace** — isolated hostname
-- **Seccomp filtering** — per-service syscall allowlist (e.g., RQLite gets fsync/fdatasync for WAL, Gateway gets sendfile for HTTP)
+```bash
+sudo wg show wg0                   # one peer per other node, recent handshakes
+orama status mesh --env <env>     # from your computer: peers against the N-1 a full mesh needs
+```
 
-## Supply Chain Security
+### The archive trust anchor
 
-### Binary Signing
+```bash
+cat /etc/orama/archive-signers     # one lowercase 0x address per line: yours, and only yours
+ls -l /etc/orama/archive-signers   # root:root 0644, in a root-only directory
+```
 
-All build archives are signed with the Orama rootwallet (EVM signature). During installation, the signature is verified against the embedded public key. Unsigned or tampered archives are rejected.
+A signer you do not recognise means someone with the old signer's key rotated the list ([Build and sign](/docs/operator/build-and-sign#rotating-who-is-trusted)).
 
-### OramaOS Image Signing
+### Secrets and keys
 
-OramaOS images are signed with the same rootwallet. The agent verifies signatures before applying A/B partition updates. Failed signature verification prevents the update from being installed.
-
-### dm-verity
-
-OramaOS uses dm-verity on the root filesystem to detect any modification to the OS image at the block level. If the rootfs is tampered with, the kernel refuses to mount it.
-
-## WebSocket Security
-
-All WebSocket upgraders validate the `Origin` header against the node's configured domain. This prevents cross-site WebSocket hijacking — a malicious webpage cannot open a WebSocket connection to your Orama node on behalf of a logged-in user.
-
-Non-browser clients (which don't send an Origin header) are still allowed.
-
-## WebRTC Security
-
-- **SFU binds only to WireGuard IPs** — never exposed on public interfaces
-- **Forced relay mode** — `iceTransportPolicy: relay` enforced server-side, preventing direct peer connections
-- **HMAC credentials** — Per-namespace TURN shared secrets with 10-minute TTL
-- **TURN secrets encrypted at rest** — AES-256-GCM in the database
-
-## Secrets Management
-
-Cluster secrets are stored in `/opt/orama/.orama/secrets/`:
+```bash
+sudo ls -l /opt/orama/.orama/secrets/          # cluster-secret, rqlite-password, rqlite-auth.json, api-key-hmac-secret, node-key.pem: mode 0600
+sudo ls -ld /var/lib/orama-gateway-keys/index  # root, 0400 files
+sudo ls -l /etc/wireguard/wg0.conf             # 0600
+```
 
 | Secret | Purpose |
-|--------|---------|
-| `cluster-secret` | Cluster identity, used for internal endpoint auth |
-| `rqlite-auth.json` | RQLite HTTP basic auth credentials |
+|---|---|
+| `cluster-secret` | Cluster identity; the root for MAC keys and the IPFS Cluster private network |
+| `rqlite-password`, `rqlite-auth.json` | HTTP and Raft access to every RQLite. `rqlited` requires them |
 | `api-key-hmac-secret` | HMAC key for API key hashing |
-| `olric-encryption-key` | Olric memberlist gossip encryption |
+| `node-key.pem` | This node's Ed25519 identity key |
 
-These are generated at cluster genesis and distributed to joining nodes via the encrypted join response over WireGuard.
+These are generated at genesis and delivered to joining nodes in the encrypted join response. **A disk snapshot of an Ubuntu node exposes them.** Treat the node's disk like a credential, and never copy a secret off a node or paste one into a ticket.
 
-## Security Checklist for Operators
+### Memory hygiene
 
-After setting up a node, verify:
+```bash
+sysctl fs.suid_dumpable kernel.core_pattern kernel.yama.ptrace_scope net.ipv6.conf.all.disable_ipv6
+# fs.suid_dumpable = 0, kernel.core_pattern = |/bin/false, kernel.yama.ptrace_scope = 1, disable_ipv6 = 1
+swapon --show                      # nothing
+systemctl is-enabled apport        # masked
+```
 
-1. `ss -tlnp` — only expected ports are listening (22, 53, 80, 443, 51820)
-2. `ss -tlnp6` — no IPv6 listeners
-3. `curl http://10.0.0.x:5001/db/query` without auth — returns 401
-4. `wg show wg0` — recent handshakes with all peers
-5. `ps aux | grep orama` — services running as `orama` user, not root
-6. `orama monitor report --env <env>` — all health checks pass
+### Tor
+
+```bash
+sudo orama node status             # orama-namespace-tor@index active
+sudo ss -tlnp | grep 9050          # bound on 127.0.0.1 only
+```
+
+### Certificates and DNS
+
+```bash
+orama status dns --env <env>      # certificate days left, resolution
+```
+
+### Time
+
+Clocks must agree: the certificate store's lease, MACs (one minute either side), join tickets (30 seconds) and Raft all depend on it. Every node should run NTP; `orama status` warns above 5 seconds of skew and goes critical above 60.
+
+## Habits that keep a cluster safe
+
+- **Never fix a node by hand.** Fix in source, test, then roll out a signed archive. A hand edit is lost on the next deployment and invisible to the audit trail.
+- **Roll out signed archives only**, with `orama maint rollout`, one node at a time ([Upgrades](/docs/operator/upgrades)).
+- **Use the CLI, not `systemctl`**, on nodes. The CLI checks quorum and ordering.
+- **Keep the RootWallet account that signs archives offline-safe.** Its recovery phrase is the cluster's upgrade key. Rotate signers with two builds when a key may be exposed.
+- **Rotate the index gateway signing key** after upgrading from 0.122.x, and `orama maint operator rotate-secrets --rotate` after any suspicion that a node's disk was read ([Cluster administration](/docs/operator/cluster-admin#key-rotation)).
+- **Run `orama maint operator rotate-secrets` once every gateway is upgraded.** A deployment's environment is sealed to its namespace and deployment id (`enc:v2`), so a ciphertext copied onto another row does not open. A cluster created on this release has that from its first row; an upgraded cluster keeps writing the unbound form, because a gateway from before the change cannot open `enc:v2`, until `rotate-secrets` turns bound writes on.
+- **Back up the registry** and test a restore ([Upgrades](/docs/operator/upgrades#back-up-the-registry-first)).
+- **Remove nodes properly.** `orama node remove` revokes the node's key at once; `wipe` does not tell the cluster anything.
+
+## When a node is suspect
+
+1. `orama node remove --env <env> --node <ip>` from your computer (it checks quorum first).
+2. Rotate secrets: `orama maint operator rotate-secrets --rotate` and `orama maint operator rotate-signing-key`.
+3. Wipe the machine, and treat its disk as compromised ([Wipe a node](/docs/operator/clean-node)).
+4. If the cluster secret itself may be known, plan a full rebuild: rotating the cluster secret and WireGuard keys has no tooling and needs a maintenance window.
+
+## Known gaps to plan around
+
+- Ubuntu node operators have root and SSH. Admit operators you trust, or wait for [OramaOS](/docs/operator/orama-os).
+- Disk encryption on Ubuntu nodes is a design only.
+- ntfy has no auth file (loopback is the control); Olric memberlist is not encrypted (WireGuard is the control).
+- WireGuard key rotation and cluster-secret rotation are manual.
+- See the full list on [Security model](/docs/architecture/security-model#what-this-does-not-defend-against).

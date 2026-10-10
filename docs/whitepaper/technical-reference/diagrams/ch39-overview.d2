@@ -1,0 +1,41 @@
+direction: right
+
+clients: "Callers" {
+  wallet: "wallet, explorer, SDK" {shape: person}
+  cli: "orama chain / global / storage / cluster" {shape: person}
+  svc: "orama-global services\nprovider, archiver, repair, indexer, reporter"
+}
+
+gw: "Cluster gateway\ncore/pkg/gateway/handlers/chainread" {
+  proxy: "/v1/chain/ allowlist proxy"
+}
+
+node: "oramad (one process)" {
+  comet: "CometBFT v0.39.4\nconsensus, mempool, P2P 31000, RPC 31001"
+  base: "BaseApp\nABCI++ handlers" {
+    inc: "inclusion handlers\nExtendVote, VerifyVoteExtension,\nPrepareProposal, ProcessProposal"
+    ante: "ante chain (19 decorators)\nor signer-less chain (4)"
+  }
+  sdk: "SDK modules\nauth bank staking slashing\ndistribution evidence feegrant\nupgrade consensus genutil"
+  orama: "Orama modules\nemission fees power token\nnodes storage archive relay\nhouses cnft market shielded\nwasmpolicy (+ x/wasm with libwasmvm)"
+  stores: "IAVL stores (pebbledb)\n+ shielded nullifier db" {shape: cylinder}
+  native: "native code\nlibwasmvm, Orchard verifier library,\nout-of-process verifier binary"
+  api: "gRPC 31002, REST 31003,\nPrometheus 31004"
+}
+
+idx: "orama-global indexer\n127.0.0.1:31015"
+
+clients.wallet -> gw.proxy: "HTTPS GET/POST /v1/chain/..."
+clients.cli -> gw.proxy: "HTTPS (default read path)"
+clients.cli -> node.comet: "CometBFT RPC (--rpc)\nabci_query, broadcast_tx_sync"
+clients.svc -> node.comet: "loopback RPC 31001\nchain/client/node"
+gw.proxy -> node.comet: "abci_query, broadcast_tx_sync,\nstatus, block, tx"
+gw.proxy -> node.api: "REST (supply, pool, validators)"
+gw.proxy -> idx: "/index/v1/..."
+idx -> node.comet: "follows blocks"
+node.comet <-> node.base: "ABCI++"
+node.base -> node.sdk
+node.base -> node.orama
+node.sdk -> node.stores
+node.orama -> node.stores
+node.orama -> node.native: "cgo / exec"

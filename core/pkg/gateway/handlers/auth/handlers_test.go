@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 	"testing"
 
 	authsvc "github.com/DeBrosOfficial/network/pkg/gateway/auth"
+	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"go.uber.org/zap"
 )
@@ -43,21 +45,6 @@ type mockNetworkClient struct {
 
 func (m *mockNetworkClient) Database() DatabaseClient {
 	return m.db
-}
-
-// mockClusterProvisioner implements ClusterProvisioner as a no-op.
-type mockClusterProvisioner struct{}
-
-func (m *mockClusterProvisioner) CheckNamespaceCluster(_ context.Context, _ string) (string, string, bool, error) {
-	return "", "", false, nil
-}
-
-func (m *mockClusterProvisioner) ProvisionNamespaceCluster(_ context.Context, _ int, _, _ string) (string, string, error) {
-	return "", "", nil
-}
-
-func (m *mockClusterProvisioner) GetClusterStatusByID(_ context.Context, _ string) (interface{}, error) {
-	return nil, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -94,12 +81,6 @@ func TestNewHandlers(t *testing.T) {
 	}
 }
 
-func TestSetClusterProvisioner(t *testing.T) {
-	h := NewHandlers(testLogger(), nil, nil, "default", noopInternalAuth)
-	// Should not panic.
-	h.SetClusterProvisioner(&mockClusterProvisioner{})
-}
-
 // --- ChallengeHandler tests -----------------------------------------------
 
 func TestChallengeHandler_MissingWallet(t *testing.T) {
@@ -111,7 +92,7 @@ func TestChallengeHandler_MissingWallet(t *testing.T) {
 	// So we must supply a non-nil *authsvc.Service.  We can create one with
 	// an empty signing key (NewService returns error for empty PEM only if
 	// the PEM is non-empty but unparseable).  An empty PEM is fine.
-	svc, err := authsvc.NewService(testLogger(), nil, "", "default")
+	svc, err := authsvc.NewService(testLogger(), emptyRegistryNet{}, "", "default")
 	if err != nil {
 		t.Fatalf("failed to create auth service: %v", err)
 	}
@@ -136,7 +117,7 @@ func TestChallengeHandler_MissingWallet(t *testing.T) {
 }
 
 func TestChallengeHandler_InvalidMethod(t *testing.T) {
-	svc, err := authsvc.NewService(testLogger(), nil, "", "default")
+	svc, err := authsvc.NewService(testLogger(), emptyRegistryNet{}, "", "default")
 	if err != nil {
 		t.Fatalf("failed to create auth service: %v", err)
 	}
@@ -174,65 +155,80 @@ func TestChallengeHandler_NilAuthService(t *testing.T) {
 
 // --- WhoamiHandler tests --------------------------------------------------
 
-func TestWhoamiHandler_NoAuth(t *testing.T) {
-	h := NewHandlers(testLogger(), nil, nil, "default", noopInternalAuth)
+// whoamiHandlers builds handlers with a real service and no database, which is
+// what a gateway that can answer "who is this credential" but not "what may it
+// do" looks like.
+func whoamiHandlers(t *testing.T) *Handlers {
+	t.Helper()
+	svc, err := authsvc.NewService(testLogger(), emptyRegistryNet{}, "", "default")
+	if err != nil {
+		t.Fatalf("auth service: %v", err)
+	}
+	return NewHandlers(testLogger(), svc, nil, "default", noopInternalAuth)
+}
 
+// Reaching whoami takes a credential the middleware accepted, so an empty
+// context is the gateway that has no auth layer in front of it. The honest
+// answer is nobody, not a blank identity that reads as one.
+func TestWhoamiHandler_NoAuth(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v1/auth/whoami", nil)
 	rec := httptest.NewRecorder()
 
-	h.WhoamiHandler(rec, req)
+	whoamiHandlers(t).WhoamiHandler(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
 	}
-
 	m := decodeBody(t, rec)
-	// When no auth context is set, "authenticated" should be false.
-	if auth, ok := m["authenticated"].(bool); !ok || auth {
+	if authed, ok := m["authenticated"].(bool); !ok || authed {
 		t.Fatalf("expected authenticated=false, got %v", m["authenticated"])
 	}
-	if method, ok := m["method"].(string); !ok || method != "api_key" {
-		t.Fatalf("expected method='api_key', got %v", m["method"])
+	if method, _ := m["method"].(string); method != "none" {
+		t.Fatalf("expected method='none', got %v", m["method"])
 	}
-	if ns, ok := m["namespace"].(string); !ok || ns != "default" {
+	if ns, _ := m["namespace"].(string); ns != "default" {
 		t.Fatalf("expected namespace='default', got %v", m["namespace"])
 	}
 }
 
-func TestWhoamiHandler_WithAPIKey(t *testing.T) {
-	h := NewHandlers(testLogger(), nil, nil, "default", noopInternalAuth)
+// The answer used to contain the caller's own API key, which put a 90-day
+// credential into a terminal, a shell history and whatever logged the response.
+func TestWhoamiHandler_neverReturnsTheKeyItWasCalledWith(t *testing.T) {
+	const key = "ak_test123:default"
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/auth/whoami", nil)
-	ctx := req.Context()
-	ctx = context.WithValue(ctx, CtxKeyAPIKey, "ak_test123:default")
+	ctx := context.WithValue(req.Context(), CtxKeyAPIKey, key)
 	ctx = context.WithValue(ctx, CtxKeyNamespaceOverride, "default")
-	req = req.WithContext(ctx)
-
 	rec := httptest.NewRecorder()
-	h.WhoamiHandler(rec, req)
+
+	whoamiHandlers(t).WhoamiHandler(rec, req.WithContext(ctx))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
 	}
+	if body := rec.Body.String(); strings.Contains(body, key) {
+		t.Fatalf("the response contains the caller's own key:\n%s", body)
+	}
 
 	m := decodeBody(t, rec)
-	if auth, ok := m["authenticated"].(bool); !ok || !auth {
+	if authed, ok := m["authenticated"].(bool); !ok || !authed {
 		t.Fatalf("expected authenticated=true, got %v", m["authenticated"])
 	}
-	if method, ok := m["method"].(string); !ok || method != "api_key" {
+	if method, _ := m["method"].(string); method != "api_key" {
 		t.Fatalf("expected method='api_key', got %v", m["method"])
 	}
-	if key, ok := m["api_key"].(string); !ok || key != "ak_test123:default" {
-		t.Fatalf("expected api_key='ak_test123:default', got %v", m["api_key"])
+	if _, present := m["api_key"]; present {
+		t.Error("the response still has an api_key member")
 	}
-	if ns, ok := m["namespace"].(string); !ok || ns != "default" {
-		t.Fatalf("expected namespace='default', got %v", m["namespace"])
+	if sub, _ := m["subject"].(string); sub == "" {
+		t.Error("a key credential has no subject, so nothing identifies it")
+	}
+	if p, _ := m["principal"].(string); p != string(authsvc.PrincipalServiceAccount) {
+		t.Errorf("principal = %v, want %s", m["principal"], authsvc.PrincipalServiceAccount)
 	}
 }
 
 func TestWhoamiHandler_WithJWT(t *testing.T) {
-	h := NewHandlers(testLogger(), nil, nil, "default", noopInternalAuth)
-
 	claims := &authsvc.JWTClaims{
 		Iss:       "orama-gateway",
 		Sub:       "0xWALLET",
@@ -246,27 +242,39 @@ func TestWhoamiHandler_WithJWT(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v1/auth/whoami", nil)
 	ctx := context.WithValue(req.Context(), CtxKeyJWT, claims)
 	ctx = context.WithValue(ctx, CtxKeyNamespaceOverride, "myns")
-	req = req.WithContext(ctx)
-
 	rec := httptest.NewRecorder()
-	h.WhoamiHandler(rec, req)
+
+	whoamiHandlers(t).WhoamiHandler(rec, req.WithContext(ctx))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
 	}
-
 	m := decodeBody(t, rec)
-	if auth, ok := m["authenticated"].(bool); !ok || !auth {
+	if authed, ok := m["authenticated"].(bool); !ok || !authed {
 		t.Fatalf("expected authenticated=true, got %v", m["authenticated"])
 	}
-	if method, ok := m["method"].(string); !ok || method != "jwt" {
+	if method, _ := m["method"].(string); method != "jwt" {
 		t.Fatalf("expected method='jwt', got %v", m["method"])
 	}
-	if sub, ok := m["subject"].(string); !ok || sub != "0xWALLET" {
+	if sub, _ := m["subject"].(string); sub != "0xWALLET" {
 		t.Fatalf("expected subject='0xWALLET', got %v", m["subject"])
 	}
-	if ns, ok := m["namespace"].(string); !ok || ns != "myns" {
+	if ns, _ := m["namespace"].(string); ns != "myns" {
 		t.Fatalf("expected namespace='myns', got %v", m["namespace"])
+	}
+	// A wallet subject is a wallet principal, whatever the grant lookup can or
+	// cannot reach.
+	if p, _ := m["principal"].(string); p != string(authsvc.PrincipalWallet) {
+		t.Errorf("principal = %v, want %s", m["principal"], authsvc.PrincipalWallet)
+	}
+	// No database, so no grant can be read. The answer is "holds nothing here",
+	// not a role invented from the fact that the token verified.
+	if role := m["role"]; role != nil {
+		t.Errorf("role = %v, want null when no grant could be read", role)
+	}
+	grants, ok := m["grants"].([]any)
+	if !ok || len(grants) != 0 {
+		t.Errorf("grants = %v, want an empty list", m["grants"])
 	}
 }
 
@@ -304,7 +312,7 @@ func TestLogoutHandler_MissingRefreshToken(t *testing.T) {
 }
 
 func TestLogoutHandler_InvalidMethod(t *testing.T) {
-	svc, err := authsvc.NewService(testLogger(), nil, "", "default")
+	svc, err := authsvc.NewService(testLogger(), emptyRegistryNet{}, "", "default")
 	if err != nil {
 		t.Fatalf("failed to create auth service: %v", err)
 	}
@@ -321,7 +329,7 @@ func TestLogoutHandler_InvalidMethod(t *testing.T) {
 }
 
 func TestLogoutHandler_AllTrueNoJWT(t *testing.T) {
-	svc, err := authsvc.NewService(testLogger(), nil, "", "default")
+	svc, err := authsvc.NewService(testLogger(), emptyRegistryNet{}, "", "default")
 	if err != nil {
 		t.Fatalf("failed to create auth service: %v", err)
 	}
@@ -347,7 +355,7 @@ func TestLogoutHandler_AllTrueNoJWT(t *testing.T) {
 // --- RefreshHandler tests -------------------------------------------------
 
 func TestRefreshHandler_MissingRefreshToken(t *testing.T) {
-	svc, err := authsvc.NewService(testLogger(), nil, "", "default")
+	svc, err := authsvc.NewService(testLogger(), emptyRegistryNet{}, "", "default")
 	if err != nil {
 		t.Fatalf("failed to create auth service: %v", err)
 	}
@@ -371,7 +379,7 @@ func TestRefreshHandler_MissingRefreshToken(t *testing.T) {
 }
 
 func TestRefreshHandler_InvalidMethod(t *testing.T) {
-	svc, err := authsvc.NewService(testLogger(), nil, "", "default")
+	svc, err := authsvc.NewService(testLogger(), emptyRegistryNet{}, "", "default")
 	if err != nil {
 		t.Fatalf("failed to create auth service: %v", err)
 	}
@@ -407,7 +415,7 @@ func TestRefreshHandler_NilAuthService(t *testing.T) {
 // Retry-After header — NOT a 401 that would force a locked device into an
 // impossible SIWE re-auth mid-call-ring.
 func TestRefreshHandler_TransientError_returns503Retryable(t *testing.T) {
-	svc, err := authsvc.NewService(testLogger(), nil, "", "default")
+	svc, err := authsvc.NewService(testLogger(), emptyRegistryNet{}, "", "default")
 	if err != nil {
 		t.Fatalf("failed to create auth service: %v", err)
 	}
@@ -431,7 +439,7 @@ func TestRefreshHandler_TransientError_returns503Retryable(t *testing.T) {
 // --- APIKeyToJWTHandler tests ---------------------------------------------
 
 func TestAPIKeyToJWTHandler_MissingKey(t *testing.T) {
-	svc, err := authsvc.NewService(testLogger(), nil, "", "default")
+	svc, err := authsvc.NewService(testLogger(), emptyRegistryNet{}, "", "default")
 	if err != nil {
 		t.Fatalf("failed to create auth service: %v", err)
 	}
@@ -453,7 +461,7 @@ func TestAPIKeyToJWTHandler_MissingKey(t *testing.T) {
 }
 
 func TestAPIKeyToJWTHandler_InvalidMethod(t *testing.T) {
-	svc, err := authsvc.NewService(testLogger(), nil, "", "default")
+	svc, err := authsvc.NewService(testLogger(), emptyRegistryNet{}, "", "default")
 	if err != nil {
 		t.Fatalf("failed to create auth service: %v", err)
 	}
@@ -488,7 +496,7 @@ func TestAPIKeyToJWTHandler_NilAuthService(t *testing.T) {
 // (EdDSA signing key set).
 func jwtCapableService(t *testing.T, hmacSecret string) *authsvc.Service {
 	t.Helper()
-	svc, err := authsvc.NewService(testLogger(), nil, "", "default")
+	svc, err := authsvc.NewService(testLogger(), emptyRegistryNet{}, "", "default")
 	if err != nil {
 		t.Fatalf("NewService failed: %v", err)
 	}
@@ -499,7 +507,7 @@ func jwtCapableService(t *testing.T, hmacSecret string) *authsvc.Service {
 	if err != nil {
 		t.Fatalf("ed25519 keygen failed: %v", err)
 	}
-	svc.SetEdDSAKey(edPriv)
+	svc.SetEdDSAKey(edPriv, "")
 	return svc
 }
 
@@ -548,9 +556,7 @@ func TestAPIKeyToJWTHandler_HashedKeyLookup(t *testing.T) {
 	}
 }
 
-// TestAPIKeyToJWTHandler_RawKeyFallback covers the rolling-upgrade fallback:
-// a legacy row stored under the RAW (unhashed) key still resolves.
-func TestAPIKeyToJWTHandler_RawKeyFallback(t *testing.T) {
+func TestAPIKeyToJWTHandler_RawKeyRejected(t *testing.T) {
 	const rawKey = "ak_legacy_unhashed"
 	svc := jwtCapableService(t, "hmac-secret-xyz")
 	hashed := svc.HashAPIKey(rawKey)
@@ -571,8 +577,8 @@ func TestAPIKeyToJWTHandler_RawKeyFallback(t *testing.T) {
 
 	h.APIKeyToJWTHandler(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200 via raw-key fallback, got %d (body: %s)", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("raw unhashed key must 401 after dual-lookup removal, got %d (body: %s)", rec.Code, rec.Body.String())
 	}
 }
 
@@ -596,100 +602,126 @@ func TestAPIKeyToJWTHandler_UnknownKey(t *testing.T) {
 	}
 }
 
-func TestApiKeyLookupCandidates(t *testing.T) {
-	// Distinct hash → hashed first, raw fallback.
-	got := apiKeyLookupCandidates("raw", "hashed")
-	if len(got) != 2 || got[0] != "hashed" || got[1] != "raw" {
-		t.Errorf("distinct: expected [hashed raw], got %v", got)
+// TestAPIKeyToJWTHandler_PrefersAPIKeyDBOverNetClient proves that once
+// SetAPIKeyDB has been wired (as gateway.go does via apiKeyDB(), which
+// resolves to the global/core API-key registry), the fallback lookup uses it
+// instead of netClient, avoiding a redundant query against the core-bound
+// adapter. The netClient mock fails the test if queried at all.
+func TestAPIKeyToJWTHandler_PrefersAPIKeyDBOverNetClient(t *testing.T) {
+	const rawKey = "ak_live_nsdb"
+	svc := jwtCapableService(t, "hmac-secret-xyz")
+	hashed := svc.HashAPIKey(rawKey)
+
+	coreDB := &mockDatabaseClient{queryFn: func(_ string, _ ...interface{}) (*QueryResult, error) {
+		t.Error("handler must query apiKeyDB, not the core-bound netClient, once SetAPIKeyDB is wired")
+		return &QueryResult{Count: 0}, nil
+	}}
+	nsDB := &mockDatabaseClient{queryFn: func(_ string, args ...interface{}) (*QueryResult, error) {
+		if len(args) > 0 {
+			if k, _ := args[0].(string); k == hashed {
+				return nsLookupRow("vrf708"), nil
+			}
+		}
+		return &QueryResult{Count: 0}, nil
+	}}
+
+	h := NewHandlers(testLogger(), svc, &mockNetworkClient{db: coreDB}, "default", noopInternalAuth)
+	h.SetAPIKeyDB(nsDB)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/auth/token", nil)
+	req.Header.Set("X-API-Key", rawKey)
+	rec := httptest.NewRecorder()
+
+	h.APIKeyToJWTHandler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (body: %s)", rec.Code, rec.Body.String())
 	}
-	// No HMAC secret (hashed == raw) → single candidate, no duplicate query.
+	m := decodeBody(t, rec)
+	if m["namespace"] != "vrf708" {
+		t.Errorf("expected namespace vrf708, got %v", m["namespace"])
+	}
+}
+
+// TestAPIKeyToJWTHandler_TrustsInternalAuthContext is the regression for the
+// two-gateway bug (bugboard #147/#148): on a NAMESPACE gateway the api_keys
+// table is EMPTY (keys live in the main cluster RQLite only). The main gateway
+// validates the key first and forwards the resolved namespace + scopes via the
+// trusted X-Internal-Auth-* headers, which the namespace gateway's auth
+// middleware places on the request context. The exchange handler must mint the
+// JWT from that context, NOT re-query the local DB — the pre-fix self-query
+// returned "invalid API key" for EVERY real key on a namespace gateway.
+//
+// We prove it by wiring a DB whose query FAILS the test if it is ever called.
+func TestAPIKeyToJWTHandler_TrustsInternalAuthContext(t *testing.T) {
+	svc := jwtCapableService(t, "hmac-secret-xyz")
+	db := &mockDatabaseClient{queryFn: func(_ string, _ ...interface{}) (*QueryResult, error) {
+		t.Error("handler must NOT query the DB when the namespace is pre-validated on the request context")
+		return &QueryResult{Count: 0}, nil
+	}}
+	h := NewHandlers(testLogger(), svc, &mockNetworkClient{db: db}, "default", noopInternalAuth)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/auth/token", nil)
+	req.Header.Set("X-API-Key", "ak_runtime:anchat-test")
+	ctx := context.WithValue(req.Context(), ctxkeys.NamespaceOverride, "anchat-test")
+	ctx = context.WithValue(ctx, ctxkeys.Scopes, authsvc.ParseScopes("invoke,proxy,push,storage,webrtc"))
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	h.APIKeyToJWTHandler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 from pre-validated context, got %d (body: %s)", rec.Code, rec.Body.String())
+	}
+	m := decodeBody(t, rec)
+	if m["namespace"] != "anchat-test" {
+		t.Errorf("expected namespace anchat-test, got %v", m["namespace"])
+	}
+	// The minted JWT must carry the key's EXACT scopes so the scope gate enforces
+	// them on the exchanged token exactly as on the raw key (no escalation).
+	tok, _ := m["access_token"].(string)
+	claims, err := svc.ParseAndVerifyJWT(tok)
+	if err != nil {
+		t.Fatalf("minted token failed verification: %v", err)
+	}
+	if got := claims.Custom["scopes"]; got != "invoke,proxy,push,storage,webrtc" {
+		t.Errorf("expected canonical scopes on the JWT, got %q", got)
+	}
+}
+
+func TestApiKeyLookupCandidates(t *testing.T) {
+	got := apiKeyLookupCandidates("raw", "hashed")
+	if len(got) != 1 || got[0] != "hashed" {
+		t.Errorf("distinct: expected [hashed], got %v", got)
+	}
 	got = apiKeyLookupCandidates("raw", "raw")
 	if len(got) != 1 || got[0] != "raw" {
 		t.Errorf("equal: expected [raw], got %v", got)
 	}
 }
 
-// --- RegisterHandler tests ------------------------------------------------
+// --- consumeNonce ---------------------------------------------------------
 
-func TestRegisterHandler_MissingFields(t *testing.T) {
-	svc, err := authsvc.NewService(testLogger(), nil, "", "default")
+// A challenge that cannot be claimed must stop the request. This is the gate
+// that makes a wallet signature single-use, so it fails closed: when the
+// service cannot guarantee single use, the handler answers 503 rather than
+// letting the request through.
+func TestConsumeNonce_FailsClosedWhenSingleUseNotGuaranteed(t *testing.T) {
+	// A service with no rqlite client cannot perform the conditional UPDATE
+	// that makes consumption atomic.
+	svc, err := authsvc.NewService(testLogger(), emptyRegistryNet{}, "", "default")
 	if err != nil {
-		t.Fatalf("failed to create auth service: %v", err)
+		t.Fatalf("NewService: %v", err)
 	}
 	h := NewHandlers(testLogger(), svc, nil, "default", noopInternalAuth)
 
-	tests := []struct {
-		name string
-		req  RegisterRequest
-	}{
-		{"missing wallet", RegisterRequest{Nonce: "n", Signature: "s"}},
-		{"missing nonce", RegisterRequest{Wallet: "0x123", Signature: "s"}},
-		{"missing signature", RegisterRequest{Wallet: "0x123", Nonce: "n"}},
-		{"all empty", RegisterRequest{}},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			body, _ := json.Marshal(tc.req)
-			req := httptest.NewRequest(http.MethodPost, "/v1/auth/register", bytes.NewReader(body))
-			req.Header.Set("Content-Type", "application/json")
-			rec := httptest.NewRecorder()
-
-			h.RegisterHandler(rec, req)
-
-			if rec.Code != http.StatusBadRequest {
-				t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rec.Code)
-			}
-
-			m := decodeBody(t, rec)
-			if errMsg, ok := m["error"].(string); !ok || errMsg != "wallet, nonce and signature are required" {
-				t.Fatalf("expected error 'wallet, nonce and signature are required', got %v", m["error"])
-			}
-		})
-	}
-}
-
-func TestRegisterHandler_InvalidMethod(t *testing.T) {
-	svc, err := authsvc.NewService(testLogger(), nil, "", "default")
-	if err != nil {
-		t.Fatalf("failed to create auth service: %v", err)
-	}
-	h := NewHandlers(testLogger(), svc, nil, "default", noopInternalAuth)
-
-	req := httptest.NewRequest(http.MethodGet, "/v1/auth/register", nil)
 	rec := httptest.NewRecorder()
-
-	h.RegisterHandler(rec, req)
-
-	if rec.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("expected status %d, got %d", http.StatusMethodNotAllowed, rec.Code)
+	if h.consumeNonce(context.Background(), rec, "0xWallet", "nonce123", "default") {
+		t.Fatal("consumeNonce reported success without atomic single-use")
 	}
-}
-
-func TestRegisterHandler_NilAuthService(t *testing.T) {
-	h := NewHandlers(testLogger(), nil, nil, "default", noopInternalAuth)
-
-	body, _ := json.Marshal(RegisterRequest{Wallet: "0x123", Nonce: "n", Signature: "s"})
-	req := httptest.NewRequest(http.MethodPost, "/v1/auth/register", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-
-	h.RegisterHandler(rec, req)
-
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected status %d, got %d", http.StatusServiceUnavailable, rec.Code)
 	}
-}
-
-// --- markNonceUsed (tested indirectly via nil safety) ----------------------
-
-func TestMarkNonceUsed_NilNetClient(t *testing.T) {
-	// markNonceUsed is unexported but returns early when h.netClient == nil.
-	// We verify it does not panic by constructing a Handlers with nil netClient
-	// and invoking it through the struct directly (same-package test).
-	h := NewHandlers(testLogger(), nil, nil, "default", noopInternalAuth)
-	// This should not panic.
-	h.markNonceUsed(context.Background(), 1, "0xwallet", "nonce123")
 }
 
 // --- resolveNamespace (tested indirectly via nil safety) --------------------
@@ -745,21 +777,31 @@ func TestExtractAPIKey_ApiKeyScheme(t *testing.T) {
 	}
 }
 
-func TestExtractAPIKey_QueryParam(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/?api_key=ak_query", nil)
-
-	got := extractAPIKey(req)
-	if got != "ak_query" {
-		t.Fatalf("expected 'ak_query', got '%s'", got)
+// A credential in a URL reaches the access log, the Referer of whatever the
+// page loads next, and the browser's history. This handler used to accept one,
+// unlike the middleware, which takes a query-string key only on a WebSocket
+// upgrade — and /v1/auth/token is never an upgrade.
+func TestExtractAPIKey_refusesAQueryStringCredential(t *testing.T) {
+	for _, target := range []string{
+		"/v1/auth/token?api_key=ak_query",
+		"/v1/auth/token?token=ak_tokenval",
+		"/v1/auth/token?api_key=ak_query&token=ak_tokenval",
+	} {
+		req := httptest.NewRequest(http.MethodPost, target, nil)
+		if got := extractAPIKey(req); got != "" {
+			t.Errorf("%s: took a key from the URL: %q", target, got)
+		}
 	}
 }
 
-func TestExtractAPIKey_TokenQueryParam(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/?token=ak_tokenval", nil)
+// A header still works on the same request, so refusing the query string is
+// not refusing the caller.
+func TestExtractAPIKey_takesTheHeaderOnARequestThatAlsoHasAQueryString(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/v1/auth/token?api_key=ak_from_url", nil)
+	req.Header.Set("X-API-Key", "ak_from_header")
 
-	got := extractAPIKey(req)
-	if got != "ak_tokenval" {
-		t.Fatalf("expected 'ak_tokenval', got '%s'", got)
+	if got := extractAPIKey(req); got != "ak_from_header" {
+		t.Fatalf("got %q, want the header's key", got)
 	}
 }
 
@@ -795,7 +837,7 @@ func TestExtractAPIKey_AuthorizationNoSchemeJWTSkipped(t *testing.T) {
 // --- ChallengeHandler invalid JSON ----------------------------------------
 
 func TestChallengeHandler_InvalidJSON(t *testing.T) {
-	svc, err := authsvc.NewService(testLogger(), nil, "", "default")
+	svc, err := authsvc.NewService(testLogger(), emptyRegistryNet{}, "", "default")
 	if err != nil {
 		t.Fatalf("failed to create auth service: %v", err)
 	}
@@ -820,7 +862,7 @@ func TestChallengeHandler_InvalidJSON(t *testing.T) {
 // --- WhoamiHandler with namespace override --------------------------------
 
 func TestWhoamiHandler_NamespaceOverride(t *testing.T) {
-	h := NewHandlers(testLogger(), nil, nil, "default", noopInternalAuth)
+	h := whoamiHandlers(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/auth/whoami", nil)
 	ctx := context.WithValue(req.Context(), CtxKeyNamespaceOverride, "custom-ns")
@@ -842,7 +884,7 @@ func TestWhoamiHandler_NamespaceOverride(t *testing.T) {
 // --- LogoutHandler invalid JSON -------------------------------------------
 
 func TestLogoutHandler_InvalidJSON(t *testing.T) {
-	svc, err := authsvc.NewService(testLogger(), nil, "", "default")
+	svc, err := authsvc.NewService(testLogger(), emptyRegistryNet{}, "", "default")
 	if err != nil {
 		t.Fatalf("failed to create auth service: %v", err)
 	}
@@ -862,7 +904,7 @@ func TestLogoutHandler_InvalidJSON(t *testing.T) {
 // --- RefreshHandler invalid JSON ------------------------------------------
 
 func TestRefreshHandler_InvalidJSON(t *testing.T) {
-	svc, err := authsvc.NewService(testLogger(), nil, "", "default")
+	svc, err := authsvc.NewService(testLogger(), emptyRegistryNet{}, "", "default")
 	if err != nil {
 		t.Fatalf("failed to create auth service: %v", err)
 	}
@@ -877,4 +919,104 @@ func TestRefreshHandler_InvalidJSON(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rec.Code)
 	}
+}
+
+// The exchanged token used to carry the raw API key as its subject. A JWT
+// payload is base64, not encryption, so anyone who saw such a token — in an
+// access log, a proxy trace, a devtools tab, the internal-auth header on the
+// hop to a namespace gateway, or the `subject` /v1/auth/whoami echoes back —
+// could decode a live 90-day credential out of a 15-minute one.
+func TestAPIKeyToJWTHandler_theTokenDoesNotCarryTheKey(t *testing.T) {
+	const rawKey = "orama_sk_3kFj9sPqR2vX7mNb_1a2b3c"
+	svc := jwtCapableService(t, "hmac-secret-xyz")
+	hashed := svc.HashAPIKey(rawKey)
+
+	db := &mockDatabaseClient{queryFn: func(_ string, args ...interface{}) (*QueryResult, error) {
+		if len(args) > 0 {
+			if k, _ := args[0].(string); k == hashed {
+				return nsLookupRow("vrf708"), nil
+			}
+		}
+		return &QueryResult{Count: 0}, nil
+	}}
+	h := NewHandlers(testLogger(), svc, &mockNetworkClient{db: db}, "default", noopInternalAuth)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/auth/token", nil)
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	rec := httptest.NewRecorder()
+	h.APIKeyToJWTHandler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (body: %s)", rec.Code, rec.Body.String())
+	}
+	token, _ := decodeBody(t, rec)["access_token"].(string)
+	if token == "" {
+		t.Fatal("no access token")
+	}
+
+	// The whole token, decoded the way anyone holding it can.
+	if strings.Contains(decodedJWTPayload(t, token), rawKey) {
+		t.Fatal("the API key is recoverable from the access token")
+	}
+
+	claims, err := svc.ParseAndVerifyJWT(token)
+	if err != nil {
+		t.Fatalf("the token does not verify: %v", err)
+	}
+	if claims.Sub != hashed {
+		t.Errorf("subject = %q, want the stored form of the key", claims.Sub)
+	}
+}
+
+// The subject has to stay the one the rest of the system already writes and
+// looks under, or revoking a key stops reaching the tokens exchanged from it.
+func TestAPIKeyToJWTHandler_theSubjectIsWhatRevocationWrites(t *testing.T) {
+	const rawKey = "orama_sk_3kFj9sPqR2vX7mNb_1a2b3c"
+	svc := jwtCapableService(t, "hmac-secret-xyz")
+	hashed := svc.HashAPIKey(rawKey)
+
+	db := &mockDatabaseClient{queryFn: func(_ string, args ...interface{}) (*QueryResult, error) {
+		if len(args) > 0 {
+			if k, _ := args[0].(string); k == hashed {
+				return nsLookupRow("vrf708"), nil
+			}
+		}
+		return &QueryResult{Count: 0}, nil
+	}}
+	h := NewHandlers(testLogger(), svc, &mockNetworkClient{db: db}, "default", noopInternalAuth)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/auth/token", nil)
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	rec := httptest.NewRecorder()
+	h.APIKeyToJWTHandler(rec, req)
+
+	token, _ := decodeBody(t, rec)["access_token"].(string)
+	claims, err := svc.ParseAndVerifyJWT(token)
+	if err != nil {
+		t.Fatalf("the token does not verify: %v", err)
+	}
+	// RevokeKey records the hash; the token's subject must be the same string
+	// or the revocation covers nothing.
+	if claims.Sub != svc.HashAPIKey(rawKey) {
+		t.Errorf("subject %q is not what RevokeKey records", claims.Sub)
+	}
+}
+
+// decodedJWTPayload returns a token's header and payload as text, which is all
+// anyone holding the token has to do to read them.
+func decodedJWTPayload(t *testing.T, token string) string {
+	t.Helper()
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		t.Fatalf("not a JWT: %q", token)
+	}
+	out := ""
+	for _, part := range parts[:2] {
+		raw, err := base64.RawURLEncoding.DecodeString(part)
+		if err != nil {
+			t.Fatalf("decode %q: %v", part, err)
+		}
+		out += string(raw)
+	}
+	return out
 }

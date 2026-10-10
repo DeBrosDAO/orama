@@ -1,0 +1,23 @@
+shape: sequence_diagram
+
+cm: "CertMagic in Caddy"
+pv: "dns.providers.orama"
+gw: "Index gateway"
+db: "Index RQLite\n(dns_records)"
+dns: "CoreDNS"
+ca: "ACME CA"
+
+cm -> pv: "AppendRecords(zone, TXT)"
+pv -> pv: "body = fqdn + value; MAC under ACME key\n(ts, method, path, query, SHA-256 of body)"
+pv -> gw: "POST /v1/internal/acme/present"
+gw -> gw: "MAC ok (60 s)? else 404\n_acme-challenge.<name> under the base?\nvalue is 43 base64url characters?"
+gw -> db: "INSERT TXT, TTL 60, namespace acme,\nON CONFLICT DO NOTHING"
+gw -> gw: "sleep 100 ms"
+gw -> pv: "200"
+cm -> ca: "challenge ready"
+ca -> dns: "TXT _acme-challenge.<name>"
+dns -> db: "SELECT dns_records"
+ca -> cm: "valid"
+cm -> pv: "DeleteRecords"
+pv -> gw: "POST /v1/internal/acme/cleanup"
+gw -> db: "DELETE this fqdn + value, namespace acme"

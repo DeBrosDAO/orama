@@ -1,0 +1,14 @@
+direction: down
+
+obs: "Epoch boundary observed\n(state.json: seen epoch, its start)"
+due: "Closed epoch owed:\nspan from, to"
+chk: "Settled, or window over?\nthen drop with an error" {shape: diamond}
+load: "LoadVotes: *.vote files of this authority,\nvalid-after inside the span\nmalformed vote: error, not skipped"
+cov: "Fewer than 4/5 of expected votes:\nErrIncompleteArchive, nothing reported" {shape: diamond}
+obsv: "Observe: median Measured, Running share,\nflag majority, latest ed25519"
+narrow: "Keep: registered, same ed25519,\nnot this operator's own relay"
+save: "Write report-E.json"
+send: "Submit chunks of at most 1000 relays\nwith the same inputs_root"
+done: "Remove report-E.json,\nwrite monitor.json" {shape: oval}
+
+obs -> due -> chk -> load -> cov -> obsv -> narrow -> save -> send -> done

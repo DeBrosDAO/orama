@@ -39,9 +39,9 @@ type reactorPool struct {
 	target     int // ready instances to keep per module
 	maxModules int // cap on distinct module pools (LRU-evicted)
 
-	mu      sync.Mutex
-	pools   map[string]*modulePool
-	useSeq  uint64 // monotonic, for LRU eviction
+	mu     sync.Mutex
+	pools  map[string]*modulePool
+	useSeq uint64 // monotonic, for LRU eviction
 }
 
 type modulePool struct {

@@ -4,11 +4,9 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 
@@ -17,6 +15,11 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/node"
 	"go.uber.org/zap"
 )
+
+// missingConfigHint tells an operator how node.yaml comes to exist. Install is
+// the only thing that writes it; there is no separate config command.
+const missingConfigHint = "\nnode.yaml is written by 'orama maint node install' (with --join and --token on a node\n" +
+	"that joins an existing cluster); this machine has not been installed.\n"
 
 // setup_logger initializes a logger for the given component.
 func setup_logger(component logging.Component) (logger *logging.ColoredLogger) {
@@ -101,15 +104,14 @@ func select_data_dir_check(configName *string) {
 			zap.Error(err))
 		fmt.Fprintf(os.Stderr, "\n❌ Configuration Error:\n")
 		fmt.Fprintf(os.Stderr, "Config file not found at %s\n", configPath)
-		fmt.Fprintf(os.Stderr, "\nGenerate it with one of:\n")
-		fmt.Fprintf(os.Stderr, "  orama config init --type node\n")
-		fmt.Fprintf(os.Stderr, "  orama config init --type node --peers '<peer_multiaddr>'\n")
+		fmt.Fprint(os.Stderr, missingConfigHint)
 		os.Exit(1)
 	}
 }
 
-// startNode starts the node with the given configuration and port
-func startNode(ctx context.Context, cfg *config.Config, port int) error {
+// startNode creates the node and hands it to its boot supervisor, then blocks
+// until the context is cancelled.
+func startNode(ctx context.Context, cfg *config.Config) error {
 	logger := setup_logger(logging.ComponentNode)
 
 	n, err := node.NewNode(cfg)
@@ -123,96 +125,13 @@ func startNode(ctx context.Context, cfg *config.Config, port int) error {
 		return err
 	}
 
-	// Expand data directory path for peer.info file
-	dataDir := os.ExpandEnv(cfg.Node.DataDir)
-	if strings.HasPrefix(dataDir, "~") {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			logger.Error("failed to determine home directory: %v", zap.Error(err))
-			dataDir = cfg.Node.DataDir
-		} else {
-			dataDir = filepath.Join(home, dataDir[1:])
-		}
-	}
-
-	// Save the peer ID to a file for CLI access
-	peerID := n.GetPeerID()
-	peerInfoFile := filepath.Join(dataDir, "peer.info")
-
-	// Extract advertise IP from config (prefer http_adv_address, fallback to raft_adv_address)
-	advertiseIP := "0.0.0.0" // Default fallback
-	if cfg.Discovery.HttpAdvAddress != "" {
-		if host, _, err := net.SplitHostPort(cfg.Discovery.HttpAdvAddress); err == nil && host != "" && host != "localhost" {
-			advertiseIP = host
-		}
-	} else if cfg.Discovery.RaftAdvAddress != "" {
-		if host, _, err := net.SplitHostPort(cfg.Discovery.RaftAdvAddress); err == nil && host != "" && host != "localhost" {
-			advertiseIP = host
-		}
-	}
-
-	// Determine IP protocol (IPv4 or IPv6) for multiaddr
-	ipProtocol := "ip4"
-	if ip := net.ParseIP(advertiseIP); ip != nil && ip.To4() == nil {
-		ipProtocol = "ip6"
-	}
-
-	peerMultiaddr := fmt.Sprintf("/%s/%s/tcp/%d/p2p/%s", ipProtocol, advertiseIP, port, peerID)
-
-	if err := os.WriteFile(peerInfoFile, []byte(peerMultiaddr), 0644); err != nil {
-		logger.Error("Failed to save peer info: %v", zap.Error(err))
-	} else {
-		logger.Info("Peer info saved to: %s", zap.String("path", peerInfoFile))
-		logger.Info("Peer multiaddr: %s", zap.String("path", peerMultiaddr))
-	}
-
-	logger.Info("Node started successfully")
+	logger.Info("Node supervision started; components converge in the background")
 
 	// Wait for context cancellation
 	<-ctx.Done()
 
 	// Stop node
 	return n.Stop()
-}
-
-// apply_flag_overrides applies command line argument overrides to the config
-func apply_flag_overrides(cfg *config.Config, p2pPort, rqlHTTP, rqlRaft *int, rqlJoinAddr *string, advAddr *string, dataDir *string) {
-	logger := setup_logger(logging.ComponentNode)
-
-	// Apply RQLite HTTP port override
-	if *rqlHTTP != 5001 {
-		cfg.Database.RQLitePort = *rqlHTTP
-		logger.ComponentInfo(logging.ComponentNode, "Overriding RQLite HTTP port", zap.Int("port", *rqlHTTP))
-	}
-
-	// Apply RQLite Raft port override
-	if *rqlRaft != 7001 {
-		cfg.Database.RQLiteRaftPort = *rqlRaft
-		logger.ComponentInfo(logging.ComponentNode, "Overriding RQLite Raft port", zap.Int("port", *rqlRaft))
-	}
-
-	// Apply P2P port override
-	if *p2pPort != 4001 {
-		cfg.Node.ListenAddresses = []string{
-			fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", *p2pPort),
-		}
-		logger.ComponentInfo(logging.ComponentNode, "Overriding P2P port", zap.Int("port", *p2pPort))
-	}
-
-	// Apply RQLite join address
-	if *rqlJoinAddr != "" {
-		cfg.Database.RQLiteJoinAddress = *rqlJoinAddr
-		logger.ComponentInfo(logging.ComponentNode, "Setting RQLite join address", zap.String("address", *rqlJoinAddr))
-	}
-
-	if *advAddr != "" {
-		cfg.Discovery.HttpAdvAddress = fmt.Sprintf("%s:%d", *advAddr, cfg.Database.RQLitePort)
-		cfg.Discovery.RaftAdvAddress = fmt.Sprintf("%s:%d", *advAddr, cfg.Database.RQLiteRaftPort)
-	}
-
-	if *dataDir != "" {
-		cfg.Node.DataDir = *dataDir
-	}
 }
 
 // printValidationErrors prints aggregated validation errors and exits.
@@ -291,15 +210,9 @@ func main() {
 	}
 	logger.ComponentInfo(logging.ComponentNode, "Configuration loaded from YAML file", zap.String("path", configPath))
 
-	// Set default advertised addresses if empty
-	if cfg.Discovery.HttpAdvAddress == "" {
-		cfg.Discovery.HttpAdvAddress = fmt.Sprintf("localhost:%d", cfg.Database.RQLitePort)
-	}
-	if cfg.Discovery.RaftAdvAddress == "" {
-		cfg.Discovery.RaftAdvAddress = fmt.Sprintf("localhost:%d", cfg.Database.RQLiteRaftPort)
-	}
-
-	// Validate configuration
+	// Validate configuration. The advertise addresses are required and have no
+	// default: rqlited binds the http_adv_address host, and every client on the
+	// node reaches it there (rqlite.IndexEndpoint).
 	if errs := cfg.Validate(); len(errs) > 0 {
 		printValidationErrors(errs)
 	}
@@ -320,21 +233,6 @@ func main() {
 		zap.String("rqlite_join_address", cfg.Database.RQLiteJoinAddress),
 		zap.String("data_directory", cfg.Node.DataDir))
 
-	// Extract P2P port from listen addresses
-	p2pPort := 4001 // default
-	if len(cfg.Node.ListenAddresses) > 0 {
-		// Parse port from multiaddr like "/ip4/0.0.0.0/tcp/4001"
-		parts := strings.Split(cfg.Node.ListenAddresses[0], "/")
-		for i, part := range parts {
-			if part == "tcp" && i+1 < len(parts) {
-				if port, err := strconv.Atoi(parts[i+1]); err == nil {
-					p2pPort = port
-					break
-				}
-			}
-		}
-	}
-
 	// Create context for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -343,7 +241,7 @@ func main() {
 	errChan := make(chan error, 1)
 	doneChan := make(chan struct{})
 	go func() {
-		if err := startNode(ctx, cfg, p2pPort); err != nil {
+		if err := startNode(ctx, cfg); err != nil {
 			errChan <- err
 		}
 		close(doneChan)

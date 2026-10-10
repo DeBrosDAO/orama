@@ -1,236 +1,236 @@
-# Getting Started
+# Quickstart
 
-Welcome to the **Orama Network** developer documentation. Orama is a decentralized infrastructure platform that provides distributed databases, caching, file storage, real-time messaging, serverless functions, encrypted vault storage, and application deployments -- all accessible through a unified SDK and CLI.
+This takes you from nothing to a deployed site and a working database call. It assumes someone runs an Orama cluster you can reach (your own, see [Install a cluster from scratch](/docs/operator/install-from-scratch), or one you were given access to). You need its gateway URL, for example `https://cluster.example.com`.
 
-## Core Services
-
-| Service | Description |
-|---------|-------------|
-| **Deployments** | Deploy static sites, Next.js apps, Go backends, and Node.js backends |
-| **Databases** | Distributed SQL databases (RQLite) with replication across nodes |
-| **SQLite** | Per-namespace SQLite databases with IPFS-backed backups |
-| **Cache** | Distributed key-value caching powered by Olric |
-| **Storage** | Decentralized file storage on IPFS with automatic pinning |
-| **PubSub** | Real-time messaging over WebSockets with presence tracking |
-| **Functions** | Serverless WebAssembly function execution |
-| **Vault** | Encrypted secret storage distributed across guardian nodes via Shamir splitting |
-| **Proxy** | Anonymous HTTP proxying through the Anyone privacy relay network |
-
-## Architecture Overview
-
-The Orama Network is a mesh of VPS nodes connected via WireGuard tunnels. Each node runs a gateway that handles request routing, authentication, and service orchestration.
-
-| Component | Purpose |
-|-----------|---------|
-| Gateway | API routing, authentication, rate limiting |
-| RQLite | Distributed SQL database (Raft consensus) |
-| Olric | Distributed cache and DMap |
-| IPFS + IPFS Cluster | Decentralized file storage with replication |
-| CoreDNS | Authoritative DNS for deployment subdomains |
-| Caddy | TLS termination and reverse proxy |
-| WASM Runtime | Serverless function execution |
-| Anyone Relay | Privacy proxy network |
-
-## Install the SDK
+## 1. Install the tools
 
 ```bash
-npm install @debros/network-ts-sdk
-# or
-pnpm add @debros/network-ts-sdk
+brew install DeBrosDAO/tap/orama      # the CLI
+orama version
+npm install @debros/orama             # the SDK, in your app
 ```
 
-## Initialize the Client
+You also need a wallet that can sign. Install [RootWallet](/docs/rootwallet/install) (desktop, or the `rw` CLI), create a wallet, and leave it unlocked. Orama has no accounts and no passwords: your wallet address is your identity.
 
-```typescript
-import { createClient } from "@debros/network-ts-sdk";
+## 2. Tell the CLI which cluster to use
 
-const client = createClient({
-  baseURL: "https://your-node.orama-devnet.network",
-  apiKey: "your-api-key",
-});
-```
-
-The `baseURL` is the HTTPS URL of any Orama gateway node. API keys are obtained through wallet-based authentication (see below).
-
-## Authentication
-
-Orama uses wallet-based cryptographic authentication. The flow is:
-
-1. Request a challenge nonce from the gateway
-2. Sign the nonce with your wallet (EVM or Solana)
-3. Submit the signature to receive a JWT and API key
-4. Use the API key for subsequent requests
-
-### SDK Authentication Flow
-
-```typescript
-const client = createClient({
-  baseURL: "https://your-node.orama-devnet.network",
-});
-
-// Step 1: Request challenge
-const challenge = await client.auth.challenge({
-  wallet: "0xYourWalletAddress",
-  namespace: "my-namespace",
-});
-
-// Step 2: Sign the nonce with your wallet (app-specific signing logic)
-const signature = await signMessage(challenge.nonce);
-
-// Step 3: Verify and get tokens
-const session = await client.auth.verify({
-  wallet: "0xYourWalletAddress",
-  nonce: challenge.nonce,
-  signature,
-  namespace: "my-namespace",
-  chain_type: "ETH", // or "SOL" for Solana
-});
-
-// session.access_token — JWT for authenticated requests
-// session.api_key — persistent API key for your namespace
-```
-
-After verification, the SDK automatically stores the JWT and API key for subsequent requests.
-
-### CLI Authentication
-
-The Orama CLI (`orama`) supports interactive authentication with RootWallet (EVM) or Phantom (Solana):
+A fresh CLI knows no cluster. Add yours:
 
 ```bash
-# Set your target environment
-orama env use devnet
+orama network add mycluster https://cluster.example.com
+orama network use mycluster
+```
 
-# Authenticate (interactive wallet selection)
+`orama network list` and `orama network current` show what is configured. If the cluster uses Let's Encrypt staging certificates, add `--ca-file le-staging.pem` ([TLS and certificates](/docs/operator/tls-certificates#trusting-a-staging-cluster-from-your-cli)).
+
+## 3. Sign in
+
+```bash
 orama auth login
-
-# Check who you are logged in as
-orama auth whoami
-
-# View detailed auth status
-orama auth status
-
-# List all stored credentials for the current environment
-orama auth list
-
-# Switch between stored credentials
-orama auth switch
-
-# Clear all credentials
-orama auth logout
+orama auth whoami      # asks the gateway who you are and what you may do
+orama auth status      # what is stored on this machine (asks nobody)
 ```
 
-#### Login Flags
+The CLI asks RootWallet to sign a challenge from the gateway. What it stores is a **session**: an access token that lasts 15 minutes and renews itself from a 30-day refresh token. This is the *lobby* sign-in: you are in, but you hold no namespace yet. On a machine with no wallet (a server over SSH, CI), `orama auth login` prints a code, and `orama auth approve <code>` on a machine that has your wallet approves it. See [Sign-in and sessions](/docs/developer/sign-in).
 
-| Flag | Description |
-|------|-------------|
-| `--namespace <name>` | Target namespace |
-| `--simple` | Use simple auth without signature (dev only) |
-| `--wallet <0x...>` | Wallet address (implies `--simple`) |
+## 4. Create a namespace
 
-## Environment Management
-
-The CLI supports multiple environments. Each environment points to a different gateway cluster.
+A namespace is your own small cluster: a database, a cache and a gateway on three nodes. You own what you create.
 
 ```bash
-# List all environments
-orama env list
-
-# Show current active environment
-orama env current
-
-# Switch environment
-orama env use devnet
-orama env use testnet
-
-# Add a custom environment
-orama env add my-env https://my-gateway.example.com "My custom environment"
-
-# Remove a custom environment
-orama env remove my-env
+orama namespace create myapp
+orama auth login --namespace myapp
 ```
 
-Default environments:
+Creating a namespace does not sign you in to it; the second command does. Some clusters allow only their operators to create namespaces; if yours refuses, ask an operator ([Cluster administration](/docs/operator/cluster-admin#who-may-create-namespaces)). See [Namespaces](/docs/developer/namespaces).
 
-| Environment | Gateway URL |
-|-------------|-------------|
-| `production` | `https://dbrs.space` |
-| `devnet` | `https://orama-devnet.network` |
-| `testnet` | `https://orama-testnet.network` |
-
-The default active environment is `devnet`. You can override the gateway URL for any command by setting the `ORAMA_GATEWAY_URL` environment variable.
-
-## Quick Example: Deploy a Static Site
+## 5. Deploy something
 
 ```bash
-# Authenticate
-orama auth login
-
-# Deploy a built React/Vue/static site
-orama deploy static ./dist --name my-app
-
-# Check deployment status
-orama app get my-app
-
-# List all deployments
+mkdir site && echo '<h1>Hello from Orama</h1>' > site/index.html
+orama deploy static ./site --name www
 orama app list
+orama app get www
 ```
 
-Your app will be available at a URL like `https://my-app-f3o4if.orama-devnet.network`.
+`orama deploy static` publishes a directory as a deployment and prints its URL, a name under the cluster's base domain. Other runtimes: Next.js, Go and Node.js backends ([Deployments](/docs/developer/deployments)).
 
-## Quick Example: Use the Database
+## 6. Use a database
 
-```typescript
-const client = createClient({
-  baseURL: "https://your-node.orama-devnet.network",
-  apiKey: "your-api-key",
+```bash
+orama db create appdb
+orama db query appdb "CREATE TABLE notes (id INTEGER PRIMARY KEY, text TEXT)"
+orama db query appdb "INSERT INTO notes (text) VALUES ('hello')"
+orama db query appdb "SELECT * FROM notes"
+```
+
+This is a per-namespace SQLite database, reached from the CLI. The namespace also has a replicated SQL database (RQLite) that your code reaches through the SDK, shown next. See [Databases](/docs/developer/databases).
+
+## 7. Call it from code
+
+What a key may do depends on its grants. Two keys cover a typical app.
+
+**On a server, in CI or in a script:** an `admin` key. It reaches the control plane, including the namespace's RQLite database, so it never goes in a browser or mobile bundle.
+
+```bash
+orama namespace keys create --scope admin --label server
+```
+
+The command prints the key once, after a short report. Copy the line under `API KEY` into your secret store; it cannot be shown again.
+
+```ts
+import { createClient } from "@debros/orama";
+
+const server = createClient({
+  baseURL: "https://ns-myapp.cluster.example.com",
+  apiKey: process.env.ORAMA_API_KEY,
 });
 
-// Create a table
-await client.db.createTable(
-  "CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT, email TEXT)"
-);
-
-// Insert data
-await client.db.exec(
-  "INSERT INTO users (name, email) VALUES (?, ?)",
-  ["Alice", "alice@example.com"]
-);
-
-// Query data
-const users = await client.db.query("SELECT * FROM users WHERE name = ?", ["Alice"]);
+await server.db.createTable("CREATE TABLE messages (id INTEGER PRIMARY KEY, room TEXT, body TEXT)");
+await server.db.exec("INSERT INTO messages (room, body) VALUES (?, ?)", ["general", "hi"]);
+const rows = await server.db.query("SELECT * FROM messages WHERE room = ?", ["general"]);
 ```
 
-## CLI Command Overview
+**In a browser or mobile app:** a key with data-plane grants only, named explicitly. The `app-runtime` profile does not include `pubsub` or `cache`, so ask for them.
 
-The `orama` CLI provides these top-level commands:
+```bash
+orama namespace keys create --scope invoke,pubsub,cache --label web
+```
 
-| Command | Description |
-|---------|-------------|
-| `orama auth` | Authentication management (login, logout, whoami, status, list, switch) |
-| `orama env` | Environment management (list, current, use, add, remove) |
-| `orama deploy` | Deploy applications (static, nextjs, go, nodejs) |
-| `orama app` | Manage deployed applications (list, get, delete, rollback, logs, stats) |
-| `orama db` | Manage SQLite databases (create, query, list, backup, backups) |
-| `orama function` | Manage serverless functions (init, build, deploy, invoke, list, get, delete, logs, versions, secrets, triggers) |
-| `orama namespace` | Manage namespaces (list, delete, repair, enable, disable, webrtc-status) |
-| `orama inspect` | SSH-based cluster health inspection (operator tool) |
-| `orama monitor` | Real-time cluster monitoring (operator tool) |
-| `orama build` | Cross-compile binary archive for deployment (operator tool) |
-| `orama sandbox` | Manage ephemeral Hetzner Cloud clusters for testing (operator tool) |
-| `orama version` | Show CLI version |
+```ts
+const client = createClient({
+  baseURL: "https://ns-myapp.cluster.example.com",
+  apiKey: process.env.ORAMA_WEB_KEY,      // injected at build time
+});
 
-## Next Steps
+await client.cache.put("sessions", "alice", { seen: Date.now() }, "1h");
+await client.pubsub.publish("room:general", "hello");
+```
 
-- [SDK Reference](/docs/developer/sdk-reference) -- Full API reference for the TypeScript SDK
-- [Deployments](/docs/developer/deployments) -- Deploy static sites, Next.js apps, Go and Node.js backends
-- [Databases](/docs/developer/databases) -- Distributed SQL with RQLite
-- [Cache](/docs/developer/cache) -- Distributed caching with Olric
-- [Storage](/docs/developer/storage) -- Decentralized file storage on IPFS
-- [PubSub](/docs/developer/pubsub) -- Real-time messaging with WebSockets
-- [Functions](/docs/developer/functions) -- Serverless WebAssembly execution
-- [Vault](/docs/developer/vault) -- Encrypted distributed secret storage
-- [CLI Reference](/docs/developer/cli-reference) -- Full CLI command reference
+Storage is different: the gateway refuses a key on its own and wants the signed-in user as well, so upload after the user has signed in with their wallet ([Wallet login](/docs/developer/sdk-reference#wallet-login)):
 
----
+```ts
+const { cid } = await client.storage.upload(new Blob(["file contents"]), "hello.txt");
+```
 
-> **Note:** For node operator documentation (installation, monitoring, upgrades), switch to the **OPS** persona using the toggle in the sidebar.
+Where a key may live, and what each profile can do: [Access control and keys](/docs/developer/access-control). The full client: [TypeScript SDK](/docs/developer/sdk-reference).
+
+## CI and scripts
+
+Set `ORAMA_TOKEN` to an API key or a token. A key is exchanged for a session once per run. Mint the key once on your machine (add `--expires-in-days` to shorten its life, 90 days is the default), put it in your CI system's secret store, and expose it to the job:
+
+```bash
+orama namespace keys create --scope admin --label ci      # prints the key once; store it
+```
+
+```bash
+export ORAMA_TOKEN="$CI_ORAMA_KEY"      # from the CI secret store
+orama deploy static ./dist --name www --update
+```
+
+## Sessions, API keys, members and audit
+
+The CLI signs in with your wallet and stores a session, not a key: an access token that lasts 15 minutes and renews itself from a 30-day refresh token. `orama auth login` asks which namespace to sign in to; blank signs in without one. With no terminal to ask (a script, a pipe, CI) it does not prompt and signs in without one; pass `--namespace <name>` to choose.
+
+### Which machines are signed in
+
+```bash
+orama auth sessions                  # every live session for this wallet
+orama auth sessions revoke <id>      # end one
+orama auth sessions revoke --all     # end all of them
+```
+
+Ending a session stops it minting new access tokens, and refuses the access
+tokens it already minted — and closes the sockets they hold open — within ten
+seconds. A session issued before sessions carried an id cannot be named that
+way: its access tokens work until they expire, at most 15 minutes, and the
+command says so.
+
+### Namespaces and environments
+
+Creating a namespace is its own step, and the wallet that makes it owns it:
+
+```bash
+orama namespace create myapp
+orama auth login --namespace myapp
+```
+
+Signing in to a namespace that does not exist used to create it, so a typo made
+a namespace and one belonged to whoever happened to sign in first. It answers
+404 now, naming the command above.
+
+One machine can hold credentials for several environments. `orama auth list`
+shows them, `orama auth switch` changes the active one, and `orama auth logout`
+clears it. Which gateway a command talks to is decided by the active
+environment — see `orama network` — not by a flag on each command.
+
+Every command and flag is in the [CLI reference](/docs/developer/cli-overview), which is
+generated from the command tree rather than written by hand.
+
+### API keys for your application
+
+Deploying uses your own credentials. An application that talks to the gateway at
+runtime needs a key of its own, and which one depends on where the code runs:
+
+```bash
+# Safe in a browser bundle: data-plane grants only
+orama namespace keys create --scope app-runtime --label web
+
+# Server-side only: the whole control plane
+orama namespace keys create --scope admin --label ci
+
+orama namespace keys list
+orama namespace keys revoke --id <id>
+```
+
+A key carries a set of grants and the gateway refuses an operation whose grant
+the key does not hold, naming the one it needed. `--scope` takes a profile
+(`invoke-only`, `app-runtime`, `admin`) or an explicit grant list. See
+[Where a key belongs](/docs/developer/sdk-reference#where-a-key-belongs).
+
+Every key expires — 90 days by default, a year at most — and `orama namespace
+keys rotate --id <id>` mints a successor with the same grants while leaving the
+original alive for a week, so there is a window in which to deploy the new one.
+
+### Working with other people
+
+A namespace has one owner and any number of members, and a member holds a role:
+
+```bash
+orama members list
+orama members add 0xabc… --role admin     # the control plane
+orama members add 0xdef… --role runtime   # the data plane
+orama members remove 0xabc…
+orama members transfer 0xabc…             # hand the namespace over
+```
+
+`admin` is everything except ownership; `runtime` is invoke, storage, push,
+webrtc, proxy, pubsub and cache; `reader` is a member with no grant at all.
+Ownership is transferred rather than granted, and it is one step rather than a
+removal and a grant, so there is no moment where the namespace has no owner. You
+keep an admin grant, so handing a project over does not lock you out of it.
+
+### What happened, and who did it
+
+```bash
+orama audit                 # oldest first
+orama audit --follow        # and keep printing
+```
+
+Sign-ins, keys minted and revoked, grants given and taken away, deployments,
+functions, secrets and namespace changes, each with who did it and from where.
+Events are kept 90 days.
+
+The whole model — identities, roles, grants, tokens, and what each refusal
+means — is in the technical reference's authorization chapter (`docs/whitepaper/technical-reference/vol1/14-authorization.md`).
+
+## Where next
+
+| You want to | Read |
+|---|---|
+| Understand the unit you work in | [Namespaces](/docs/developer/namespaces) |
+| Let your users sign in with wallets | [Sign-in and sessions](/docs/developer/sign-in), [Devices](/docs/developer/devices) |
+| Invite teammates, scope a key | [Access control and keys](/docs/developer/access-control) |
+| Build | [Deployments](/docs/developer/deployments), [Databases](/docs/developer/databases), [Functions](/docs/developer/functions), [Storage](/docs/developer/storage), [Pub/sub](/docs/developer/pubsub), [WebRTC](/docs/developer/webrtc), [Push](/docs/developer/push) |
+| Look up a command | [CLI overview](/docs/developer/cli-overview) |
+| See what Orama is and is not | [How you talk to the network](/docs/developer/client-surface) |

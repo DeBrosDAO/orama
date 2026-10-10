@@ -1,0 +1,17 @@
+shape: sequence_diagram
+
+msg: "message server"
+iavl: "IAVL state"
+pend: "transient pending set"
+eb: "x/shielded EndBlock"
+db: "shielded_nullifiers database"
+commit: "Commit"
+
+msg -> iavl: "fold nullifiers into the accumulator, add to the count"
+msg -> pend: "MarkPending (set and ordered list)"
+eb -> pend: "pendingInOrder"
+eb -> db: "Store.Commit(height): purge records at or above height, write index n and log h, WriteSync"
+eb -> iavl: "recordAnchor"
+commit -> pend: "transient store cleared"
+db -> db: "a crash between EndBlock and Commit leaves the block's records"
+eb -> db: "the replay purges them first and writes its own"

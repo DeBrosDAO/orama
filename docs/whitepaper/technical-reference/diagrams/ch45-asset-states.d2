@@ -1,0 +1,12 @@
+direction: right
+
+none: "no asset"
+comp: "compressed leaf\nin a tree, nonce n"
+decomp: "decompressed asset\nrecord keyed by asset_id,\nowner fixed"
+burned: "burned\nleaf set to 32 zero bytes"
+
+none -> comp: "MsgMint (tree creator)\nnonce 0, batch of 1 to 64"
+comp -> comp: "MsgTransfer / MsgUpdateMetadata\n(owner or delegate), nonce + 1\nMsgSettle (market), nonce + 1"
+comp -> burned: "MsgBurn (owner or delegate)"
+comp -> decomp: "MsgDecompress (owner only)\nleaf zeroed, record stored"
+decomp -> comp: "MsgCompress (owner)\nappended to the same tree, nonce + 1"

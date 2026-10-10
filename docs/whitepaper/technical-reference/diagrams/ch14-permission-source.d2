@@ -1,0 +1,34 @@
+direction: down
+
+start: "callerPermissions(request)" {shape: oval}
+g: "a grant was resolved\nfor this request?"
+lobby1: "namespace is the lobby (default)?"
+empty1: "empty set" {shape: oval}
+pt: "grant principal is a service account?"
+key: "KeyPermissions(scopes of the key row,\nrole of its grant, selector)\nwithin both bounds" {shape: oval}
+wal: "PermissionsFor(role, selector)\nrole table, narrowed by the selector" {shape: oval}
+jwt: "a verified JWT on the request?"
+sub: "subject is not a wallet?\n(an exchanged key; a workload token also lands here)"
+ks: "PermissionsFromScopes(key row scopes)\n(empty for a workload token: no scopes on the context)" {shape: oval}
+lobby2: "lobby or no namespace?"
+empty2: "empty set" {shape: oval}
+ng: "NoGrantPermissions\ndata plane, pubsub read only" {shape: oval}
+sc: "key scopes on the context?"
+ks2: "PermissionsFromScopes" {shape: oval}
+empty3: "empty set" {shape: oval}
+
+start -> g
+g -> lobby1: "yes"
+lobby1 -> empty1: "yes"
+lobby1 -> pt: "no"
+pt -> key: "yes"
+pt -> wal: "no (wallet or app)"
+g -> jwt: "no"
+jwt -> sub: "yes"
+sub -> ks: "yes"
+sub -> lobby2: "no (wallet)"
+lobby2 -> empty2: "yes"
+lobby2 -> ng: "no"
+jwt -> sc: "no"
+sc -> ks2: "yes"
+sc -> empty3: "no"

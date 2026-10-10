@@ -1,0 +1,31 @@
+# How you talk to the network
+
+Humans use one CLI. Programs use the SDK and the gateway HTTP API. There is no Orama dashboard and no Orama MCP server.
+
+## Humans: the `orama` CLI
+
+One binary, two audiences. Both stay in `orama`.
+
+**Operators** run the node and the fleet: `orama setup` (join a network from fresh machines), `orama node` (setup, status, logs, doctor, upgrade, wipe, and more), `orama upgrade`, `orama remove`, `orama status`, `orama nodes`, `orama ssh`, `orama global` (global nodes), and `orama maint` for the maintainer work: `build`, `release`, `push`, `rollout`, `inspect`, `invite`, `sandbox`, `node install` and the rest.
+
+**Tenants** run a namespace: `deploy`, `app`, `function`, `db`, `domain`, `namespace`, `members`, `auth`, `audit`, `network` (which gateway the CLI talks to).
+
+Every command and flag is in the [CLI overview](/docs/developer/cli-overview) and its generated pages.
+
+## Programs: SDK and gateway HTTP
+
+A deployed application talks to its namespace gateway. It does not shell out to the CLI.
+
+| Surface | For |
+|---|---|
+| [TypeScript SDK](/docs/developer/sdk-reference) (`@debros/orama`) | Application code in JS or TS |
+| [Go client](/docs/developer/go-sdk) | Application code in Go |
+| [Gateway HTTP API](/docs/developer/api-surface) | The routes those clients call, and the ones they do not |
+
+Deploying an app, minting a key and managing nodes are the CLI's job. The SDK reaches a deliberate subset of the gateway (39 of 172 routes at the time of writing), and the API page records who owns each route.
+
+## Not this product
+
+- **No Orama dashboard.** The website is a landing page and these docs. Tenant web and mobile apps are applications you deploy; they call the SDK, and they are not an Orama control plane.
+- **No Orama MCP** for tenants or operators. Agents read the docs: `https://orama.network/llms.txt` is an index, and the markdown pages it lists are the documentation. That is documentation, not a product MCP.
+- Hosting-provider consoles and the Apple Developer dashboard are other people's products. Mentions of those in the operator docs are not an Orama dashboard.

@@ -34,7 +34,7 @@ func TestBuildPersistentInvocationContext_PropagatesJWTSubject(t *testing.T) {
 	// Simulate a JWT-authenticated request: middleware would have stashed
 	// the *auth.JWTClaims on the request context under ctxkeys.JWT.
 	claims := &auth.JWTClaims{
-		Sub:    "wallet-from-jwt-subject",
+		Sub:    "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB",
 		Custom: map[string]string{"role": "admin"},
 	}
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -57,9 +57,9 @@ func TestBuildPersistentInvocationContext_PropagatesJWTSubject(t *testing.T) {
 	// field, every function_invoke from inside a persistent WS instance
 	// loses the caller identity — see comment on the helper for the full
 	// story.
-	if got.CallerJWTSubject != "wallet-from-jwt-subject" {
+	if got.CallerJWTSubject != "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB" {
 		t.Errorf("CallerJWTSubject = %q; want %q (Layer 7 regression — see Feature #73)",
-			got.CallerJWTSubject, "wallet-from-jwt-subject")
+			got.CallerJWTSubject, "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB")
 	}
 
 	// Other identity fields the persistent invCtx is responsible for. These
@@ -85,6 +85,13 @@ func TestBuildPersistentInvocationContext_PropagatesJWTSubject(t *testing.T) {
 	}
 	if got.CallerClaims["role"] != "admin" {
 		t.Errorf("CallerClaims[role] = %q; want %q", got.CallerClaims["role"], "admin")
+	}
+	// A wallet JWT is allowed to invoke private functions. The stateless
+	// frame path copies that grant onto every nested call. The persistent
+	// context is built once, so losing it here refuses every rpc-router
+	// dispatch after the socket has already been accepted.
+	if !got.CallerHasInvoke {
+		t.Error("CallerHasInvoke = false; a wallet JWT must keep the invoke grant on the persistent socket")
 	}
 }
 
@@ -142,6 +149,14 @@ func TestBuildPersistentInvocationContext_MatchesStatelessHandler(t *testing.T) 
 	if got.CallerWallet != h.getWalletFromRequest(req) {
 		t.Errorf("CallerWallet drift: persistent=%q, helper=%q",
 			got.CallerWallet, h.getWalletFromRequest(req))
+	}
+	if got.CallerIsAdmin != h.getCallerIsAdminFromRequest(req) {
+		t.Errorf("CallerIsAdmin drift: persistent=%v, helper=%v",
+			got.CallerIsAdmin, h.getCallerIsAdminFromRequest(req))
+	}
+	if got.CallerHasInvoke != h.getCallerHasInvokeFromRequest(req) {
+		t.Errorf("CallerHasInvoke drift: persistent=%v, helper=%v",
+			got.CallerHasInvoke, h.getCallerHasInvokeFromRequest(req))
 	}
 	if got.CallerJWTSubject != h.getJWTSubjectFromRequest(req) {
 		t.Errorf("CallerJWTSubject drift: persistent=%q, helper=%q",

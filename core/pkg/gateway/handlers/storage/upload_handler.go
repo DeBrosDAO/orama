@@ -11,7 +11,9 @@ import (
 	"strings"
 	"time"
 
+	gwauth "github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/httputil"
+	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"go.uber.org/zap"
 )
@@ -49,6 +51,7 @@ func (h *Handlers) UploadHandler(w http.ResponseWriter, r *http.Request) {
 	contentType := r.Header.Get("Content-Type")
 	var reader io.Reader
 	var name string
+	var inputSize int64
 	var shouldPin bool = true // Default to true
 
 	if strings.HasPrefix(contentType, "multipart/form-data") {
@@ -67,6 +70,7 @@ func (h *Handlers) UploadHandler(w http.ResponseWriter, r *http.Request) {
 
 		reader = file
 		name = header.Filename
+		inputSize = header.Size
 
 		// Parse pin flag from form (default: true)
 		if pinValue := r.FormValue("pin"); pinValue != "" {
@@ -95,12 +99,62 @@ func (h *Handlers) UploadHandler(w http.ResponseWriter, r *http.Request) {
 
 		reader = bytes.NewReader(data)
 		name = req.Name
+		inputSize = int64(len(data))
 		// For JSON requests, pin defaults to true (can be extended if needed)
 	}
 
-	// Add to IPFS
 	ctx := r.Context()
-	addResp, err := h.ipfsClient.Add(ctx, reader, name)
+
+	// The name is the only thing a `storage:avatars/*` selector has to compare
+	// against, and it comes from the client. Normalising it first is what makes
+	// the comparison mean one thing: `/avatars/me.png` and `avatars//me.png`
+	// are the same object, and `avatars/../keys/x` is not under `avatars/` at
+	// all however it is spelled.
+	name, err := gwauth.NormalizeStoragePath(name)
+	if err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if !h.authorizeStoragePath(w, r, name, gwauth.ActionWrite) {
+		return
+	}
+
+	// Server-side per-namespace storage quota (bugboard #141). Reject BEFORE we
+	// add/pin so the namespace's RF-inclusive budget is a real ceiling, not a
+	// client-trusted gate. A namespace with no configured budget is unlimited
+	// (no-op). Fail-open on a transient quota-lookup error — availability over a
+	// hard cap for a DB hiccup.
+	//
+	// inputSize is the server-observed byte count (multipart part size / decoded
+	// JSON length), NOT a client-asserted field — a client can't understate it
+	// without sending fewer bytes. The recorded ledger uses addResp.Size (the
+	// IPFS DAG-wrapped size, marginally larger due to UnixFS framing), so the
+	// enforced cap is approximate at the framing-overhead level — acceptable for
+	// a coarse byte quota. (Pre-GA hardening: authoritative record-then-check
+	// with rollback + per-namespace serialization to close the concurrent-burst
+	// TOCTOU; deferred while enforcement is opt-in and unused.)
+	if exceeded, budget, projected, qErr := h.storageQuotaExceeded(ctx, namespace, inputSize); qErr != nil {
+		h.logger.ComponentWarn(logging.ComponentGeneral, "storage quota check failed; allowing upload (fail-open)",
+			zap.Error(qErr), zap.String("namespace", namespace))
+	} else if exceeded {
+		h.logger.ComponentWarn(logging.ComponentGeneral, "upload rejected: storage quota exceeded",
+			zap.String("namespace", namespace),
+			zap.Int64("budget_bytes", budget),
+			zap.Int64("projected_bytes", projected))
+		httputil.WriteRPCError(w, http.StatusRequestEntityTooLarge, httputil.ErrCodeStorageQuotaExceeded,
+			fmt.Sprintf("namespace storage quota exceeded: projected %d bytes ((logical+new) × RF) exceeds budget %d bytes", projected, budget))
+		return
+	}
+
+	// Add to IPFS. Content that is to be pinned is imported here only and
+	// pinned once, with its replication factor, by pinAsync: Add would pin it
+	// everywhere first, and narrowing that made every other peer start
+	// fetching it and then cancel and unpin it.
+	add := h.ipfsClient.Add
+	if shouldPin {
+		add = h.ipfsClient.AddLocal
+	}
+	addResp, err := add(ctx, reader, name)
 	if err != nil {
 		h.logger.ComponentError(logging.ComponentGeneral, "failed to add content to IPFS", zap.Error(err))
 		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("failed to add content: %v", err))
@@ -123,6 +177,16 @@ func (h *Handlers) UploadHandler(w http.ResponseWriter, r *http.Request) {
 		Size: addResp.Size,
 	}
 
+	// The reference goes into the cluster index before the pin is requested, so
+	// another namespace unpinning the same bytes right now counts it.
+	if shouldPin {
+		if err := h.registerRef(ctx, addResp.Cid, namespace); err != nil {
+			h.logger.ComponentError(logging.ComponentGeneral, "failed to record the pin reference", zap.Error(err), zap.String("cid", addResp.Cid))
+			httputil.WriteError(w, http.StatusServiceUnavailable, "the content was stored but could not be registered for pinning; retry the upload")
+			return
+		}
+	}
+
 	// Pin asynchronously in background if requested
 	if shouldPin {
 		go h.pinAsync(addResp.Cid, name, replicationFactor, namespace)
@@ -131,8 +195,18 @@ func (h *Handlers) UploadHandler(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteJSON(w, http.StatusOK, response)
 }
 
+// pinVerify tuning for the async upload path. IPFS-Cluster's pin is async
+// per-peer, so a Pin call returning success doesn't mean the block is durable
+// yet. We best-effort poll PinStatus a few times to surface a stuck pin in the
+// logs — but we never fail the upload (its response already went out).
+const (
+	pinVerifyAttempts = 3
+	pinVerifyInterval = 2 * time.Second
+)
+
 // pinAsync pins a CID asynchronously in the background with retry logic.
-// It retries once if the first attempt fails, then gives up.
+// It retries once if the first attempt fails, then gives up and drops the
+// registration the upload made, since no pin will exist for it.
 func (h *Handlers) pinAsync(cid, name string, replicationFactor int, namespace string) {
 	ctx := context.Background()
 
@@ -142,6 +216,7 @@ func (h *Handlers) pinAsync(cid, name string, replicationFactor int, namespace s
 		h.logger.ComponentWarn(logging.ComponentGeneral, "async pin succeeded", zap.String("cid", cid))
 		// Update pin status in database
 		h.updatePinStatus(ctx, cid, namespace, true)
+		h.verifyPinDurable(ctx, cid)
 		return
 	}
 
@@ -156,11 +231,38 @@ func (h *Handlers) pinAsync(cid, name string, replicationFactor int, namespace s
 		// Final failure - log and give up
 		h.logger.ComponentWarn(logging.ComponentGeneral, "async pin retry failed, giving up",
 			zap.Error(err), zap.String("cid", cid))
+		h.dropRef(ctx, cid, namespace)
+		// Content to be pinned was imported on this node only (AddLocal), so
+		// its local pin is all that keeps it, and nothing tracks it once the
+		// reference is gone: give it back too.
+		if unpinErr := h.ipfsClient.Unpin(ctx, cid); unpinErr != nil {
+			h.logger.ComponentError(logging.ComponentGeneral, "an upload whose pin failed could not be unpinned on this node; it stays until removed",
+				zap.Error(unpinErr), zap.String("cid", cid))
+		}
 	} else {
 		h.logger.ComponentWarn(logging.ComponentGeneral, "async pin succeeded on retry", zap.String("cid", cid))
 		// Update pin status in database
 		h.updatePinStatus(ctx, cid, namespace, true)
+		h.verifyPinDurable(ctx, cid)
 	}
+}
+
+// verifyPinDurable best-effort polls PinStatus a few times after a successful
+// pin to confirm the async cluster pin actually reached "pinned". It only logs
+// a Warn on non-convergence — it never blocks or fails the upload (the response
+// has already been returned to the client).
+func (h *Handlers) verifyPinDurable(ctx context.Context, cid string) {
+	for attempt := 1; attempt <= pinVerifyAttempts; attempt++ {
+		status, err := h.ipfsClient.PinStatus(ctx, cid)
+		if err == nil && status != nil && status.Status == ipfs.PinStatusPinned {
+			return
+		}
+		if attempt < pinVerifyAttempts {
+			time.Sleep(pinVerifyInterval)
+		}
+	}
+	h.logger.ComponentWarn(logging.ComponentGeneral, "pin not confirmed durable after verify polls (may still be converging)",
+		zap.String("cid", cid))
 }
 
 // base64Decode decodes a base64 string to bytes.

@@ -1,0 +1,23 @@
+direction: down
+
+tick: "Exporter.Export (every 1 min, after the store is open)"
+find: "newestWildcard: tls_store keys under certificates/\nordered by modified_unix_ms DESC,\nfirst certificates/<issuer>/wildcard_.<base>/wildcard_.<base>.crt"
+none: "ErrNotExist\n'TURNS waits for it' logged once" 
+open: "Open .crt and .key with the seal key\n(AAD = the storage key)"
+check: "check: pair loads, leaf not expired,\nleaf verifies turn-probe.<base>" {shape: diamond}
+bad: "refuse, keep the old files,\nlog once per distinct error"
+same: "files equal the opened bytes?" {shape: diamond}
+nothing: "no write"
+wkey: "writeAtomic wildcard.key (0600, rename)"
+wcrt: "writeAtomic wildcard.crt (0600, rename)"
+turn: "TURN certReloader: mtime of wildcard.crt\nadvanced -> reload pair (poll 60 s)"
+
+tick -> find
+find -> none: "no match"
+find -> open: "found"
+open -> check
+check -> bad: "no"
+check -> same: "yes"
+same -> nothing: "yes"
+same -> wkey: "no"
+wkey -> wcrt -> turn

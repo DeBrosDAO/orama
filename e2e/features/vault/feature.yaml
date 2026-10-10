@@ -1,0 +1,32 @@
+# The vault as a client and an operator see it: the gateway's push/pull with
+# the Ed25519 ownership proof (the messages sdk-vault signs), the Shamir split
+# over three guardians (K=2, W=3), monotonic versions, the share size limit,
+# wrong owners and stale proofs, malformed input, the per-identity limits and
+# X-Forwarded-For, and on the nodes: the guardian unit, overlay-only binding,
+# a direct push without a session, and what docs/whitepaper/technical-reference/vol1/28-vault.md says is not
+# built yet. A guardian down is vault-chaos.
+id: vault
+title: Vault (Shamir secret storage)
+area: vault
+subtasks: [2841]
+stage: 4
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  routes:
+    - /v1/vault/health
+    - /v1/vault/status
+    - /v1/vault/push
+    - /v1/vault/pull
+  units:
+    - orama-namespace-vault@.service
+  claims:
+    - "docs/whitepaper/technical-reference/vol1/28-vault.md#the-model: ownership proof vault-push-v1:<identity>:<version> / vault-pull-v1:<identity>:<ts> within 120s; identity = sha256(pubkey)"
+    - "docs/whitepaper/technical-reference/vol1/28-vault.md#storage-layout-and-the-write-order: versions are strictly increasing (409 on equal or lower)"
+    - "docs/whitepaper/technical-reference/vol1/28-vault.md#limits-and-scale: a share is at most 512 KiB; push body 1 MiB, pull body 4 KiB"
+    - "docs/whitepaper/technical-reference/vol1/28-vault.md#thresholds-k-and-w: K = max(2, n/3) and W = min(n, max(K+1, ceil(2n/3)))"
+    - "docs/whitepaper/technical-reference/vol1/28-vault.md#the-guardian-http-server: guardian health is degraded and the guardian list empty until peer discovery exists; nothing listens on 7501"
+    - "docs/whitepaper/technical-reference/vol1/28-vault.md#deployment-how-a-guardian-gets-onto-a-node: guardians are overlay-only"

@@ -1,0 +1,16 @@
+syntax = "proto3";
+package orama.market.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/market/types";
+
+import "gogoproto/gogo.proto";
+import "orama/market/v1/market.proto";
+
+// GenesisState is x/market's genesis state. Escrowed bid coins are bank state,
+// not repeated here.
+message GenesisState {
+  repeated Listing listings = 1 [(gogoproto.nullable) = false];
+  repeated Bid bids = 2 [(gogoproto.nullable) = false];
+  uint64 next_listing_id = 3;
+  uint64 next_bid_id = 4;
+}

@@ -31,7 +31,7 @@ type execCall struct {
 	args  []interface{}
 }
 
-// mockDB implements database.Database with configurable responses.
+// mockDB implements Database with configurable responses.
 type mockDB struct {
 	mu sync.Mutex
 
@@ -103,6 +103,22 @@ type mockProcessManager struct {
 	restartErr   error
 	stopCalls    []string // deployment IDs
 	stopErr      error
+	// refreshCalls records namespace/name; refreshErrs fails the named ones.
+	refreshCalls []string
+	refreshErrs  map[string]error
+	// status/statusErr answer Status; an empty status reads as "active".
+	status    string
+	statusErr error
+}
+
+func (m *mockProcessManager) Status(_ context.Context, _ *deployments.Deployment) (string, error) {
+	if m.statusErr != nil {
+		return "unknown", m.statusErr
+	}
+	if m.status == "" {
+		return "active", nil
+	}
+	return m.status, nil
 }
 
 func (m *mockProcessManager) Restart(_ context.Context, dep *deployments.Deployment) error {
@@ -110,6 +126,16 @@ func (m *mockProcessManager) Restart(_ context.Context, dep *deployments.Deploym
 	m.restartCalls = append(m.restartCalls, dep.ID)
 	m.mu.Unlock()
 	return m.restartErr
+}
+
+func (m *mockProcessManager) RefreshToken(_ context.Context, dep *deployments.Deployment) error {
+	m.mu.Lock()
+	m.refreshCalls = append(m.refreshCalls, dep.Namespace+"/"+dep.Name)
+	m.mu.Unlock()
+	if err, ok := m.refreshErrs[dep.Name]; ok {
+		return err
+	}
+	return nil
 }
 
 func (m *mockProcessManager) Stop(_ context.Context, dep *deployments.Deployment) error {
@@ -143,7 +169,7 @@ func (m *mockProcessManager) getStopCalls() []string {
 // of the destination's element type and copying field values by name.
 func appendRows(dest interface{}, rows []map[string]interface{}) {
 	dv := reflect.ValueOf(dest).Elem() // []T
-	elemType := dv.Type().Elem()        // T
+	elemType := dv.Type().Elem()       // T
 
 	for _, row := range rows {
 		elem := reflect.New(elemType).Elem()
@@ -196,18 +222,16 @@ func TestNewHealthChecker_NonNil(t *testing.T) {
 
 // ---- b) checkDeployment ---------------------------------------------------
 
-func TestCheckDeployment_StaticDeployment(t *testing.T) {
+// A replica row with no port never had a unit set up (a failed setup leaves
+// port 0). Reading it as healthy "recovered" replicas that did not exist.
+func TestCheckDeployment_NoPortIsNotHealthy(t *testing.T) {
 	db := &mockDB{}
 	hc := NewHealthChecker(db, zap.NewNop(), "node-1", nil)
 
-	dep := deploymentRow{
-		ID:   "dep-1",
-		Name: "static-site",
-		Port: 0, // static deployment
-	}
+	dep := deploymentRow{ID: "dep-1", Name: "app", Port: 0}
 
-	if !hc.checkDeployment(context.Background(), dep) {
-		t.Error("static deployment (port 0) should always be healthy")
+	if hc.checkDeployment(context.Background(), dep) {
+		t.Error("a replica with no port has no process and must not probe healthy")
 	}
 }
 
@@ -299,6 +323,9 @@ func TestCheckAllDeployments_QueriesLocalReplicas(t *testing.T) {
 	}
 	if !strings.Contains(q, "'degraded'") {
 		t.Errorf("expected query to include 'degraded' status, got: %s", q)
+	}
+	if !strings.Contains(q, "dr.port > 0") {
+		t.Errorf("expected query to skip replicas with no port (no unit was set up), got: %s", q)
 	}
 
 	// Verify nodeID was passed as the bind parameter
@@ -525,7 +552,7 @@ func TestHandleHealthy_RecoversFailedReplica(t *testing.T) {
 			return nil
 		},
 	}
-	hc := NewHealthChecker(db, zap.NewNop(), "node-1", nil)
+	hc := NewHealthChecker(db, zap.NewNop(), "node-1", &mockProcessManager{})
 
 	dep := deploymentRow{
 		ID:            "dep-recover",
@@ -554,6 +581,45 @@ func TestHandleHealthy_RecoversFailedReplica(t *testing.T) {
 	}
 	if !foundEvent {
 		t.Error("expected replica_recovered event")
+	}
+}
+
+// The probe answering is not proof the replica runs: the port can be another
+// process's. Without an active unit the replica stays failed.
+func TestHandleHealthy_DoesNotRecoverWithoutActiveUnit(t *testing.T) {
+	cases := map[string]*mockProcessManager{
+		"inactive unit":      {status: "inactive"},
+		"status unreadable":  {statusErr: fmt.Errorf("systemctl failed")},
+		"no process manager": nil,
+	}
+	for name, pm := range cases {
+		t.Run(name, func(t *testing.T) {
+			db := &mockDB{
+				queryFunc: func(dest interface{}, query string, args ...interface{}) error {
+					if strings.Contains(query, "COUNT(*)") {
+						appendRows(dest, []map[string]interface{}{{"Count": 0}})
+					}
+					return nil
+				},
+			}
+			var hc *HealthChecker
+			if pm == nil {
+				hc = NewHealthChecker(db, zap.NewNop(), "node-1", nil)
+			} else {
+				hc = NewHealthChecker(db, zap.NewNop(), "node-1", pm)
+			}
+
+			hc.handleHealthy(context.Background(), deploymentRow{
+				ID: "dep-ghost", Namespace: "test", Name: "ghost", Type: "go-backend",
+				Port: 10001, ReplicaStatus: "failed",
+			})
+
+			for _, call := range db.getExecCalls() {
+				if strings.Contains(call.query, "UPDATE deployment_replicas") || strings.Contains(call.query, "replica_recovered") {
+					t.Errorf("replica without an active unit was changed: %s", call.query)
+				}
+			}
+		})
 	}
 }
 
@@ -731,10 +797,10 @@ func TestGetHealthStatus_DatabaseError(t *testing.T) {
 // ---- h) reconcileDeployments ----------------------------------------------
 
 type mockReconciler struct {
-	mu               sync.Mutex
-	selectCalls      []string // primaryNodeIDs
-	selectResult     []string
-	selectErr        error
+	mu                sync.Mutex
+	selectCalls       []string // primaryNodeIDs
+	selectResult      []string
+	selectErr         error
 	updateStatusCalls []struct {
 		deploymentID string
 		nodeID       string
@@ -761,11 +827,22 @@ func (m *mockReconciler) UpdateReplicaStatus(_ context.Context, deploymentID, no
 }
 
 type mockProvisioner struct {
-	mu        sync.Mutex
+	mu         sync.Mutex
 	setupCalls []struct {
 		deploymentID string
 		nodeID       string
 	}
+	setupEnvs []map[string]string
+	codec     *deployments.EnvCodec
+}
+
+// DecodeEnvironment reads the column with the real codec when the test gave
+// one, and treats it as empty otherwise.
+func (m *mockProvisioner) DecodeEnvironment(namespace, deploymentID, _, stored string) (map[string]string, error) {
+	if m.codec == nil {
+		return map[string]string{}, nil
+	}
+	return m.codec.Decode(namespace, deploymentID, stored)
 }
 
 func (m *mockProvisioner) SetupDynamicReplica(_ context.Context, dep *deployments.Deployment, nodeID string) {
@@ -774,7 +851,85 @@ func (m *mockProvisioner) SetupDynamicReplica(_ context.Context, dep *deployment
 		deploymentID string
 		nodeID       string
 	}{dep.ID, nodeID})
+	m.setupEnvs = append(m.setupEnvs, dep.Environment)
 	m.mu.Unlock()
+}
+
+// reconcileWithEnvironment runs one reconciliation of an under-replicated
+// deployment whose environment column holds stored.
+func reconcileWithEnvironment(t *testing.T, stored string, rp *mockProvisioner) {
+	t.Helper()
+	leaderSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(`{"store":{"raft":{"state":"Leader"}}}`))
+	}))
+	defer leaderSrv.Close()
+	db := &mockDB{
+		queryFunc: func(dest interface{}, query string, args ...interface{}) error {
+			if strings.Contains(query, "active_replicas") {
+				appendRows(dest, []map[string]interface{}{{
+					"ID": "dep-env", "Namespace": "test", "Name": "env-app", "Type": "nodejs-backend",
+					"HomeNodeID": "node-home", "Environment": stored, "Port": 10001,
+					"RestartPolicy": "on-failure", "ActiveReplicas": 1,
+				}})
+			}
+			return nil
+		},
+	}
+	hc := NewHealthChecker(db, zap.NewNop(), "node-1", nil)
+	hc.SetReconciler(leaderSrv.URL, &mockReconciler{selectResult: []string{"node-new"}}, rp)
+	hc.reconcileDeployments(context.Background())
+	time.Sleep(50 * time.Millisecond)
+}
+
+// The environment column is sealed with the cluster key. A replica provisioned
+// by the reconciler used to be started with an empty environment, because the
+// column was parsed as JSON and the failure ignored.
+func TestReconcileDeployments_replicaGetsTheSealedEnvironment(t *testing.T) {
+	codec, err := deployments.NewEnvCodec("test-encryption-root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := codec.Encode("test", "dep-env", map[string]string{"STORE_FN": "todo-store"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rp := &mockProvisioner{codec: codec}
+
+	reconcileWithEnvironment(t, stored, rp)
+
+	rp.mu.Lock()
+	defer rp.mu.Unlock()
+	if len(rp.setupEnvs) != 1 || rp.setupEnvs[0]["STORE_FN"] != "todo-store" {
+		t.Errorf("the replica was set up with environment %v, want STORE_FN=todo-store", rp.setupEnvs)
+	}
+}
+
+func TestReconcileDeployments_unreadableEnvironmentProvisionsNothing(t *testing.T) {
+	codec, err := deployments.NewEnvCodec("test-encryption-root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rp := &mockProvisioner{codec: codec}
+
+	reconcileWithEnvironment(t, "not an environment", rp)
+
+	rp.mu.Lock()
+	defer rp.mu.Unlock()
+	if len(rp.setupCalls) != 0 {
+		t.Errorf("a replica was set up for a deployment whose environment cannot be read: %v", rp.setupCalls)
+	}
+}
+
+func TestReconcileDeployments_emptyEnvironmentStillProvisions(t *testing.T) {
+	rp := &mockProvisioner{}
+
+	reconcileWithEnvironment(t, "", rp)
+
+	rp.mu.Lock()
+	defer rp.mu.Unlock()
+	if len(rp.setupCalls) != 1 {
+		t.Errorf("an app with no environment was not re-replicated: %v", rp.setupCalls)
+	}
 }
 
 func TestReconcileDeployments_UnderReplicated(t *testing.T) {

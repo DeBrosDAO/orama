@@ -1,0 +1,54 @@
+# Vulnerability disclosure
+
+**Status:** this page sets scope, severity and the reporting rules. It does not promise a payout. Payouts are the owner's to set and publish separately.
+
+No audit of the chain code has been done yet. Reports are welcome before one.
+
+## How to report
+
+Do not open a public issue. Email **security@debros.io**. Include the commit or release, the module, what you did, what happened, and a test or transcript that reproduces it.
+
+Test only on a chain you run yourself (`chain/scripts/localnet`) or on a devnet or stagenet you have permission for. Never test against someone else's node or user data.
+
+This page makes no legal commitment.
+
+For RootWallet, see its own policy ([RootWallet security](/docs/rootwallet/security#reporting-a-vulnerability)).
+
+## In scope
+
+- Every chain module (`emission`, `fees`, `power`, `houses`, `nodes`, `storage`, `relay`, `archive`, `token`, `cnft`, `market`, `wasmpolicy`, `inclusion`, `shielded`, `confidential`), the app wiring, ante handlers and bank send restrictions, and `oramad`.
+- The genesis parameter lock (`oramad genesis validate`).
+- The piece format, and the global services `orama-global` (provider, repair delegate, archiver, indexer, relay reporter).
+- The Orama Tor network's roles and tooling: the key ceremony, the network file parser, the install of directory authorities, relays, exits and the validator onion service, and the transaction gate behind it.
+- Release verification: the release and archive trust code, and `orama maint global stage-oramad`.
+- The confidential-node boundary: any path that treats a quote, report or blob as a valid attestation is in scope and rated Critical.
+- The platform: gateway authentication and authorization, tenant isolation, the cluster's inter-node authentication, sandboxing of functions and deployments.
+
+## Out of scope
+
+- The declared trust points: that the bootstrap committee decides before lambda reaches 1, that release signers choose what validators can install, that directory authorities and relay reporters are trusted until a majority is independent. A way to *exceed* them is in scope.
+- Findings that need a majority of voting power, or an operator's own root access to their own machine.
+- Volume attacks with no protocol flaw behind them.
+- Upstream bugs in Cosmos SDK, CometBFT, wasmd or wasmvm, Kubo, Tor, go-tuf or the Zcash crates that this repository does not change. Report those upstream. A way this repository's use of them is exploitable is in scope.
+- Placeholder economics marked "launch default", unless the number lets a fake identity earn more than it costs or breaks an invariant.
+- The stagenet test release root, test keys, and any localnet, devnet or stagenet genesis.
+- Social engineering and physical access.
+- Known, documented limits such as those listed on [Security model](/docs/architecture/security-model#what-this-does-not-defend-against).
+
+## Severity
+
+The chain has no admin key, pause, freeze or upgrade authority to fall back on, and a state-machine fix is a coordinated halt-height fix. Severity follows what an attacker gains and how hard it is to undo.
+
+| Severity | Examples |
+|---|---|
+| Critical | Minting norama outside the emission schedule. Creating or moving funds from any module account without the module's rule. Any key, message or path that pauses, freezes, blacklists, halts or upgrades the chain, or changes an ossified rule. A shielded bundle accepted without two independent verifiers, an unshield that breaks the turnstile or the 2% cap, or a double-spent nullifier. Treating any quote or blob as a valid attestation, or making a marketplace lease go through. Splitting consensus or halting the chain without more than a third of voting power. Forging a release a node's verifier accepts |
+| High | Breaking an invariant the chain's `invariants` queries check. Governance passing without its opening rule, its votes or its timelock, or a house-bond escape. Paying a module account with a bank message, which would unbalance the earnings or deposit ledgers. Bypassing the contract upload allow-list or sunset. Drawing protocol payments for work not done, or storage or relay payments beyond the ceiling. A validator-set or power computation that a non-validator can bias |
+| Medium | A path that lets an attacker cheaply grief one operator or deal (a slash, jail or eviction they did not earn). A leak that narrows privacy without breaking a proof. An error that halts one node's block processing but not the chain. A parameter accepted outside its coded bound |
+| Low | Hardening gaps, misleading errors or docs that could lead an operator to a wrong action, and issues with no realistic exploit |
+
+## Handling
+
+1. You send the finding privately. It is acknowledged, then reproduced.
+2. A finding that changes the state machine is fixed through the coordinated halt-height procedure. Nothing is patched on one node, and validators choose whether to run the fix.
+3. The finding is made public after validators holding two thirds of voting power have had the fix staged, or immediately when no state-machine change is needed. You are credited unless you ask not to be.
+4. The owner decides, per finding, whether a payout is made and how much. Do not expect one until a programme with amounts is published.

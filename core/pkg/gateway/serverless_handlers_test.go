@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	serverlesshandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/serverless"
+	"github.com/DeBrosOfficial/network/pkg/gateway/wssession"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"go.uber.org/zap"
 )
@@ -58,9 +59,11 @@ func TestServerlessHandlers_ListFunctions(t *testing.T) {
 		},
 	}
 
-	h := serverlesshandlers.NewServerlessHandlers(nil, nil, registry, nil, nil, nil, nil, nil, nil, nil, logger)
+	h := serverlesshandlers.NewServerlessHandlers(nil, nil, registry, nil, wssession.NewRegistry(nil), nil, nil, nil, nil, nil, nil, nil, logger)
 
-	req, _ := http.NewRequest("GET", "/v1/functions?namespace=ns1", nil)
+	req, _ := http.NewRequest("GET", "/v1/functions", nil)
+	// The namespace listed is the credential's, as authMiddleware resolved it.
+	req = req.WithContext(context.WithValue(req.Context(), CtxKeyNamespaceOverride, "ns1"))
 	rr := httptest.NewRecorder()
 
 	h.ListFunctions(rr, req)
@@ -81,13 +84,14 @@ func TestServerlessHandlers_DeployFunction(t *testing.T) {
 	logger := zap.NewNop()
 	registry := &mockFunctionRegistry{}
 
-	h := serverlesshandlers.NewServerlessHandlers(nil, nil, registry, nil, nil, nil, nil, nil, nil, nil, logger)
+	h := serverlesshandlers.NewServerlessHandlers(nil, nil, registry, nil, wssession.NewRegistry(nil), nil, nil, nil, nil, nil, nil, nil, logger)
 
 	// Test JSON deploy (which is partially supported according to code)
 	// Should be 400 because WASM is missing or base64 not supported
 	writer := httptest.NewRecorder()
 	req, _ := http.NewRequest("POST", "/v1/functions", bytes.NewBufferString(`{"name": "test"}`))
 	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(context.WithValue(req.Context(), CtxKeyNamespaceOverride, "ns1"))
 
 	h.DeployFunction(writer, req)
 

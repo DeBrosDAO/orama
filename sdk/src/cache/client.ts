@@ -1,4 +1,5 @@
 import { HttpClient } from "../core/http";
+import { Logger } from "../core/logger";
 import { SDKError } from "../errors";
 
 export interface CacheGetRequest {
@@ -67,9 +68,11 @@ export interface CacheHealthResponse {
 
 export class CacheClient {
   private httpClient: HttpClient;
+  private readonly log: Logger;
 
   constructor(httpClient: HttpClient) {
     this.httpClient = httpClient;
+    this.log = httpClient.logger("CacheClient");
   }
 
   /**
@@ -186,7 +189,7 @@ export class CacheClient {
       keys.forEach((key) => {
         resultMap.set(key, null);
       });
-      console.error(`[CacheClient] Error in multiGet for ${dmap}:`, error);
+      this.log.error(`Error in multiGet for ${dmap}:`, error);
       return resultMap;
     }
   }

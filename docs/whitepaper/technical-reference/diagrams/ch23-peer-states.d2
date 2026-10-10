@@ -1,0 +1,13 @@
+direction: right
+
+joining: "Joining\nticket accepted,\njoin frame read"
+live: "Live\nPeerConnection, signalling loop,\nTURN refresh loops"
+disc: "ICE disconnected\n15 s to recover"
+gone: "Removed\nclose once: room forgets,\ntracks removed, leave event"
+
+joining -> live: "AddPeer ok;\nwelcome sent"
+joining -> gone: "room full,\nkicked while in flight"
+live -> disc: "ICE disconnected"
+disc -> live: "ICE recovered"
+disc -> gone: "still disconnected/failed\nafter 15 s"
+live -> gone: "leave, socket read error,\nICE failed/closed,\nwrite error (5 s),\nrate limit, TURN refresh failure,\nkick, admission expiry,\nroom closed"

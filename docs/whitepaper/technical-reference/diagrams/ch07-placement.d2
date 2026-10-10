@@ -1,0 +1,26 @@
+direction: right
+
+src: core/migrations/\n76 embedded files, 001 to 076\ncore/pkg/rqlite/schema_placement.go\n78 classified tables
+
+index: Index rqlite (the registry) {
+  tracker: schema_migrations\n(standard tracker)
+  all: every core table\nPlacementCluster: 39\nPlacementNamespace: 39
+  lock: cluster_locks\nname schema-migrations
+}
+
+tenantdb: Namespace rqlite (also the tenant's database) {
+  tracker2: orama_schema_migrations\n(isolated tracker)
+  part: PlacementNamespace tables only
+  stripped: not created here:\nall PlacementCluster tables,\nschema_migrations, subscriptions
+  lock2: cluster_locks\nlocal to this database
+}
+
+gw1: index gateway\nprepareSchema
+gw2: namespace gateway\nprepareSchema
+
+src -> gw1: ApplyEmbeddedMigrations
+src -> gw2: ApplyEmbeddedMigrationsNamespace
+gw1 -> index: one transaction per migration\n+ tracker row
+gw2 -> tenantdb: statements on stripped tables dropped,\none transaction per migration
+index.tracker -> gw1: AssertSchema: applied >= required
+tenantdb.tracker2 -> gw2: AppliedVersionFromTracker >= required

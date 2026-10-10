@@ -1,0 +1,38 @@
+# The auto-update agent on a single-node eval cluster of its own (the run's
+# fleet is never updated): the agent does nothing until the cluster stores a
+# release repository and the node adopts a release root; with notify, the
+# default, it reports a newer release and installs nothing; a release whose
+# archive differs from its target, a frozen timestamp and an older snapshot are
+# each refused and reported, never installed; with auto, a node that cannot be
+# stopped safely (the cluster's only voter) is staged, refused by the upgrade's
+# own preflight, put back exactly as it was, and the release is not marked bad.
+# A repository that rotated its root (N.root.json, signed by the previous root's
+# keys and its own) is followed: the node adopts the newest root before it reads
+# the channel, so metadata signed under the new keys verifies.
+# A channel is the path prefix of its targets: nightly/ is offered on the nightly
+# channel and not on main.
+# The repository is a static server on the node's loopback.
+id: autoupdate-agent
+title: Auto-update agent on an eval cluster
+area: infrastructure
+subtasks: [2751]
+stage: 10
+destructive: false
+requires:
+  extra_nodes: 1
+  probe: false
+  chain: false
+covers:
+  cli:
+    - orama maint node autoupdate run
+    - orama maint cluster settings
+    - orama maint cluster settings set
+  units:
+    - orama-autoupdate.service
+    - orama-autoupdate.timer
+  claims:
+    - "docs/whitepaper/technical-reference/vol1/29-build-signing-and-release.md: the agent does nothing until the cluster stores a release repository and the node adopts a release root"
+    - "docs/whitepaper/technical-reference/vol1/29-build-signing-and-release.md: notify reports a newer release and installs nothing"
+    - "docs/whitepaper/technical-reference/vol1/29-build-signing-and-release.md: a release that does not verify is refused and reported, never installed"
+    - "docs/whitepaper/technical-reference/vol1/29-build-signing-and-release.md: a root rotation is followed link by link: every N.root.json must be signed by the previous root's keys at their threshold and by its own, and the node adopts the newest"
+    - "docs/whitepaper/technical-reference/vol1/29-build-signing-and-release.md: an upgrade that fails at a check before it stopped anything puts the previous release back and does not mark the release bad"

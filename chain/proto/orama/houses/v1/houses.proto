@@ -1,0 +1,258 @@
+syntax = "proto3";
+package orama.houses.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/houses/types";
+
+import "gogoproto/gogo.proto";
+
+// Params are x/houses genesis parameters. bootstrap_exit_stake is fixed at
+// genesis: no governance message can change it. The other fields are the
+// parameter tier (token house, operator-house veto) and can move only inside
+// the bounds enforced by Params.Validate.
+//
+// Ossified rules have no field here and no message anywhere in this module:
+// the emission schedule and tail, the burn rule, privacy-by-default, and the
+// absence of freeze, blacklist, halt, pause, circuit-breaker and expedited
+// proposal paths (plans/open-network.md D18).
+message Params {
+  // bootstrap_exit_stake is the bonded-stake threshold, in norama, that opens
+  // the parameter tier together with a live operator house. Default
+  // 271000 ORAMA. Lambda reaching 1 is the other way that side of the rule
+  // opens. Not governable.
+  string bootstrap_exit_stake = 1 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  // token_quorum is the fraction of bonded stake that must participate in
+  // the token house. Participation is counted after the 3% delegated-vote cap.
+  string token_quorum = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+  // token_pass_threshold is the fraction of participating token-house weight
+  // that must vote yes. A tie (yes == no) never passes.
+  string token_pass_threshold = 3 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+  // voting_period_seconds is how long token-house and operator-house votes
+  // are accepted after a proposal is submitted.
+  int64 voting_period_seconds = 4;
+  // house_bond is the norama an operator must lock to be eligible for the
+  // operator house.
+  string house_bond = 5 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  // max_eligible_per_prefix16 caps how many eligible operator identities may
+  // share one /16 network.
+  uint32 max_eligible_per_prefix16 = 6;
+  // max_eligible_per_asn caps how many eligible operator identities may share
+  // one ASN.
+  uint32 max_eligible_per_asn = 7;
+  // min_house_size is the eligible-operator count both tiers require. Fixed
+  // at genesis inside coded bounds; no proposal changes it.
+  uint32 min_house_size = 8;
+  // veto_window_seconds is how long the operator house may veto a passed
+  // parameter proposal. Fixed at genesis inside coded bounds.
+  int64 veto_window_seconds = 9;
+  // parameter_timelock_seconds, upgrade_timelock_seconds and
+  // spend_timelock_seconds are the only execution delays after a proposal
+  // passes. There is no expedited delay. Fixed at genesis inside coded
+  // bounds whose floors are the plan values (14, 60 and 7 days).
+  int64 parameter_timelock_seconds = 10;
+  int64 upgrade_timelock_seconds = 11;
+  int64 spend_timelock_seconds = 12;
+}
+
+// ProposalStatus is where a proposal is in its lifecycle. There is no
+// expedited status.
+enum ProposalStatus {
+  PROPOSAL_STATUS_UNSPECIFIED = 0;
+  VOTING = 1;
+  VETO_WINDOW = 2;
+  TIMELOCK = 3;
+  EXECUTED = 4;
+  REJECTED = 5;
+  FAILED = 6;
+}
+
+// VoteOption is a vote in either house. NO is the operator-house veto on a
+// parameter proposal. There is no separate expedited option.
+enum VoteOption {
+  VOTE_OPTION_UNSPECIFIED = 0;
+  YES = 1;
+  NO = 2;
+  ABSTAIN = 3;
+}
+
+// ProposalContent is exactly one governable action. The one set field is the
+// proposal kind. Adding a field here is a governance surface: ossified rules
+// must not gain a field.
+message ProposalContent {
+  ParameterChange parameter_change = 1;
+  SoftwareUpgrade software_upgrade = 2;
+  EmissionSplitChange emission_split = 3;
+  DevelopmentSpend development_spend = 4;
+  PowerBoundsChange power_bounds = 5;
+  RelayReporterChange relay_reporters = 6;
+  AllowListChange allow_list = 7;
+}
+
+// ParameterChange replaces the governable subset of Params. It cannot carry
+// bootstrap_exit_stake or any ossified rule.
+message ParameterChange {
+  string token_quorum = 1 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+  string token_pass_threshold = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+  int64 voting_period_seconds = 3;
+  string house_bond = 4 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  uint32 max_eligible_per_prefix16 = 5;
+  uint32 max_eligible_per_asn = 6;
+}
+
+// SoftwareUpgrade is a structural plan. x/houses records it after the upgrade
+// timelock. It does not call x/upgrade; that module is still gated by the
+// unreachable authority until app wiring says otherwise.
+message SoftwareUpgrade {
+  string name = 1;
+  int64 height = 2;
+}
+
+// EmissionSplitChange is a structural change to the four emission shares,
+// within ±10 points of 60/25/10/5, summing to 100. It does not change the
+// halving schedule or the tail. x/houses records the decision; x/emission's
+// mint math is unchanged by this message.
+message EmissionSplitChange {
+  uint32 validator_percent = 1;
+  uint32 storage_percent = 2;
+  uint32 relay_percent = 3;
+  uint32 development_percent = 4;
+}
+
+// DevelopmentSpend is a structural spend. After the spend timelock it mints
+// only through x/emission's development-ceiling method and credits the
+// recipient's earnings account.
+message DevelopmentSpend {
+  string recipient = 1;
+  string amount = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  // epoch is the closed emission epoch whose development ceiling is claimed.
+  uint64 epoch = 3;
+}
+
+// PowerBoundsChange is the structural M bound and its one-way activation.
+// activate_m true activates M. false does not deactivate it; there is no
+// field that turns M off. A zero m_max means "leave the stored bound alone".
+message PowerBoundsChange {
+  string m_max = 1 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+  bool activate_m = 2;
+}
+
+// RelayReporterChange updates the recorded relay-reporter allow-list.
+// Nothing outside x/houses reads it yet.
+message RelayReporterChange {
+  repeated string add = 1;
+  repeated string remove = 2;
+}
+
+// AllowListChange updates the recorded code-upload and adapter allow-lists.
+// Nothing outside x/houses reads them yet.
+message AllowListChange {
+  repeated string code_upload_add = 1;
+  repeated string code_upload_remove = 2;
+  repeated string adapter_add = 3;
+  repeated string adapter_remove = 4;
+}
+
+// Proposal is one governance proposal.
+message Proposal {
+  uint64 id = 1;
+  string proposer = 2;
+  int64 submit_unix_nano = 3;
+  int64 voting_end_unix_nano = 4;
+  int64 veto_end_unix_nano = 5;
+  int64 timelock_end_unix_nano = 6;
+  ProposalStatus status = 7;
+  ProposalContent content = 8 [(gogoproto.nullable) = false];
+  string token_yes = 9 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  string token_no = 10 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  string token_abstain = 11 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  uint64 operator_yes = 12;
+  uint64 operator_no = 13;
+  uint64 operator_abstain = 14;
+  uint64 eligible_operators = 15;
+  string fail_reason = 16;
+  // advance_failures counts the consecutive blocks advancing this proposal failed. It is cleared by
+  // a block that advances it, and the proposal is closed as FAILED at MaxAdvanceAttempts.
+  uint32 advance_failures = 17;
+}
+
+// Vote is one address's vote on one proposal. A second, different operator
+// vote on the same proposal is equivocation.
+message Vote {
+  uint64 proposal_id = 1;
+  string voter = 2;
+  VoteOption option = 3;
+}
+
+// HouseBond is norama locked in the houses module account so an operator can
+// sit in the operator house. It is locked while that operator has a vote on
+// a proposal still in voting or the veto window, and it is burned on
+// equivocation.
+message HouseBond {
+  string address = 1;
+  string amount = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  int64 locked_at_height = 3;
+}
+
+// Equivocation records that an operator cast two different votes on a
+// proposal. Their vote on that proposal never counts, even if they lock a
+// new bond.
+message Equivocation {
+  uint64 proposal_id = 1;
+  string operator = 2;
+}
+
+// Enacted is the structural state x/houses stores after a timelock. Other
+// modules act on it: x/emission reads emission_split, x/wasmpolicy reads
+// code_upload_allow, and x/houses' own executor drives x/relay's reporter set
+// and x/upgrade's plan. m_activated, m_max and adapter_allow have no consumer
+// yet. Development spends are not recorded here; they mint and credit earnings.
+message Enacted {
+  SoftwareUpgrade scheduled_upgrade = 1;
+  EmissionSplitChange emission_split = 2;
+  bool m_activated = 3;
+  string m_max = 4 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+  repeated string relay_reporters = 5;
+  repeated string code_upload_allow = 6;
+  repeated string adapter_allow = 7;
+}

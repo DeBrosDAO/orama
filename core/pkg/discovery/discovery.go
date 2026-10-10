@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -20,11 +21,11 @@ import (
 // Protocol ID for peer exchange
 const PeerExchangeProtocol = "/orama/peer-exchange/1.0.0"
 
-// libp2pPort is the standard port used for libp2p peer connections.
-// Filtering on this port prevents cross-connecting with IPFS (4101) or IPFS Cluster (9096/9098).
-const libp2pPort = 4001
+// libp2pPort is the orama node's libp2p port. Filtering on it prevents
+// cross-connecting with IPFS (constants.IPFSSwarmPort) or IPFS Cluster.
+const libp2pPort = constants.NodeLibP2PPort
 
-// filterLibp2pAddrs returns only multiaddrs with TCP port 4001 (standard libp2p port).
+// filterLibp2pAddrs returns only multiaddrs on the node's libp2p TCP port.
 func filterLibp2pAddrs(addrs []multiaddr.Multiaddr) []multiaddr.Multiaddr {
 	filtered := make([]multiaddr.Multiaddr, 0, len(addrs))
 	for _, addr := range addrs {
@@ -351,7 +352,7 @@ func (d *Manager) discoverViaPeerExchange(ctx context.Context, maxConnections in
 				continue
 			}
 
-			// Parse and filter addresses to only include port 4001 (standard libp2p port)
+			// Parse and filter addresses to only the node's libp2p port
 			parsedAddrs := make([]multiaddr.Multiaddr, 0, len(peerInfo.Addrs))
 			for _, addrStr := range peerInfo.Addrs {
 				ma, err := multiaddr.NewMultiaddr(addrStr)
@@ -366,7 +367,7 @@ func (d *Manager) discoverViaPeerExchange(ctx context.Context, maxConnections in
 				continue
 			}
 
-			// Add to peerstore (only valid addresses with port 4001)
+			// Add to peerstore (only valid addresses on the libp2p port)
 			d.host.Peerstore().AddAddrs(parsedID, addrs, time.Hour*24)
 
 			// Try to connect (5s timeout — WireGuard peers respond fast)

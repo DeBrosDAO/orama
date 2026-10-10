@@ -20,7 +20,8 @@ const systemPrompt = `You are a distributed systems expert analyzing health chec
 - **RQLite**: Raft consensus SQLite database. Requires N/2+1 quorum for writes. Each node runs one instance.
 - **Olric**: Distributed in-memory cache using memberlist protocol. Coordinates via elected coordinator node.
 - **IPFS**: Decentralized storage with private swarm (swarm key). Runs Kubo daemon + IPFS Cluster for pinning.
-- **CoreDNS + Caddy**: DNS resolution (port 53) and TLS termination (ports 80/443). Only on nameserver nodes.
+- **CoreDNS**: DNS resolution (port 53) on nameserver nodes (orama-namespace-coredns@nameserver).
+- **Caddy**: TLS termination (ports 80/443) on every node (orama-namespace-caddy@index).
 - **WireGuard**: Mesh VPN connecting all nodes via 10.0.0.0/8 on port 51820. All inter-node traffic goes over WG.
 - **Namespaces**: Isolated tenant environments. Each namespace runs its own RQLite + Olric + Gateway on a 5-port block (base+0=RQLite HTTP, +1=Raft, +2=Olric HTTP, +3=Memberlist, +4=Gateway).
 
@@ -55,7 +56,7 @@ What could prevent this in the future? (omit if not applicable)`
 // SubsystemAnalysis holds the AI analysis for a single subsystem or failure group.
 type SubsystemAnalysis struct {
 	Subsystem string
-	GroupID   string // e.g. "anyone.bootstrapped" — empty when analyzing whole subsystem
+	GroupID   string // e.g. "tor.client_bootstrapped" — empty when analyzing whole subsystem
 	Analysis  string
 	Duration  time.Duration
 	Error     error
@@ -406,8 +407,10 @@ func buildSubsystemContext(subsystem string, data *ClusterData) string {
 		return buildNetworkContext(data)
 	case "namespace":
 		return buildNamespaceContext(data)
-	case "anyone":
-		return buildAnyoneContext(data)
+	case "tor":
+		return buildTorContext(data)
+	case "global":
+		return buildGlobalContext(data)
 	default:
 		return ""
 	}
@@ -467,8 +470,8 @@ func buildOlricContext(data *ClusterData) string {
 		b.WriteString(fmt.Sprintf("### %s\n", host))
 		b.WriteString(fmt.Sprintf("  active=%v memberlist=%v members=%d coordinator=%s\n",
 			o.ServiceActive, o.MemberlistUp, o.MemberCount, o.Coordinator))
-		b.WriteString(fmt.Sprintf("  memory=%dMB restarts=%d log_errors=%d suspects=%d flapping=%d\n",
-			o.ProcessMemMB, o.RestartCount, o.LogErrors, o.LogSuspects, o.LogFlapping))
+		b.WriteString(fmt.Sprintf("  memory=%dMB restarts=%d log_errors=%d members_marked_failed=%d suspects=%d flapping=%d\n",
+			o.ProcessMemMB, o.RestartCount, o.LogErrors, o.LogDeadMarks, o.LogSuspects, o.LogFlapping))
 	}
 	return b.String()
 }
@@ -555,8 +558,8 @@ func buildSystemContext(data *ClusterData) string {
 		b.WriteString(fmt.Sprintf("### %s\n", host))
 		b.WriteString(fmt.Sprintf("  mem=%d%% (%d/%dMB) disk=%d%% load=%s cpus=%d\n",
 			memPct, s.MemUsedMB, s.MemTotalMB, s.DiskUsePct, s.LoadAvg, s.CPUCount))
-		b.WriteString(fmt.Sprintf("  oom=%d swap=%d/%dMB inodes=%d%% ufw=%v user=%s panics=%d\n",
-			s.OOMKills, s.SwapUsedMB, s.SwapTotalMB, s.InodePct, s.UFWActive, s.ProcessUser, s.PanicCount))
+		b.WriteString(fmt.Sprintf("  oom=%d tenant_oom=%d swap=%d/%dMB inodes=%d%% ufw=%v user=%s panics=%d\n",
+			s.OOMKills, s.TenantOOMKills, s.SwapUsedMB, s.SwapTotalMB, s.InodePct, s.UFWActive, s.ProcessUser, s.PanicCount))
 		if len(s.FailedUnits) > 0 {
 			b.WriteString(fmt.Sprintf("  failed_units: %s\n", strings.Join(s.FailedUnits, ", ")))
 		}
@@ -608,38 +611,48 @@ func buildNamespaceContext(data *ClusterData) string {
 	return b.String()
 }
 
-func buildAnyoneContext(data *ClusterData) string {
+func buildTorContext(data *ClusterData) string {
 	var b strings.Builder
 	for host, nd := range data.Nodes {
-		if nd.Anyone == nil {
+		if nd.Tor == nil {
 			continue
 		}
-		a := nd.Anyone
-		if !a.RelayActive && !a.ClientActive {
+		t := nd.Tor
+		b.WriteString(fmt.Sprintf("### %s\n", host))
+		b.WriteString(fmt.Sprintf("  client=%v socks=%v bootstrap=%d%% legacy_anyone=%v\n",
+			t.ClientActive, t.SocksListening, t.BootstrapPct, t.LegacyAnyone))
+	}
+	return b.String()
+}
+
+func buildGlobalContext(data *ClusterData) string {
+	var b strings.Builder
+	for host, nd := range data.Nodes {
+		if nd == nil || (nd.Chain == nil && nd.Global == nil) {
 			continue
 		}
 		b.WriteString(fmt.Sprintf("### %s\n", host))
-		b.WriteString(fmt.Sprintf("  relay=%v client=%v orport=%v socks=%v control=%v\n",
-			a.RelayActive, a.ClientActive, a.ORPortListening, a.SocksListening, a.ControlListening))
-		if a.RelayActive {
-			b.WriteString(fmt.Sprintf("  bootstrap=%d%% fingerprint=%s nickname=%s\n",
-				a.BootstrapPct, a.Fingerprint, a.Nickname))
+		if c := nd.Chain; c != nil {
+			b.WriteString(fmt.Sprintf("  chain active=%v responsive=%v height=%d peers=%d jailed=%s error=%s signing=%s\n",
+				c.ServiceActive, c.Responsive, c.LatestHeight, c.Peers, boolWord(c.Jailed), c.Error, c.SigningError))
 		}
-		if len(a.ORPortReachable) > 0 {
-			var unreachable []string
-			for h, ok := range a.ORPortReachable {
-				if !ok {
-					unreachable = append(unreachable, h)
-				}
-			}
-			if len(unreachable) > 0 {
-				b.WriteString(fmt.Sprintf("  orport_unreachable: %s\n", strings.Join(unreachable, ", ")))
-			} else {
-				b.WriteString(fmt.Sprintf("  orport: all %d peers reachable\n", len(a.ORPortReachable)))
+		if g := nd.Global; g != nil {
+			for _, u := range g.Units {
+				b.WriteString(fmt.Sprintf("  unit %s %s\n", u.Name, u.State))
 			}
 		}
 	}
 	return b.String()
+}
+
+func boolWord(v *bool) string {
+	if v == nil {
+		return "unknown"
+	}
+	if *v {
+		return "true"
+	}
+	return "false"
 }
 
 // OpenRouter API types (OpenAI-compatible)

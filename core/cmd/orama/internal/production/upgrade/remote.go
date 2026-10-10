@@ -1,0 +1,287 @@
+package upgrade
+
+import (
+	"fmt"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/noderesolver"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/production/clusterops"
+	"github.com/DeBrosOfficial/network/pkg/archivetrust"
+	"github.com/DeBrosOfficial/network/pkg/inspector"
+	oramainstall "github.com/DeBrosOfficial/network/pkg/install"
+	"github.com/DeBrosOfficial/network/pkg/remotessh"
+	"github.com/DeBrosOfficial/network/pkg/rollout"
+)
+
+// RemoteUpgrader handles rolling upgrades across remote nodes.
+type RemoteUpgrader struct {
+	flags *Flags
+
+	// AfterUpgrade runs on a node after its cluster services are upgraded and
+	// before the gate that waits for it to rejoin. `orama upgrade` uses it for
+	// the co-located global layer.
+	AfterUpgrade func(node inspector.Node) error
+
+	// step upgrades one node and gate waits for it to carry its share again;
+	// nil is the real thing (upgradeNode, rollout.WaitReady). A test replaces them.
+	step func(node inspector.Node) error
+	gate func(node inspector.Node, budget time.Duration) error
+}
+
+// NewRemoteUpgrader creates a new remote upgrader.
+func NewRemoteUpgrader(flags *Flags) *RemoteUpgrader {
+	return &RemoteUpgrader{flags: flags}
+}
+
+// Execute runs the remote rolling upgrade: it reads the cluster, prints the
+// plan, and with --yes restarts the nodes one at a time.
+func (r *RemoteUpgrader) Execute() error {
+	nodes, cleanup, err := r.Connect()
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	plan, err := r.Plan(nodes)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("\n%s\n", plan)
+
+	if !r.flags.Yes {
+		return fmt.Errorf("re-run with --yes to execute this plan")
+	}
+	return r.Roll(plan)
+}
+
+// Connect resolves the environment's nodes, checks a named node is among them
+// and prepares the SSH keys for every node. cleanup removes the keys.
+func (r *RemoteUpgrader) Connect() (nodes []inspector.Node, cleanup func(), err error) {
+	nodes, err = noderesolver.ResolveNodes(r.flags.Env)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// A named node is checked before anything is resolved or read, so a typo
+	// fails at once instead of after every node has been probed.
+	if r.flags.NodeFilter != "" && len(remotessh.FilterByIP(nodes, r.flags.NodeFilter)) == 0 {
+		return nil, nil, fmt.Errorf("node %s not found in %s environment", r.flags.NodeFilter, r.flags.Env)
+	}
+
+	// Keys for every node, --node or not: the safety preconditions below read
+	// every node's raft state.
+	cleanup, err = remotessh.PrepareNodeKeys(nodes)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nodes, cleanup, nil
+}
+
+// Plan reads the raft state of every node and builds the rollout from what the
+// cluster is actually doing, not from the order nodes happen to appear in
+// nodes.conf. Restarting the leader first costs an election on every node
+// after it; restarting two nameservers back to back takes the zone offline.
+func (r *RemoteUpgrader) Plan(nodes []inspector.Node) (*rollout.Plan, error) {
+	fmt.Printf("Reading cluster state from %d nodes...\n", len(nodes))
+	roles := rollout.ReadRoles(nodes, rollout.DefaultRunner)
+
+	plan, err := planRollout(nodes, roles, r.flags.NodeFilter)
+	if err != nil {
+		return nil, fmt.Errorf("cannot plan a rolling upgrade of %s: %w", r.flags.Env, err)
+	}
+	return plan, nil
+}
+
+// Roll upgrades the plan's nodes one at a time. AfterUpgrade, when set, runs on
+// each node once its cluster services are upgraded and before the gate that
+// waits for it to carry its share again; its error stops the rollout.
+func (r *RemoteUpgrader) Roll(plan *rollout.Plan) error {
+	for i, step := range plan.Steps {
+		fmt.Printf("[%d/%d] Upgrading %s (%s, %s)...\n",
+			i+1, len(plan.Steps), step.Node.Host, step.Node.Role, step.Role)
+
+		if err := r.upgradeStep(step.Node); err != nil {
+			return fmt.Errorf("upgrade failed on %s: %w\nStopping rollout — %d node(s) not upgraded",
+				step.Node.Host, err, len(plan.Steps)-i-1)
+		}
+		fmt.Printf("  ✓ %s upgraded\n", step.Node.Host)
+
+		if r.AfterUpgrade != nil {
+			if err := r.AfterUpgrade(step.Node); err != nil {
+				return fmt.Errorf("%w\nStopping rollout — %d node(s) not upgraded",
+					err, len(plan.Steps)-i-1)
+			}
+		}
+
+		// Gate on the node actually rejoining, not on a fixed sleep. A sleep
+		// cannot tell a node that came back in 20 seconds from one that never
+		// came back, so the rollout restarted the next voter either way — which
+		// is how a rolling upgrade takes out a quorum.
+		if i < len(plan.Steps)-1 {
+			fmt.Printf("  Waiting for %s to rejoin the cluster...\n", step.Node.Host)
+			if err := r.waitGate(step.Node); err != nil {
+				return fmt.Errorf("%w\nStopping rollout — %d node(s) not upgraded. "+
+					"The cluster still has its remaining voters; fix this node before continuing",
+					err, len(plan.Steps)-i-1)
+			}
+			fmt.Printf("  ✓ %s is carrying its share again\n\n", step.Node.Host)
+		}
+	}
+
+	fmt.Printf("\n✓ Rolling upgrade complete (%d nodes)\n", len(plan.Steps))
+	return nil
+}
+
+// planRollout builds the plan for the whole cluster and, with nodeFilter set,
+// keeps only that node's step.
+//
+// The whole cluster, even for one node: "is there exactly one leader" and "is
+// every node readable" are questions about the cluster. Reading only the named
+// node made a healthy cluster look leaderless whenever that node was a
+// follower, and refused (bugboard 2721). A named leader keeps its leader step;
+// the node-side upgrade hands leadership over before it stops anything.
+func planRollout(nodes []inspector.Node, roles map[string]rollout.RaftRole, nodeFilter string) (*rollout.Plan, error) {
+	plan, err := rollout.Build(nodes, roles)
+	if err != nil {
+		return nil, err
+	}
+	if nodeFilter == "" {
+		return plan, nil
+	}
+	for _, step := range plan.Steps {
+		if step.Node.Host == nodeFilter {
+			plan.Steps = []rollout.Step{step}
+			return plan, nil
+		}
+	}
+	return nil, fmt.Errorf("node %s is not in the inventory", nodeFilter)
+}
+
+// gateBudget is how long one node has to rejoin before the rollout stops.
+func (r *RemoteUpgrader) gateBudget() time.Duration {
+	if r.flags.Delay > 0 {
+		return time.Duration(r.flags.Delay) * time.Second
+	}
+	return rollout.GateBudget
+}
+
+// upgradeStep upgrades one node: the real upgrade unless a test replaced it.
+func (r *RemoteUpgrader) upgradeStep(node inspector.Node) error {
+	if r.step != nil {
+		return r.step(node)
+	}
+	return r.upgradeNode(node)
+}
+
+// waitGate waits for the node to rejoin within the gate budget.
+func (r *RemoteUpgrader) waitGate(node inspector.Node) error {
+	if r.gate != nil {
+		return r.gate(node, r.gateBudget())
+	}
+	return rollout.WaitReady(node, rollout.DefaultRunner, r.gateBudget())
+}
+
+// upgradeNode runs the upgrade on a single remote node.
+func (r *RemoteUpgrader) upgradeNode(node inspector.Node) error {
+	return remotessh.RunSSHStreaming(node, upgradeCommand(remotessh.SudoPrefix(node), r.flags))
+}
+
+// stagedPaths are what the node-side guard checks before it runs the staged
+// CLI as root: the archive tree, its bin directory, the CLI, and the trust
+// anchor stage-archive verified it against.
+type stagedPaths struct {
+	base, bin, cli, anchor string
+}
+
+// nodeStagedPaths are a node's.
+var nodeStagedPaths = stagedPaths{
+	base:   oramainstall.OramaBase,
+	bin:    filepath.Dir(newOramaBinaryPath),
+	cli:    newOramaBinaryPath,
+	anchor: archivetrust.AnchorPath,
+}
+
+// upgradeCommand is `node upgrade --restart`, run as root with the CLI of the
+// staged build (/opt/orama/bin/orama, which `orama maint push` verified and put in
+// place), forwarding the per-node flags the operator passed locally
+// (--nameserver, --force, --skip-checks) so the remote orchestrator sees the
+// same intent.
+//
+// The staged CLI, not the one on the node's PATH: that one is the release
+// being replaced, and everything it runs before handing over to the new
+// binary — the pre-stop checks, the leadership hand-over, recording the raft
+// identity, the stop itself — would be the old release's code. Upgrading from
+// 0.122.x that code writes a recovery peers.json and stops the leader without
+// a hand-over. Run from the staged build, the whole upgrade is the new
+// release's code, and its re-exec has nothing to hand over to.
+//
+// Before running it, the node checks that it is running what a push staged:
+// a trust anchor exists (a node that was never pushed a signed build has
+// none, and its /opt/orama/bin/orama is whatever its old release extracted),
+// and /opt/orama, its bin/ and the CLI are root's, not writable by anyone
+// else, and not symlinks — a CLI anyone but root could have replaced is not
+// run as root. The script travels base64-encoded into `bash -s`.
+func upgradeCommand(sudo string, flags *Flags) string {
+	return StagedCLICommand(sudo, upgradeArgs(flags))
+}
+
+// StagedCLICommand runs the staged CLI (/opt/orama/bin/orama) with args, as
+// root, behind the guard above: only a build that a push or a release stage
+// verified, in a tree only root can change, is run.
+func StagedCLICommand(sudo, args string) string {
+	return remotessh.ScriptCommand(sudo, upgradeScript(nodeStagedPaths, args))
+}
+
+// upgradeArgs are the arguments after the CLI.
+func upgradeArgs(flags *Flags) string {
+	args := "node upgrade --restart"
+
+	// Tri-state pointer flag: forward only when explicitly set locally.
+	// nil = "honor saved preference on the remote" — don't pass anything.
+	if flags.Nameserver != nil {
+		if *flags.Nameserver {
+			args += " --nameserver"
+		} else {
+			args += " --nameserver=false"
+		}
+	}
+
+	// Plain booleans: forward when true. False is the default everywhere
+	// so no need to send `=false` explicitly.
+	if flags.Force {
+		args += " --force"
+	}
+	if flags.SkipChecks {
+		args += " --skip-checks"
+	}
+	// Resolved and validated locally (Flags.Resolve): an https URL.
+	if flags.ACMECA != "" {
+		args += " --acme-ca " + clusterops.ShellQuote(flags.ACMECA)
+	}
+	return args
+}
+
+// pushHint is what a node whose staged build cannot be trusted tells the
+// operator.
+const pushHint = "stage this release on it first: orama maint push --env <env> --archive <path> --trust-signers <0xWallet>"
+
+// upgradeScript is the node-side guard, then the staged CLI with args.
+func upgradeScript(p stagedPaths, args string) string {
+	return strings.Join([]string{
+		"set -eu",
+		`fail() { echo "refusing to upgrade: $1; ` + pushHint + `" >&2; exit 1; }`,
+		`[ -f ` + p.anchor + ` ] || fail "no trust anchor at ` + p.anchor + `, so nothing verified ` + p.cli + `"`,
+		`for p in ` + p.base + ` ` + p.bin + ` ` + p.cli + `; do`,
+		`  [ -e "$p" ] || fail "$p does not exist"`,
+		`  [ ! -L "$p" ] || fail "$p is a symlink"`,
+		// Fails closed: a find that cannot inspect the path prints nothing,
+		// which must not read as "nothing wrong".
+		`  bad=$(find "$p" -maxdepth 0 \( ! -user root -o -perm -020 -o -perm -002 \) -print) || fail "cannot inspect $p"`,
+		`  [ -z "$bad" ] || fail "$p is not root's alone"`,
+		`done`,
+		`[ -f ` + p.cli + ` ] || fail "` + p.cli + ` is not a regular file"`,
+		`exec ` + p.cli + ` ` + args,
+	}, "\n") + "\n"
+}

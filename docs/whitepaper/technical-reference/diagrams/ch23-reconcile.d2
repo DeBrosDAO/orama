@@ -1,0 +1,26 @@
+direction: down
+
+tick: "Every node, every 60 s\nreconcileWebRTCForLocalNamespaces"
+guard: "Per namespace: cluster ready or degraded,\ncluster id matches registry"
+prune: "pruneStaleClusterNodes"
+cfg: "WebRTC config read"
+orph: "config absent:\nstop unallocated SFU"
+skip: "read error:\nskip, log"
+backfill: "backfillSFUAllocation\n(record running SFU's ports)"
+realloc: "ReconcileWebRTCAllocations"
+gates: "gates: 5 min startup grace,\nviable members exist,\nlive*2 > viable,\nviable >= (raw+1)/2,\nlowest live id = me"
+plan: "planWebRTCReallocation\n(drop non-viable, SFU on every viable,\nTURN on min(2, viable), trim surplus)"
+spawn: "spawnAllocatedWebRTCServices\nstart own SFU if stopped"
+stop: "stopUnallocatedWebRTCServices\nclean read of no allocation only"
+host: "ReconcileHostTURN once for the host"
+adv: "ensureTURNRecordsForServingNamespaces\nonly namespaces the live server serves"
+
+tick -> guard -> prune -> cfg
+cfg -> orph: "none"
+cfg -> skip: "error"
+cfg -> backfill: "enabled"
+backfill -> realloc -> gates
+gates -> plan: "pass; coordinator only"
+gates -> spawn: "fail: no change to roles"
+plan -> spawn
+spawn -> stop -> host -> adv

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -57,17 +58,6 @@ func newTestProviderKind(t *testing.T, bundle string, kind Kind, fake *fakePushC
 		logger:   zap.NewNop(),
 	}
 }
-
-// validP8 is a real-looking PEM-encoded EC P-256 private key. Not the
-// real one — generated for tests only. Used to validate the
-// happy-path constructor; New() will still fail because authKey parsing
-// will reject this synthetic key, so we don't use it for Send() tests.
-const validP8 = `-----BEGIN PRIVATE KEY-----
-MIGTAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBHkwdwIBAQQg2pV1mEzh4n1mY3y4
-i7Ww8gJZ7lxFm6dlGn3PMOzCq2egCgYIKoZIzj0DAQehRANCAAS8Pn8VKWUe9wm8
-e1JFvSTSj1RxLm2sj8cKpFnSdF5g3kfQ9ueJmFVnZbR3VRJOzn0FNyEJYUkXOdYx
-PRIVATE_KEY_PLACEHOLDER==
------END PRIVATE KEY-----`
 
 // ---- Validator tests ------------------------------------------------
 
@@ -597,5 +587,21 @@ func TestHasVisibleContent(t *testing.T) {
 				t.Errorf("hasVisibleContent(%+v) = %v; want %v", tc.msg, got, tc.want)
 			}
 		})
+	}
+}
+
+// A transport error is a *url.Error whose text is the request URL, and an APNs
+// URL ends in the device token. The error the provider returns keeps the cause
+// and drops the URL.
+func TestSend_TransportErrorDropsTheDeviceTokenURL(t *testing.T) {
+	const token = "DEVICE-TOKEN-VALUE"
+	fake := &fakePushClient{err: &url.Error{Op: "Post", URL: "https://api.push.apple.com/3/device/" + token, Err: context.DeadlineExceeded}}
+	p := newTestProvider(t, "com.example.app", fake)
+	err := p.Send(context.Background(), push.PushMessage{DeviceToken: token, Title: "x"})
+	if err == nil || strings.Contains(err.Error(), token) {
+		t.Fatalf("error = %v, want one without the device token", err)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("cause lost: %v", err)
 	}
 }

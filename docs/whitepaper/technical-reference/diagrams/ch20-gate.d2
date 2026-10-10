@@ -1,0 +1,25 @@
+direction: down
+
+start: "libp2p connection event"
+dial: "Outbound dial" {shape: diamond}
+accept: "Inbound accept" {shape: diamond}
+
+d_peer: "InterceptPeerDial\npeer id pinned or in this round?" {shape: diamond}
+d_addr: "InterceptAddrDial\nexactly /ip4/overlay/tcp/port ?" {shape: diamond}
+a_addr: "InterceptAccept\nremote exactly /ip4/overlay/tcp/port ?" {shape: diamond}
+secured: "InterceptSecured (after Noise)\npeer id admitted AND address in overlay?" {shape: diamond}
+ok: "Connection admitted"
+no: "Refused"
+
+start -> dial
+start -> accept
+dial -> d_peer
+d_peer -> d_addr: yes
+d_peer -> no: no
+d_addr -> secured: yes
+d_addr -> no: no
+accept -> a_addr
+a_addr -> secured: yes
+a_addr -> no: no
+secured -> ok: yes
+secured -> no: "no (retried on the peer's next round)"

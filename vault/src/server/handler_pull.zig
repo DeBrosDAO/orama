@@ -9,6 +9,7 @@ const router = @import("router.zig");
 const log = @import("../log.zig");
 const file_store = @import("../storage/file_store.zig");
 const handler_auth = @import("handler_auth.zig");
+const ownership = @import("../auth/ownership.zig");
 
 /// Maximum request body size for pull requests. Only contains {"identity":"<64 hex>"}.
 const MAX_BODY_SIZE = 4096;
@@ -35,6 +36,9 @@ pub fn handle(writer: anytype, body: []const u8, ctx: *const router.RouteContext
     // Parse JSON
     const PullBody = struct {
         identity: []const u8,
+        pubkey: []const u8 = "",
+        signature: []const u8 = "",
+        timestamp: i64 = 0,
     };
 
     const parsed = std.json.parseFromSlice(PullBody, ctx.allocator, body, .{}) catch {
@@ -54,9 +58,20 @@ pub fn handle(writer: anytype, body: []const u8, ctx: *const router.RouteContext
         }
     }
 
-    // Derive integrity key from guardian server_secret (or use fallback)
+    // Ownership proof: identity = SHA-256(pubkey) and a fresh, valid Ed25519
+    // signature over the pull message. This closes the password-oracle — anyone
+    // who only knows the identity cannot read even the encrypted blob.
+    if (ctx.guardian != null) {
+        const now = std.time.timestamp();
+        if (!ownership.verifyPull(identity, parsed.value.timestamp, now, parsed.value.pubkey, parsed.value.signature)) {
+            return response.jsonError(writer, 401, "Unauthorized", "invalid ownership signature");
+        }
+    }
+
+    // Use the guardian's persistent at-rest integrity key (survives restarts),
+    // or a fixed fallback when running without a guardian (e.g. tests).
     const integrity_key: []const u8 = if (ctx.guardian) |guardian|
-        &guardian.server_secret
+        &guardian.integrity_key
     else
         "vault-default-integrity-key!!!!!";
 
@@ -78,6 +93,10 @@ pub fn handle(writer: anytype, body: []const u8, ctx: *const router.RouteContext
     };
     defer ctx.allocator.free(share_data);
 
+    // Read reconstruction metadata (version + threshold) so the gateway can
+    // select a version-consistent read set using the ORIGINAL threshold.
+    const meta: file_store.V1Meta = file_store.readMeta(ctx.data_dir, identity, ctx.allocator) catch .{ .version = 0, .threshold = 0 };
+
     // Base64 encode
     const encoded_len = std.base64.standard.Encoder.calcSize(share_data.len);
     const encoded = ctx.allocator.alloc(u8, encoded_len) catch {
@@ -86,17 +105,23 @@ pub fn handle(writer: anytype, body: []const u8, ctx: *const router.RouteContext
     defer ctx.allocator.free(encoded);
     _ = std.base64.standard.Encoder.encode(encoded, share_data);
 
-    // Build response: {"share":"<base64>"}
-    // We need to write it in parts to avoid a huge stack buffer
+    // Build response: {"share":"<base64>","version":<n>,"threshold":<k>}
+    // Written in parts to avoid a large stack buffer for the share payload.
+    const prefix = "{\"share\":\"";
+    var suffix_buf: [96]u8 = undefined;
+    const suffix = std.fmt.bufPrint(&suffix_buf, "\",\"version\":{d},\"threshold\":{d}}}", .{ meta.version, meta.threshold }) catch {
+        return response.internalError(writer);
+    };
+    const body_len = prefix.len + encoded.len + suffix.len;
+
     try writer.writeAll("HTTP/1.1 200 OK\r\n");
     try writer.writeAll("Content-Type: application/json\r\n");
-    const body_len = 11 + encoded.len + 2; // {"share":".."}
     try std.fmt.format(writer, "Content-Length: {d}\r\n", .{body_len});
     try writer.writeAll("Connection: close\r\n");
     try writer.writeAll("\r\n");
-    try writer.writeAll("{\"share\":\"");
+    try writer.writeAll(prefix);
     try writer.writeAll(encoded);
-    try writer.writeAll("\"}");
+    try writer.writeAll(suffix);
 
-    log.info("served share for identity {s} ({d} bytes)", .{ identity, share_data.len });
+    log.info("served share for identity {s} ({d} bytes, v{d})", .{ identity, share_data.len, meta.version });
 }

@@ -1,0 +1,23 @@
+shape: sequence_diagram
+
+c: Subscriber {shape: person}
+gw: Namespace gateway
+cl: HTTPClient (per gateway)
+svc: Pubsub service
+
+c -> gw: "GET /v1/pubsub/ws?topic=...&presence=..."
+gw -> gw: "namespace, topic read grant, reserved-topic rule, presence needs write"
+gw -> cl: "SubscribeHandle(ns, topic, forwardToSocket)"
+cl -> svc: "first handler for ns.topic: GET /subscribe?namespace=&topic= (stream)"
+svc -> svc: "Manager.SubscribeHandle, join topic, subscribe"
+svc -> cl: "200 text/event-stream (answered only once subscribed)"
+cl -> gw: "handle (stop function)"
+gw -> c: "101 Switching Protocols"
+gw -> gw: "register in wssession, join presence, start writer loop"
+svc -> cl: "data: base64(message)"
+cl -> gw: "handler -> socket channel (128, drops when full)"
+gw -> c: "text frame {data, timestamp, topic}"
+gw -> c: "ping every 30 s"
+c -> gw: "pong or any frame: read deadline +75 s"
+c -> gw: "close, read error, missed deadline, or sweeper close 4403"
+gw -> cl: "stop(): last handler closes the stream"

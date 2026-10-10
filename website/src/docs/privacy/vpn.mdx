@@ -1,0 +1,46 @@
+# VPN
+
+**There is no public Orama VPN today.** There is a command-line client for a private Orama Tor network, and a launch gate that keeps anything public closed. There is no app, no system-wide tunnel and no price. This page says which is which.
+
+## What exists: `orama maint vpn`
+
+`orama maint vpn` joins an Orama Tor network from your machine ([Tor](/docs/privacy/tor#oramas-own-tor-network)). It reads the network's `tor-network.json` file.
+
+| Command | What it does |
+|---|---|
+| `orama maint vpn up --network tor-network.json` | Starts an unmodified upstream `tor` configured with the file's directory authorities and no others, and offers a SOCKS5 proxy on loopback (default `127.0.0.1:9150`). Runs until interrupted |
+| `orama maint vpn check --network tor-network.json` | Joins the network and reads the all-zero account through each validator onion service in the file, each over its own circuit. Passes when at least one answers |
+
+`ORAMA_ONION_NETWORK` supplies `--network`; a flag wins.
+
+It is a proxy, not a tunnel. Only applications pointed at the SOCKS port use the network, and they must use `socks5h` so the proxy resolves names. The client has one route: it never falls back to the public Tor network or to a direct connection, and when `tor` stops the port closes and whatever was using it fails. Only a private network can be joined, since the public Orama network is not launched. The three-hop desktop app with a system-wide tunnel is a separate piece of work and is not built.
+
+## The launch gate
+
+`chain/x/vpnlaunch` answers whether a public VPN beta could open. It is a pure function: no keeper, messages or genesis, and `oramad` does not link it. It has two parts.
+
+First, every threshold must hold on each of the last 30 days, not on average:
+
+| Condition | Threshold |
+|---|---|
+| Directory authorities | at least 5, with an independent majority |
+| Relays | at least 100 |
+| Relay operators | at least 40 |
+| Exits | at least 15, in at least 5 countries |
+| Largest operator's or family's share of consensus weight | at most 10%, compared exactly in integers so 10.4% does not pass as 10 |
+
+Second, the launch switch (`LaunchEnabled`) must be on. **It is off in every build**, and a test fails if anyone changes it. Turning it on is a release decision made with the 30-day measurement in hand. Opening a beta would be a separate act again.
+
+## What the gate measures
+
+Every threshold is about how many independent relays, exits and operators exist and how evenly they share the load. Those numbers come from the Orama Tor network ([Tor](/docs/privacy/tor)) and the relay registry ([Relay rewards](/docs/blockchain/relay-rewards)). The code for both exists, but no real network has run, and Orama runs every authority, so the gate cannot open.
+
+## What to use instead today
+
+- To make a request without revealing a server's address to a destination: the [anonymity proxy](/docs/privacy/tor).
+- To download a stored object without revealing your address to the storing node: [relayed fetch](/docs/privacy/relayed-fetch).
+- To make calls that look like HTTPS: [stealth TURN](/docs/privacy/stealth-turn).
+
+## Other uses of the word
+
+Every cluster connects its nodes with a WireGuard mesh (`10.0.0.0/24`). That is internal infrastructure, not a product ([WireGuard](/docs/operator/wireguard)).

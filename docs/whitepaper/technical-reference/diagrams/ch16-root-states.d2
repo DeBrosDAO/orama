@@ -1,0 +1,13 @@
+direction: right
+
+g1: "Generation 1, legacy writes\nIKM = cluster-secret copy\nWriteVersioned false\nrows: enc:base64"
+g1v: "Generation 1, versioned writes\nsame IKM\nWriteVersioned true\nrows: enc:v1:1:base64"
+g2: "Generation n+1 current\nfresh IKM, previous = generation n\nboth slots in registry\nrows: enc:v1:n+1:base64"
+forget: "Previous forgotten\nForgetPrevious: no caller\nand no test"
+
+g1 -> g1v: "rotate-secrets\n(EnableVersionedWrites + Walk)"
+g1 -> g2: "rotate-secrets --rotate\n(Rotate + Walk)"
+g1v -> g2: "rotate-secrets --rotate"
+g2 -> g2: "rotate-secrets (rerun): Walk picks up\nrows still on the previous key"
+g2 -> g2: "rotate-secrets --rotate again:\nprevious slot overwritten"
+g2 -> forget: "not reachable from any route"

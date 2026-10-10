@@ -16,7 +16,7 @@ builds:
   # orama CLI binary
   - id: orama
     dir: core
-    main: ./cmd/cli
+    main: ./cmd/orama
     binary: orama
     goos:
       - linux

@@ -90,8 +90,11 @@ func (c *RQLiteClient) Query(ctx context.Context, query string, args ...interfac
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
+	// One result per statement. A reply with none is not "no rows": it says
+	// nothing about the table, and reading it as an empty answer would turn a
+	// broken backend into NXDOMAIN (cached) for names that exist.
 	if len(queryResp.Results) == 0 {
-		return [][]interface{}{}, nil
+		return nil, fmt.Errorf("query answered with no results; the database did not run the statement")
 	}
 
 	result := queryResp.Results[0]

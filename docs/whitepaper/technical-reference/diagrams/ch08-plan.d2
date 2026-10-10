@@ -1,0 +1,32 @@
+direction: down
+
+start: "For each wireguard_peers row"
+byip: "dns_nodes row with\nthe same wg_ip?" {shape: diamond}
+conf1: "confirmed_at set?" {shape: diamond}
+created: "created_at known?" {shape: diamond}
+young: "older than\nJoinGrace 30 min?" {shape: diamond}
+orphan: "OrphanWireGuardPeers\n(report only, never drop)"
+dropunc: "DropUnconfirmedWireGuardPeers\n(DELETE ... confirmed_at IS NULL)"
+leave: "leave alone\n(join in flight)"
+latch: "ConfirmWireGuardPeers\n(latch confirmed_at)"
+dep: "departed(node)?\nnot in discovery, last_seen older\nthan 30 min, tombstoned" {shape: diamond}
+dropwg: "DropWireGuardPeers"
+keep: "keep"
+
+start -> byip
+byip -> conf1: "no"
+byip -> latch: "yes, confirmed_at empty"
+byip -> dep: "yes, confirmed"
+latch -> dep
+conf1 -> orphan: "yes"
+conf1 -> created: "no"
+created -> orphan: "no"
+created -> young: "yes"
+young -> dropunc: "yes"
+young -> leave: "no"
+dep -> dropwg: "yes"
+dep -> keep: "no"
+
+dns: "For each dns_nodes row: departed AND tombstoned AND\ntombstone older than TombstoneGrace 6 h?" {shape: diamond}
+dropdns: "DropDNSNodes:\nrevoke key, delete system A records,\ndelete row"
+dns -> dropdns: "yes"

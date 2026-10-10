@@ -22,11 +22,27 @@ Thumbs.db
 .mcp.json
 .claude/
 .codex/
+secrets/
+# Go packages named secrets are source code, not secret material: only their .go files are tracked,
+# so a key dropped into one is still ignored.
+!/core/pkg/secrets/
+/core/pkg/secrets/*
+!/core/pkg/secrets/*.go
+!/e2e/harness/secrets/
+/e2e/harness/secrets/*
+!/e2e/harness/secrets/*.go
 
 # === Core (Go) ===
 core/phantom-auth/
 bin/
 core/bin/
+# `go build ./cmd/<name>` run inside core/ drops the binary here
+/core/orama
+/core/gateway
+/core/privhelper
+/core/pubsub
+/core/cli
+/core/sni-router
 core/bin-linux/
 core/dist/
 core/orama-cli-linux
@@ -44,6 +60,7 @@ core/coverage.html
 core/profile.out
 core/e2e/config.yaml
 core/scripts/remote-nodes.conf
+core/scripts/nodes.conf
 
 # Go build artifacts
 *.exe
@@ -69,10 +86,7 @@ go.work
 website/remote.conf
 website/node_modules/
 website/dist/
-website/invest-api/invest-api
-website/invest-api/*.db
-website/invest-api/*.db-shm
-website/invest-api/*.db-wal
+website/dist-server/
 
 # === SDK (TypeScript) ===
 sdk/node_modules/
@@ -93,3 +107,27 @@ local/
 
 # Implementation plans (not committed)
 core/plans/
+
+# Claude Code local settings (machine-specific allowlists — never commit)
+.claude/settings.local.json
+
+# TypeScript incremental build artifact
+website/tsconfig.tsbuildinfo
+
+# Go build artifacts left in core/ by `go build ./cmd/...`
+core/turn
+core/sfu
+core/gateway
+core/identity
+
+# Local git worktrees (one per branch under .tree/<name>)
+.tree/
+
+# Scratch plans kept outside core/plans
+plans/
+
+# e2e fleet runner build output
+/e2e/e2e-fleet
+# stagenet-target run artifacts (e2e/README.md, "Running against stagenet")
+/e2e/artifacts/
+/e2e/cmd/e2e-fleet/e2e-fleet

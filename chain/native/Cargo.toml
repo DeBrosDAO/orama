@@ -1,0 +1,23 @@
+# One static library with both Rust halves of oramad: libwasmvm (CosmWasm) and the Orchard verifier.
+#
+# Two Rust staticlibs linked into one binary each carry their own copy of the standard library and
+# collide, so both are built as rlibs of this crate and archived once. wasmvm is not vendored: build.sh
+# copies libwasmvm from the module cache at the version chain/go.mod pins (v3.0.7, checked against
+# go.sum by the Go toolchain) into vendor/wasmvm, and Cargo.lock pins the crates. Nothing prebuilt is
+# downloaded.
+[package]
+name = "orama-native"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "orama_native"
+crate-type = ["staticlib"]
+
+[dependencies]
+wasmvm = { path = "vendor/wasmvm" }
+orama-orchard-ffi = { path = "../x/shielded/orchardffi" }
+
+[profile.release]
+opt-level = 3

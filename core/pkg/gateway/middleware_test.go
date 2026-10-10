@@ -5,6 +5,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	deploymentshandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/deployments"
 )
 
 func TestExtractAPIKey(t *testing.T) {
@@ -36,7 +38,7 @@ func TestDomainRoutingMiddleware_NonDebrosNetwork(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	g := &Gateway{}
+	g := &Gateway{cfg: &Config{BaseDomain: "orama.network"}}
 	middleware := g.domainRoutingMiddleware(next)
 
 	req := httptest.NewRequest("GET", "/", nil)
@@ -62,7 +64,7 @@ func TestDomainRoutingMiddleware_APIPathBypass(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	g := &Gateway{}
+	g := &Gateway{cfg: &Config{BaseDomain: "orama.network"}}
 	middleware := g.domainRoutingMiddleware(next)
 
 	req := httptest.NewRequest("GET", "/v1/deployments/list", nil)
@@ -88,7 +90,7 @@ func TestDomainRoutingMiddleware_WellKnownBypass(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	g := &Gateway{}
+	g := &Gateway{cfg: &Config{BaseDomain: "orama.network"}}
 	middleware := g.domainRoutingMiddleware(next)
 
 	req := httptest.NewRequest("GET", "/.well-known/acme-challenge/test", nil)
@@ -115,6 +117,7 @@ func TestDomainRoutingMiddleware_NoDeploymentService(t *testing.T) {
 	})
 
 	g := &Gateway{
+		cfg: &Config{BaseDomain: "orama.network"},
 		// deploymentService is nil
 		staticHandler: nil,
 	}
@@ -152,40 +155,60 @@ func TestIsPublicPath(t *testing.T) {
 		{"v1 status", "/v1/status", true},
 		{"auth challenge", "/v1/auth/challenge", true},
 		{"auth verify", "/v1/auth/verify", true},
-		{"auth register", "/v1/auth/register", true},
+		// /v1/auth/register was removed: nothing called it, the apps row it wrote
+		// was never read, and it made the caller an owner of any namespace.
+		{"auth register", "/v1/auth/register", false},
 		{"auth refresh", "/v1/auth/refresh", true},
 		{"auth logout", "/v1/auth/logout", true},
 		{"auth api-key", "/v1/auth/api-key", true},
 		{"auth jwks", "/v1/auth/jwks", true},
 		{"well-known jwks", "/.well-known/jwks.json", true},
 		{"version", "/v1/version", true},
-		{"network status", "/v1/network/status", true},
-		{"network peers", "/v1/network/peers", true},
+		// A map of the cluster: an operator's, or another node's with a
+		// coordination MAC (TestNetworkDetail_*).
+		{"network status", "/v1/network/status", false},
+		{"network peers", "/v1/network/peers", false},
 
 		// Prefix-matched public paths
-		{"acme challenge", "/.well-known/acme-challenge/abc", true},
+		// Caddy answers the HTTP-01 challenge; nothing here serves it, and a
+		// path with no route is not an open one.
+		{"acme challenge", "/.well-known/acme-challenge/abc", false},
 		{"invoke function", "/v1/invoke/func1", true},
 		{"functions invoke", "/v1/functions/myfn/invoke", true},
-		{"internal replica", "/v1/internal/deployments/replica/xyz", true},
-		{"internal wg peers", "/v1/internal/wg/peers", true},
+		// The four replica endpoints are exact routes; a fifth path under the
+		// same prefix is not one of them and is not open.
+		{"internal replica setup", "/v1/internal/deployments/replica/setup", true},
+		{"internal replica made up", "/v1/internal/deployments/replica/xyz", false},
 		{"internal join", "/v1/internal/join", true},
 		{"internal namespace spawn", "/v1/internal/namespace/spawn", true},
 		{"internal namespace repair", "/v1/internal/namespace/repair", true},
-		// Internal WebRTC mgmt endpoints — exempt from API-key middleware
-		// (handler enforces internal-auth header + WireGuard peer). Without
-		// these, `orama namespace enable webrtc` had no working path.
-		{"internal webrtc enable", "/v1/internal/namespace/webrtc/enable", true},
-		{"internal webrtc disable", "/v1/internal/namespace/webrtc/disable", true},
-		{"internal webrtc status", "/v1/internal/namespace/webrtc/status", true},
+		{"internal secrets reencrypt", "/v1/internal/secrets/reencrypt", true},
+		// The internal WebRTC mgmt endpoints were removed: nothing in the
+		// repository called them — `orama namespace enable webrtc` goes to the
+		// public route, which does the work itself — and they were three paths
+		// exempt from the API-key middleware and authenticated by a constant
+		// that is in this source.
+		{"internal webrtc enable", "/v1/internal/namespace/webrtc/enable", false},
+		{"internal webrtc disable", "/v1/internal/namespace/webrtc/disable", false},
+		{"internal webrtc status", "/v1/internal/namespace/webrtc/status", false},
+		// Internal storage eviction (bugboard #153) — exempt from API-key
+		// middleware; handler enforces internal-auth header + WireGuard peer.
+		// Without this the cross-node evict fan-out 401s and immediate reclaim
+		// silently never runs.
+		{"internal storage evict", "/v1/internal/storage/evict", true},
 		// Guard: the PUBLIC webrtc mgmt path must STILL require auth (only
 		// the /internal/ variant is exempt).
 		{"public webrtc enable still requires auth", "/v1/namespace/webrtc/enable", false},
-		{"phantom session", "/v1/auth/phantom/session", true},
-		{"phantom complete", "/v1/auth/phantom/complete", true},
+		// The Phantom browser-session flow was removed. Its whole prefix was
+		// public — the status poll handed out a minted API key to anyone who
+		// knew a session id — so nothing under it may be public again.
+		{"phantom session", "/v1/auth/phantom/session", false},
+		{"phantom session status", "/v1/auth/phantom/session/abc", false},
+		{"phantom complete", "/v1/auth/phantom/complete", false},
 
 		// Namespace status
 		{"namespace status", "/v1/namespace/status", true},
-		{"namespace status with id", "/v1/namespace/status/xyz", true},
+		{"namespace status with id is not a route", "/v1/namespace/status/xyz", false},
 
 		// NON-public paths
 		{"deployments list", "/v1/deployments/list", false},
@@ -199,9 +222,9 @@ func TestIsPublicPath(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := isPublicPath(tc.path)
+			got := policyOf(http.MethodGet, tc.path).Access.Anonymous()
 			if got != tc.want {
-				t.Errorf("isPublicPath(%q) = %v, want %v", tc.path, got, tc.want)
+				t.Errorf("%q reachable without a credential = %v, want %v", tc.path, got, tc.want)
 			}
 		})
 	}
@@ -288,36 +311,14 @@ func TestGetClientIP(t *testing.T) {
 		remoteAddr string
 		want       string
 	}{
-		{
-			name:       "X-Forwarded-For single IP",
-			xff:        "1.2.3.4",
-			remoteAddr: "9.9.9.9:1234",
-			want:       "1.2.3.4",
-		},
-		{
-			name:       "X-Forwarded-For multiple IPs",
-			xff:        "1.2.3.4, 5.6.7.8",
-			remoteAddr: "9.9.9.9:1234",
-			want:       "1.2.3.4",
-		},
-		{
-			name:       "X-Real-IP fallback",
-			xRealIP:    "1.2.3.4",
-			remoteAddr: "9.9.9.9:1234",
-			want:       "1.2.3.4",
-		},
-		{
-			name:       "RemoteAddr fallback",
-			remoteAddr: "9.8.7.6:1234",
-			want:       "9.8.7.6",
-		},
-		{
-			name:       "X-Forwarded-For takes priority over X-Real-IP",
-			xff:        "1.2.3.4",
-			xRealIP:    "5.6.7.8",
-			remoteAddr: "9.9.9.9:1234",
-			want:       "1.2.3.4",
-		},
+		{name: "a direct caller's X-Forwarded-For is ignored", xff: "1.2.3.4", remoteAddr: "9.9.9.9:1234", want: "9.9.9.9"},
+		{name: "a direct caller's X-Real-IP is ignored", xRealIP: "1.2.3.4", remoteAddr: "9.9.9.9:1234", want: "9.9.9.9"},
+		{name: "RemoteAddr", remoteAddr: "9.8.7.6:1234", want: "9.8.7.6"},
+		{name: "through the local proxy the last entry counts", xff: "6.6.6.6, 1.2.3.4", remoteAddr: "127.0.0.1:1234", want: "1.2.3.4"},
+		{name: "a spoofed first entry is never the client", xff: "1.2.3.4, 5.6.7.8", remoteAddr: "127.0.0.1:1234", want: "5.6.7.8"},
+		{name: "a namespace gateway sees the client a mesh gateway forwarded", xff: "203.0.113.50", remoteAddr: "10.0.0.2:1234", want: "203.0.113.50"},
+		{name: "a private peer off the mesh is the client", xff: "203.0.113.50", remoteAddr: "192.168.4.4:1234", want: "192.168.4.4"},
+		{name: "X-Real-IP is not used through the proxy either", xff: "5.6.7.8", xRealIP: "1.2.3.4", remoteAddr: "127.0.0.1:1234", want: "5.6.7.8"},
 	}
 
 	for _, tc := range tests {
@@ -440,12 +441,6 @@ func TestGetAllowedOrigin(t *testing.T) {
 		want       string
 	}{
 		{
-			name:       "no base domain returns wildcard",
-			baseDomain: "",
-			origin:     "https://anything.com",
-			want:       "*",
-		},
-		{
 			name:       "matching subdomain returns origin",
 			baseDomain: "dbrs.space",
 			origin:     "https://app.dbrs.space",
@@ -485,37 +480,42 @@ func TestGetAllowedOrigin(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestRequiresNamespaceOwnership
+// TestRouteOwnership
 // ---------------------------------------------------------------------------
 
-func TestRequiresNamespaceOwnership(t *testing.T) {
+func TestRouteOwnership(t *testing.T) {
 	tests := []struct {
 		name string
 		path string
 		want bool
 	}{
-		// Paths that require ownership
-		{"rqlite root", "/rqlite", true},
-		{"v1 rqlite", "/v1/rqlite", true},
-		{"v1 rqlite query", "/v1/rqlite/query", true},
-		{"pubsub", "/v1/pubsub", true},
+		// Routes whose grant is resolved in the namespace
+		{"rqlite query", "/v1/rqlite/query", true},
 		{"pubsub publish", "/v1/pubsub/publish", true},
-		{"proxy something", "/v1/proxy/something", true},
+		{"proxy anon", "/v1/proxy/anon", true},
 		{"functions root", "/v1/functions", true},
 		{"functions specific", "/v1/functions/myfn", true},
+		{"namespace members", "/v1/namespace/members", true},
 
-		// Paths that do NOT require ownership
+		// Routes with no ownership check
 		{"auth challenge", "/v1/auth/challenge", false},
 		{"deployments list", "/v1/deployments/list", false},
 		{"health", "/health", false},
+		// Storage resolves no grant, which is why a resource selector on a
+		// storage grant authorises nothing yet (chg-392).
 		{"storage upload", "/v1/storage/upload", false},
+		{"cache get", "/v1/cache/get", false},
+
+		// Not routes at all
+		{"rqlite root", "/rqlite", false},
+		{"pubsub with no operation", "/v1/pubsub", false},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := requiresNamespaceOwnership(tc.path)
+			got := policyOf(http.MethodPost, tc.path).Ownership
 			if got != tc.want {
-				t.Errorf("requiresNamespaceOwnership(%q) = %v, want %v", tc.path, got, tc.want)
+				t.Errorf("%q requires a namespace grant = %v, want %v", tc.path, got, tc.want)
 			}
 		})
 	}
@@ -584,7 +584,7 @@ func TestCircuitBreaker(t *testing.T) {
 	t.Run("opens after threshold failures", func(t *testing.T) {
 		cb := NewCircuitBreaker()
 		for i := 0; i < 5; i++ {
-			cb.RecordFailure()
+			cb.RecordFailure("test")
 		}
 		if cb.Allow() {
 			t.Fatal("expected Allow() = false after 5 failures (circuit should be open)")
@@ -597,7 +597,7 @@ func TestCircuitBreaker(t *testing.T) {
 
 		// Open the circuit
 		for i := 0; i < 5; i++ {
-			cb.RecordFailure()
+			cb.RecordFailure("test")
 		}
 		if cb.Allow() {
 			t.Fatal("expected Allow() = false when circuit is open")
@@ -623,7 +623,7 @@ func TestCircuitBreaker(t *testing.T) {
 
 		// Open the circuit
 		for i := 0; i < 5; i++ {
-			cb.RecordFailure()
+			cb.RecordFailure("test")
 		}
 
 		// Wait for half-open transition
@@ -650,7 +650,7 @@ func TestCircuitBreaker(t *testing.T) {
 func TestCircuitBreakerRegistry(t *testing.T) {
 	t.Run("creates new breaker if not exists", func(t *testing.T) {
 		reg := NewCircuitBreakerRegistry()
-		cb := reg.Get("target-a")
+		cb := reg.ForNamespaceGateway("a", "10.0.0.1")
 		if cb == nil {
 			t.Fatal("expected non-nil circuit breaker")
 		}
@@ -661,8 +661,8 @@ func TestCircuitBreakerRegistry(t *testing.T) {
 
 	t.Run("returns same breaker for same key", func(t *testing.T) {
 		reg := NewCircuitBreakerRegistry()
-		cb1 := reg.Get("target-a")
-		cb2 := reg.Get("target-a")
+		cb1 := reg.ForNamespaceGateway("a", "10.0.0.1")
+		cb2 := reg.ForNamespaceGateway("a", "10.0.0.1")
 		if cb1 != cb2 {
 			t.Fatal("expected same circuit breaker instance for same key")
 		}
@@ -670,8 +670,8 @@ func TestCircuitBreakerRegistry(t *testing.T) {
 
 	t.Run("different keys get different breakers", func(t *testing.T) {
 		reg := NewCircuitBreakerRegistry()
-		cb1 := reg.Get("target-a")
-		cb2 := reg.Get("target-b")
+		cb1 := reg.ForNamespaceGateway("a", "10.0.0.1")
+		cb2 := reg.ForNamespaceGateway("b", "10.0.0.1")
 		if cb1 == cb2 {
 			t.Fatal("expected different circuit breaker instances for different keys")
 		}
@@ -778,4 +778,52 @@ func TestExtractAPIKey_Extended(t *testing.T) {
 			t.Errorf("expected empty for JWT-like raw token, got %q", got)
 		}
 	})
+}
+
+// On the apex the platform's own pages are served by the gateway and never
+// looked up as a deployment. The deployment handlers are present but have no
+// database behind them: reaching the lookup at all would fail the test.
+func TestDomainRoutingMiddleware_apexServesPlatformPages(t *testing.T) {
+	for _, path := range []string{"/status", "/status/assets/app.js", "/health"} {
+		nextCalled := false
+		next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { nextCalled = true })
+		g := &Gateway{
+			cfg:               &Config{BaseDomain: "orama.network"},
+			deploymentService: &deploymentshandlers.DeploymentService{},
+			staticHandler:     &deploymentshandlers.StaticDeploymentHandler{},
+		}
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Host = "orama.network"
+		g.domainRoutingMiddleware(next).ServeHTTP(httptest.NewRecorder(), req)
+		if !nextCalled {
+			t.Errorf("%s on the apex did not reach the gateway's own handler", path)
+		}
+	}
+}
+
+func TestIsPlatformPage_onlyTheGatewaysOwnPages(t *testing.T) {
+	for path, want := range map[string]bool{
+		"/status": true, "/health": true, "/status/assets/app.css": true,
+		"/": false, "/index.html": false, "/statusx": false, "/status/other": false,
+	} {
+		if got := isPlatformPage(path); got != want {
+			t.Errorf("isPlatformPage(%q) = %v, want %v", path, got, want)
+		}
+	}
+}
+
+// The request log, the namespace affinity key and the X-Forwarded-For handed to a proxied service
+// all use getClientIP, so a spoofed first entry must not reach any of them.
+func TestGetClientIP_aSpoofedFirstForwardedForEntryIsNotForwardedOrKeyed(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.RemoteAddr = "127.0.0.1:5555"
+	r.Header.Set("X-Forwarded-For", "10.9.9.9, 203.0.113.50")
+	if got := getClientIP(r); got != "203.0.113.50" {
+		t.Fatalf("client = %q, want the address the proxy appended", got)
+	}
+	out := httptest.NewRequest(http.MethodGet, "/", nil)
+	out.Header.Set("X-Forwarded-For", getClientIP(r))
+	if out.Header.Get("X-Forwarded-For") != "203.0.113.50" {
+		t.Errorf("the forwarded X-Forwarded-For carries the spoofed entry: %q", out.Header.Get("X-Forwarded-For"))
+	}
 }

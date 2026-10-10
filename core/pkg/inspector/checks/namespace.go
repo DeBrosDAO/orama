@@ -2,6 +2,7 @@ package checks
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/inspector"
 )
@@ -34,6 +35,15 @@ func checkNamespacesPerNode(nd *inspector.NodeData) []inspector.CheckResult {
 
 	for _, ns := range nd.Namespaces {
 		prefix := fmt.Sprintf("ns.%s", ns.Name)
+
+		// A namespace being created or deleted is up on some nodes and not yet
+		// (or no longer) on others: its services are not judged until the
+		// registry says it is settled.
+		if ns.InTransition() {
+			r = append(r, inspector.Skip(prefix+".settled", fmt.Sprintf("Namespace %s services healthy", ns.Name), nsSub, node,
+				fmt.Sprintf("registry status is %s: services are not judged while the namespace is being created or deleted", ns.RegistryStatus), inspector.Critical))
+			continue
+		}
 
 		// RQLite health
 		if ns.RQLiteUp {
@@ -94,11 +104,19 @@ func checkNamespacesCrossNode(data *inspector.ClusterData) []inspector.CheckResu
 	var r []inspector.CheckResult
 
 	// Collect all namespace names across nodes
-	nsNodes := map[string]int{}    // namespace name → count of nodes running it
-	nsHealthy := map[string]int{}  // namespace name → count of nodes where all services are up
+	nsNodes := map[string]int{}   // namespace name → count of nodes running it
+	nsHealthy := map[string]int{} // namespace name → count of nodes where all services are up
 
+	inTransition := map[string]string{} // namespace name → registry status, while it is being created or deleted
+	stuck := map[string]string{}        // namespace name → "status for age", for one the registry has had in transition too long
 	for _, nd := range data.Nodes {
 		for _, ns := range nd.Namespaces {
+			if ns.InTransition() {
+				inTransition[ns.Name] = ns.RegistryStatus
+			}
+			if ns.StuckInTransition() {
+				stuck[ns.Name] = fmt.Sprintf("%s for %s", ns.RegistryStatus, ns.TransitionAge.Round(time.Minute))
+			}
 			nsNodes[ns.Name]++
 			if ns.RQLiteUp && ns.OlricUp && ns.GatewayUp {
 				nsHealthy[ns.Name]++
@@ -107,6 +125,23 @@ func checkNamespacesCrossNode(data *inspector.ClusterData) []inspector.CheckResu
 	}
 
 	for name, total := range nsNodes {
+		if status, moving := inTransition[name]; moving {
+			r = append(r, inspector.Skip(
+				fmt.Sprintf("ns.%s.all_healthy", name),
+				fmt.Sprintf("Namespace %s healthy on all nodes", name),
+				nsSub, "",
+				fmt.Sprintf("registry status is %s: not judged while the namespace is being created or deleted", status),
+				inspector.Critical))
+			continue
+		}
+		if why, isStuck := stuck[name]; isStuck {
+			r = append(r, inspector.Fail(
+				fmt.Sprintf("ns.%s.transition_stuck", name),
+				fmt.Sprintf("Namespace %s not stuck in creation or deletion", name),
+				nsSub, "",
+				fmt.Sprintf("registry has it %s: past the point where the registry takes such a namespace over, so it is judged like any other", why),
+				inspector.High))
+		}
 		healthy := nsHealthy[name]
 		if healthy == total {
 			r = append(r, inspector.Pass(

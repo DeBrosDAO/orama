@@ -1,0 +1,56 @@
+# CLI conformance for the environment, auth and miscellaneous commands, and
+# the whole command tree against docs/whitepaper/technical-reference/appendices/d-cli-reference.md: the binary under test
+# shows exactly the documented commands, flags, aliases and usage lines;
+# unknown commands, flags and subcommands are usage errors; `orama network`
+# add/use/remove/list/current in isolated HOMEs (custom environment signing
+# in end to end, CA scoping and a lost CA file, invalid values, concurrent
+# adds); every credential-needing command without a credential is an auth
+# error naming `orama auth login`; ORAMA_TOKEN garbage and hostile values;
+# `orama maint inspect` over SSH (JSON, --output, bad arguments); `orama ssh` with
+# pinned, missing and forged host keys; `orama maint rollout` refusing bad flags
+# before it builds; `orama network add` refuses a manifest URL that is not https
+# or does not end in /manifest.json; `orama maint network publish` writes a
+# network directory in a temp dir and refuses to change a published genesis;
+# `orama maint network announce` writes one with no genesis for a network that
+# does not exist yet, and refuses one that is created;
+# the hidden `orama maint` groups answer --help like the rest of the tree.
+# Nothing here changes the fleet.
+id: cli-env-auth-misc
+title: CLI conformance - command tree, environments, credentials, inspect, ssh
+area: cli
+subtasks: [2845]
+stage: 3
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  cli:
+    - orama network
+    - orama network add
+    - orama network current
+    - orama network list
+    - orama network remove
+    - orama network use
+    - orama maint
+    - orama maint cluster
+    - orama maint global
+    - orama maint global tor
+    - orama maint inspect
+    - orama maint network
+    - orama maint network announce
+    - orama maint network publish
+    - orama maint node
+    - orama ssh
+    - orama maint rollout
+  claims:
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md: generated from the cobra tree, so the binary shows exactly the documented commands, flags, aliases and usage lines"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-network-add: a manifest URL must be https and end in /manifest.json; nothing is stored before the digest of the release root is confirmed"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-maint-network-publish: a chain id that is already published keeps its genesis; a reset needs a new chain id"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-maint-network-announce: an announced network has a manifest and a release root and no genesis, and a network that is already created cannot be announced"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-network-use: switch and enable are not subcommands"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-network-add: --ca-file trusts a PEM bundle for this environment's domain only; without it the staging chain is refused"
+    - "website/src/docs/operator/node-setup.mdx: a missing CA file is an error naming the environment"
+    - "docs/whitepaper/technical-reference/vol1/35-the-cli.md: ORAMA_TOKEN is the CI credential; a garbage one is refused"
+    - "website/src/docs/operator/node-setup.mdx: node host keys are pinned in ~/.orama/known_hosts; orama ssh must not trust on first use"

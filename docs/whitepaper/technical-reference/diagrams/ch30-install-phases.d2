@@ -1,0 +1,39 @@
+direction: down
+
+common: "Both paths" {
+  p1: "Phase 1  prerequisites\nroot, Linux, OS release, deps,\nnss-systemd, disk/RAM/CPU"
+  p2: "Phase 2  environment\ndirectories, orama user"
+  p2d: "Phase 2d  Tor client\n(deb.torproject.org)"
+  trust: "Archive trust anchor"
+  p2b: "Phase 2b  binaries\nverify archive, copy, setcap,\nprivhelper, ntfy, Node.js,\nresolved drop-ins"
+  p1 -> p2 -> p2d -> trust -> p2b
+}
+
+genesis: "Genesis" {
+  g3: "Phase 3  secrets\ncluster secret, swarm key, rqlite auth,\nHMAC, encryption, TURN, node identity"
+  g6a: "Phase 6a  WireGuard\nself-assign 10.0.0.1"
+  g6b: "Phase 6b  firewall reconcile"
+  g4: "Phase 4  configs"
+  g2c: "Phase 2c  initialise services"
+  g4b: "Phase 4b  namespace templates"
+  g5: "Phase 5  units, start orama-node"
+  g8: "Phase 8  verify"
+  g3 -> g6a -> g6b -> g4 -> g2c -> g4b -> g5 -> g8
+}
+
+join: "Join" {
+  j0: "identity + WG keypair"
+  j1: "POST join (pinned certificate)\nreceives address, peers, secrets, signers"
+  jw: "WireGuard with peers,\nping the minting node (30 s)"
+  j6b: "Phase 6b  firewall reconcile"
+  js: "write secrets from response"
+  j4: "Phase 4  configs\n(rqlite join address, olric seeds)"
+  j2c: "Phase 2c  initialise services\n(IPFS and Cluster peers)"
+  j4b: "Phase 4b  templates"
+  j5: "Phase 5  units, start orama-node"
+  j8: "Phase 8  verify"
+  j0 -> j1 -> jw -> j6b -> js -> j4 -> j2c -> j4b -> j5 -> j8
+}
+
+common.trust -> genesis.g3: "no --token"
+common.trust -> join.j0: "--token and --join"

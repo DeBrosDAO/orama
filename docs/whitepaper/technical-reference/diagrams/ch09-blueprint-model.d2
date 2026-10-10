@@ -1,0 +1,35 @@
+direction: right
+
+bp: "Blueprint" {
+  tenant: "tenant\nMembersSelect, SelectCount 3 (or 1)\nrqlite 1 -> olric 2 -> gateway 3\n5 ports from the block (2+2+1)"
+  index: "index\nMembersAll\n12 services (13 with gateway)\nfixed ports 10100-10109, 80, 443, 51820, 9050"
+  ns: "nameserver\nMembersLocal\ncoredns :53"
+}
+
+spec: "ServiceSpec\nName, Order, Count, Scope,\nPortNeeds (FromBlock offset or Fixed port)"
+
+scope: "Scope check (Blueprint.Validate)\ntenant: reusable only\nindex: index + reusable\nnameserver: nameserver only"
+
+walk: "walkServices\nsort by Order, then per service:\nSpawn (all members) -> Ready (every node)"
+
+reg: "driverRegistry\nrqlite, olric, gateway drivers\n(registered by ClusterManager)"
+
+drv: "ServiceDriver\nName, Scope, PortNeeds,\nSpawn, Stop, Ready"
+
+helpers: "start helpers\nstartRQLiteCluster (leader, then followers)\nstartOlricCluster (concurrent)\nstartGatewayCluster (per node)"
+
+probes: "readiness probes\nrqliteReady: raft Leader/Follower + SELECT 1\nolricReady: client Stats\ngatewayReady: /v1/health services"
+
+bp.tenant -> spec: "Services"
+bp.index -> spec
+bp.ns -> spec
+spec -> scope
+bp.tenant -> walk: "only tenant is executed"
+walk -> reg: "MustDriver(name)"
+reg -> drv
+drv -> helpers: "Spawn"
+drv -> probes: "Ready (60 s budget)"
+bp.index -> idxnote: "declarative only:\nboot order lives in pkg/node"
+idxnote: "IndexSupervisor.Ensure*\ncalled by orama-node components" {
+  shape: queue
+}

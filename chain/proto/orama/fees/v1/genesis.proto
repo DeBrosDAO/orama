@@ -1,0 +1,41 @@
+syntax = "proto3";
+package orama.fees.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/fees/types";
+
+import "gogoproto/gogo.proto";
+import "orama/fees/v1/fees.proto";
+
+// GenesisState is x/fees's genesis state.
+message GenesisState {
+  Params params = 1 [(gogoproto.nullable) = false];
+  // base_fee is the current per-gas-unit base fee (norama). A fresh genesis
+  // sets it to params.initial_base_fee.
+  string base_fee = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  repeated EarningsAccount earnings_accounts = 3 [(gogoproto.nullable) = false];
+  repeated Deposit deposits = 4 [(gogoproto.nullable) = false];
+  // cumulative_collected is the norama x/fees has taken in as transaction
+  // fees (base fee plus tip) since genesis. cumulative_burned is the part
+  // burned; cumulative_distributed is the part credited to a proposer.
+  // The invariant is cumulative_burned + cumulative_distributed ==
+  // cumulative_collected.
+  string cumulative_collected = 5 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  string cumulative_burned = 6 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  string cumulative_distributed = 7 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  // fee_balances are the fee-only balances of node hot keys. They are backed
+  // by the same module account as earnings, and can pay a transaction's base
+  // fee and nothing else.
+  repeated EarningsAccount fee_balances = 8 [(gogoproto.nullable) = false];
+}

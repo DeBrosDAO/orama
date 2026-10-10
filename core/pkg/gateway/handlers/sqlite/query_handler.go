@@ -2,8 +2,8 @@ package sqlite
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -21,11 +21,11 @@ type QueryRequest struct {
 
 // QueryResponse represents a SQL query response
 type QueryResponse struct {
-	Columns []string        `json:"columns,omitempty"`
-	Rows    [][]interface{} `json:"rows,omitempty"`
-	RowsAffected int64       `json:"rows_affected,omitempty"`
-	LastInsertID int64       `json:"last_insert_id,omitempty"`
-	Error        string      `json:"error,omitempty"`
+	Columns      []string        `json:"columns,omitempty"`
+	Rows         [][]interface{} `json:"rows,omitempty"`
+	RowsAffected int64           `json:"rows_affected,omitempty"`
+	LastInsertID int64           `json:"last_insert_id,omitempty"`
+	Error        string          `json:"error,omitempty"`
 }
 
 // writeJSONError writes an error response as JSON for consistency
@@ -45,14 +45,19 @@ func (h *SQLiteHandler) QueryDatabase(w http.ResponseWriter, r *http.Request) {
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB
+	rawBody, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
 	var req QueryRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.Unmarshal(rawBody, &req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
-	if req.DatabaseName == "" {
-		writeJSONError(w, http.StatusBadRequest, "database_name is required")
+	if !isValidDatabaseName(req.DatabaseName) {
+		writeJSONError(w, http.StatusBadRequest, "database_name must be 1-64 letters, digits, underscores or hyphens")
 		return
 	}
 
@@ -71,18 +76,17 @@ func (h *SQLiteHandler) QueryDatabase(w http.ResponseWriter, r *http.Request) {
 	// Check node affinity - ensure we're on the correct node for this database
 	homeNodeID, _ := dbMeta["home_node_id"].(string)
 	if h.currentNodeID != "" && homeNodeID != "" && homeNodeID != h.currentNodeID {
-		// This request hit the wrong node - the database lives on a different node
+		// The file is on one disk. Another node forwards there over the overlay
+		// instead of telling the caller to find that node itself.
 		w.Header().Set("X-Orama-Home-Node", homeNodeID)
-		h.logger.Warn("Database query hit wrong node",
-			zap.String("database", req.DatabaseName),
-			zap.String("home_node", homeNodeID),
-			zap.String("current_node", h.currentNodeID),
-		)
-		writeJSONError(w, http.StatusMisdirectedRequest, "Database is on a different node. Use node-specific URL or wait for routing implementation.")
+		if h.forwardToHome(w, r, rawBody, homeNodeID) {
+			return
+		}
+		writeJSONError(w, http.StatusMisdirectedRequest, "Database is on a different node and this gateway could not reach it")
 		return
 	}
 
-	filePath := dbMeta["file_path"].(string)
+	filePath := h.databasePath(namespace, req.DatabaseName)
 
 	// Check if database file exists
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
@@ -95,8 +99,12 @@ func (h *SQLiteHandler) QueryDatabase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Open database
-	db, err := sql.Open("sqlite3", filePath)
+	if err := rejectCrossDBSQL(req.Query); err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	db, err := openTenantDB(filePath)
 	if err != nil {
 		h.logger.Error("Failed to open database", zap.Error(err))
 		writeJSONError(w, http.StatusInternalServerError, "Failed to open database")
@@ -191,7 +199,7 @@ func (h *SQLiteHandler) QueryDatabase(w http.ResponseWriter, r *http.Request) {
 func isWriteQuery(query string) bool {
 	upperQuery := strings.ToUpper(strings.TrimSpace(query))
 	writeKeywords := []string{
-		"INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "ALTER", "TRUNCATE", "REPLACE",
+		"INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "ALTER", "TRUNCATE", "REPLACE", "ATTACH", "DETACH",
 	}
 
 	for _, keyword := range writeKeywords {

@@ -11,13 +11,15 @@ Cache data is organized into **distributed maps** (dmaps). A dmap is a named key
 ## SDK Setup
 
 ```typescript
-import { createClient } from "@debros/network-ts-sdk";
+import { createClient } from "@debros/orama";
 
 const client = createClient({
-  baseURL: "https://gateway.example.com",
-  apiKey: "ak_your_key:namespace",
+  baseURL: "https://ns-myapp.cluster.example.com",
+  apiKey: process.env.ORAMA_API_KEY,
 });
 ```
+
+The key needs the `cache` grant (`orama namespace keys create --scope invoke,cache --label worker`); the `app-runtime` profile does not include it. A signed-in user's session holds it. See [Access control](/docs/developer/access-control#api-keys).
 
 ## Basic Operations
 
@@ -71,7 +73,7 @@ await client.cache.put("rate-limits", "ip:203.0.113.1", { count: 1 }, "30m");
 await client.cache.put("dedup", "request:abc123", true, "5s");
 ```
 
-When TTL is omitted, the entry does not expire automatically.
+When TTL is omitted (or `"0s"`), the entry does not expire automatically. A TTL that does not parse, is negative, or exceeds 10 years is refused with a 400.
 
 ## Batch Operations
 
@@ -298,3 +300,16 @@ interface CacheHealthResponse {
   service: string;
 }
 ```
+
+
+---
+
+## Limits and behaviour
+
+- **Memory.** All of a namespace's maps share one memory bound: least recently used entries are evicted once the namespace's cache holds **256 MiB** on a node, however many maps you make.
+- **Keys.** A map name and its key together are at most 255 bytes. The name counts its length in bytes plus 2, so a key in a map named `sessions` is at most 245 bytes. A longer one is refused with a 413 that names the limit, and a get or delete of one answers 404.
+- **Values.** Any JSON value except `null`, and `get` returns exactly what was put, type included (the string `"123"` comes back a string). One entry must fit in a single cache table (1 MiB, key and encoding included); larger is refused with 413 and nothing is stored.
+- **TTL.** A duration string such as `"30m"` or `"1h"`. Without a TTL (or `"0s"`) the entry lives until deleted. A TTL that does not parse, is negative, or exceeds 10 years is refused with 400.
+- **Scan.** `match` is a regular expression applied to the key as you wrote it; an invalid one is refused with 400.
+- **Permissions.** A grant can be narrowed to keys: `cache:key=sessions/*`, matched against `<map>/<key>`. An `app-runtime` key does **not** include the cache: mint the key with `--scope invoke,cache` (or name the grants you need). See [Access control](/docs/developer/access-control).
+- **A cache, not a store.** Olric holds entries in memory. When memberlist encryption is enabled all nodes must restart together and the cache is lost; it rebuilds from your database.

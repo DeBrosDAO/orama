@@ -7,20 +7,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"go.uber.org/zap"
 )
 
 // ---------------------------------------------------------------------------
 // Mock Invoker
 // ---------------------------------------------------------------------------
-
-type mockInvokeCall struct {
-	Namespace    string
-	FunctionName string
-	TriggerType  serverless.TriggerType
-	Input        []byte
-}
 
 // mockInvokerForTest wraps a real nil invoker but tracks calls.
 // Since we can't construct a real Invoker without engine/registry/hostfuncs,

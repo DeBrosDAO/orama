@@ -1,0 +1,21 @@
+direction: right
+
+reg: "registered\n(no role at min_bond)"
+act: "active\n(some role bonded >= min_bond)"
+jail: "jailed"
+ret: "retired\n(terminal)"
+tomb: "tombstoned\n(terminal)"
+
+start: "" {shape: circle}
+start -> reg: "MsgRegisterNode"
+reg -> act: "MsgBondNode / CreditRoleBond\nreaches min_bond"
+act -> reg: "MsgUnbondNode / Slash\nleaves every role below min_bond"
+reg -> jail: "Jail (x/storage)"
+act -> jail: "Jail (x/storage)"
+jail -> reg: "Unjail (keeper method;\nno caller, no message)"
+reg -> ret: "MsgRetireNode"
+act -> ret: "MsgRetireNode"
+jail -> ret: "MsgRetireNode"
+reg -> tomb: "Tombstone (keeper method;\nno caller, no message)"
+act -> tomb: "Tombstone"
+jail -> tomb: "Tombstone"

@@ -1,0 +1,35 @@
+direction: down
+
+in: "Decide(settings, health, now, current, candidate, verifyErr)"
+val: "settings valid?\nmode, role, max_parallel = 1,\nchannel, window hours" {shape: diamond}
+err: "error (usage)"
+ver: "verifyErr?" {shape: diamond}
+bad: "candidate marked bad?" {shape: diamond}
+chan: "channel differs?" {shape: diamond}
+cmp: "compare versions" {shape: diamond}
+none: "none"
+refuse: "refuse (with reason)"
+mode: "mode" {shape: diamond}
+deg: "degraded or quorum lost?" {shape: diamond}
+notify: "notify"
+win: "inside window?" {shape: diamond}
+upg: "upgrade"
+
+in -> val
+val -> err: "no (auto for a validator included)"
+val -> ver: "yes"
+ver -> refuse: "yes"
+ver -> bad: "no"
+bad -> refuse: "yes"
+bad -> chan: "no"
+chan -> refuse: "yes"
+chan -> cmp: "no"
+cmp -> refuse: "older"
+cmp -> none: "equal, or mode off"
+cmp -> deg: "newer"
+deg -> refuse: "yes"
+deg -> mode: "no"
+mode -> notify: "notify"
+mode -> win: "auto"
+win -> upg: "yes"
+win -> notify: "no"

@@ -1,0 +1,63 @@
+# Install RootWallet
+
+## Desktop
+
+Download from the [RootWallet releases page](https://github.com/DeBrosDAO/rootwallet/releases).
+
+| OS | Package |
+|---|---|
+| macOS (Intel and Apple Silicon) | Universal `.dmg` |
+| Linux x86-64 | `.deb`, `.rpm`, or `.AppImage` |
+| Windows | **None.** The agent uses Unix domain sockets and kernel peer credentials, which Windows lacks. Use the CLI |
+
+The macOS build is code-signed but not notarized: the first time, right-click the app and choose Open.
+
+Auto-update is not working yet. The updater code exists, but releases do not publish the update manifest, so you update by downloading the new version.
+
+## Mobile
+
+Mobile is in active development.
+
+- **Android:** download the APK from the RootWallet website (Obtainium is supported), or the Play internal track.
+- **iOS:** TestFlight.
+- The public App Store and Play Store listings are not live.
+
+## CLI
+
+```bash
+brew install DeBrosDAO/tap/rootwallet     # macOS or Linux
+npm install -g @debros/root-cli           # anywhere with Node 20.19 or newer
+```
+
+From source:
+
+```bash
+git clone https://github.com/DeBrosDAO/rootwallet.git
+cd rootwallet && pnpm install && pnpm --filter @debros/root-cli build
+```
+
+On Windows only the CLI runs, and there is no OS-keychain session, so each command asks for your password.
+
+## Where RootWallet keeps things
+
+Everything is under `~/.rootwallet/`:
+
+| File | What |
+|---|---|
+| `keystore.json` | The encrypted wallet |
+| `vault.json` | The encrypted vault |
+| `agent.sock`, `agent.pid` | The desktop agent's socket and pid |
+| `agent-permissions.json` | Programs you have approved to use the agent |
+| `orama-device.json` | The CLI's device key for Orama RPC sign-in (mode 0600) |
+
+Each extra wallet ("RootID" in the apps, meaning only a local wallet profile) lives in its own folder under `~/.rootwallet/<rootId>/`. A second encrypted backup of the keystore is kept in `~/Library/Application Support/RootWallet` on macOS or `$XDG_DATA_HOME/rootwallet` on Linux.
+
+## First run
+
+```bash
+rw init                 # create a wallet; writes down 12 words, then asks you to confirm 3 of them
+rw unlock               # start a 30 minute session
+rw address              # your address
+```
+
+Write the 12 words down on paper and keep them offline. Nobody, including the developers, can recover them for you. See [Wallets and accounts](/docs/rootwallet/wallets).

@@ -1,0 +1,38 @@
+# Namespace pub/sub over the gateway: publish, publish-batch (validation before
+# delivery, limits), the subscribe WebSocket (envelope, byte-exact payloads,
+# large messages, exactly-once delivery on the publishing node and elsewhere,
+# cross-node fan-out, reconnect without replay, a subscriber leaving while
+# another stays, publishing on the socket), presence, topics, roles, scoped
+# keys, topic selectors, revocation closing an open socket (4403), namespace
+# isolation, literal and hostile topic names, and the node-local pubsub unix
+# socket (0600, peer-credential check) observed from a node shell.
+# The pubsub-triggered function depth limit and the persistent-WS ephemeral
+# state belong to the serverless features.
+id: pubsub
+title: Namespace pub/sub over the gateway
+area: data-plane
+subtasks: [2835]
+stage: 4
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  routes:
+    - /v1/pubsub/presence
+    - /v1/pubsub/publish
+    - /v1/pubsub/publish-batch
+    - /v1/pubsub/topics
+    - /v1/pubsub/ws
+  units:
+    - orama-namespace-pubsub@.service
+  claims:
+    - "docs/whitepaper/technical-reference/vol1/20-pubsub.md: the app pubsub API is a unix socket, 0600 in a 0700 directory, admitting only its own user (SO_PEERCRED)"
+    - "docs/whitepaper/technical-reference/vol1/14-authorization.md#selectors: pubsub:topic=... narrows publish, publish-batch and subscribe"
+    - "docs/whitepaper/technical-reference/vol1/13-identity.md#open-websockets: an open socket whose session is revoked is closed within a sweep (4403)"
+    - "website/src/docs/developer/sdk-reference.mdx#pubsub: payloads arrive byte for byte with a server timestamp; presence join and leave are delivered"
+    - "docs/whitepaper/technical-reference/vol1/14-authorization.md: a credential of another namespace is refused with NAMESPACE_MISMATCH"
+    - "docs/whitepaper/technical-reference/vol1/14-authorization.md#wallets-with-no-grant: a wallet with no grant in the namespace may subscribe and not publish: INSUFFICIENT_SCOPE naming the remedy"
+    - "website/src/docs/developer/functions.mdx#pubsub-delivery-to-websocket-clients: a payload with a top-level _orama key is refused on publish and publish-batch with PUBSUB_RESERVED_KEY"
+    - "docs/whitepaper/technical-reference/vol1/14-authorization.md#pubsub-reserved-topics: a topic under _orama/ is refused to every publisher with PUBSUB_RESERVED_TOPIC, and to a subscriber holding no grant"

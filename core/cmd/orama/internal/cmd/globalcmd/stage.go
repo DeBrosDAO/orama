@@ -1,0 +1,145 @@
+package globalcmd
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"os"
+	"time"
+
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
+	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/cosmovisor"
+	"github.com/DeBrosOfficial/network/pkg/install"
+	"github.com/DeBrosOfficial/network/pkg/releaseverify"
+	"github.com/spf13/cobra"
+)
+
+var stageFlags struct {
+	binary   string
+	metadata string
+	target   string
+	// verifier and verifierTarget are the shielded verifier of the same
+	// release and its name in the targets metadata.
+	verifier       string
+	verifierTarget string
+	upgrade        string
+	genesis        bool
+	home           string
+}
+
+var stageOramadCmd = &cobra.Command{
+	Use:   "stage-oramad",
+	Short: "Place a TUF-verified oramad in the cosmovisor layout",
+	Long: `Place an oramad binary where cosmovisor runs it, after it verifies against
+the release root adopted at /etc/orama/release-root.json.
+
+--upgrade <name> stages <home>/cosmovisor/upgrades/<name>/bin/oramad for the
+upgrade plan <name>; cosmovisor switches to it at the plan's height. --genesis
+stages <home>/cosmovisor/genesis/bin/oramad and points current at genesis if
+current does not exist yet. A binary already there is refused.
+
+The binary is copied into a root-only staging directory and verified there,
+through the descriptor that wrote it, as --release-target in the TUF metadata
+in --release-metadata (threshold, timestamp expiry, snapshot rollback, length
+and hashes); only then is it linked into place. Every directory on the way is
+opened without following symlinks and must be root's; a symlink or a
+directory another account owns or may write is refused. Nothing stages
+automatically: a validator's operator runs this for every chain upgrade.
+
+The chain unit 'orama global install' writes runs cosmovisor, which reads this
+layout; install places the first oramad here as the genesis binary.`,
+	Args: cobra.NoArgs,
+	RunE: runStageOramad,
+}
+
+func init() {
+	f := stageOramadCmd.Flags()
+	f.StringVar(&stageFlags.binary, "binary", "", "The oramad binary to stage [required]")
+	f.StringVar(&stageFlags.metadata, "release-metadata", "", "Directory holding timestamp.json, snapshot.json and targets.json [required]")
+	f.StringVar(&stageFlags.target, "release-target", "", "Name the binary has in the release targets metadata [required]")
+	f.StringVar(&stageFlags.verifier, "verifier", "", "The release's orama-orchard-verifier, staged beside oramad [required]")
+	f.StringVar(&stageFlags.verifierTarget, "verifier-target", "", "Name the verifier has in the release targets metadata [required]")
+	f.StringVar(&stageFlags.upgrade, "upgrade", "", "Upgrade plan name to stage for")
+	f.BoolVar(&stageFlags.genesis, "genesis", false, "Stage the genesis binary instead of an upgrade")
+	f.StringVar(&stageFlags.home, "home", constants.ChainHome, "cosmovisor DAEMON_HOME")
+	MaintCmd.AddCommand(stageOramadCmd)
+}
+
+func runStageOramad(cmd *cobra.Command, _ []string) error {
+	if stageFlags.binary == "" || stageFlags.metadata == "" || stageFlags.target == "" {
+		return clierr.Usage("--binary, --release-metadata and --release-target are required")
+	}
+	if stageFlags.verifier == "" || stageFlags.verifierTarget == "" {
+		return clierr.Usage("--verifier and --verifier-target are required: oramad does not start without the shielded verifier of its own release")
+	}
+	if stageFlags.genesis == (stageFlags.upgrade != "") {
+		return clierr.Usage("give exactly one of --upgrade <name> and --genesis")
+	}
+	if err := clierr.RequireRoot("staging oramad"); err != nil {
+		return err
+	}
+	uid, gid, err := cosmovisor.LookupAccount(constants.ChainUser)
+	if err != nil {
+		return clierr.Failure("%v", err)
+	}
+	layout := cosmovisor.Layout{
+		Home:     stageFlags.home,
+		Daemon:   constants.ChainDaemonName,
+		ChainUID: uid,
+		ChainGID: gid,
+	}
+	if err := checkVerifierPinned(stageFlags.binary, stageFlags.verifier); err != nil {
+		return clierr.Failure("%v", err)
+	}
+	verifier := cosmovisor.Companion{Name: constants.ChainVerifierBinary, Src: stageFlags.verifier, Verify: verifyAsTarget(stageFlags.verifierTarget)}
+	verify := verifyAsTarget(stageFlags.target)
+	var dst string
+	if stageFlags.genesis {
+		dst, err = layout.StageGenesis(stageFlags.binary, verify, verifier)
+	} else {
+		dst, err = layout.StageUpgrade(stageFlags.upgrade, stageFlags.binary, verify, verifier)
+	}
+	if err != nil {
+		return clierr.Failure("%v", err)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "staged %s\n", dst)
+	return nil
+}
+
+// verifyAsTarget checks a staged file, through its descriptor, as the named
+// target of the release metadata under the adopted release root.
+func verifyAsTarget(target string) cosmovisor.Verify {
+	return func(f *os.File) error {
+		_, err := releaseverify.CheckFile(releaseverify.FileCheck{
+			RootPath:    releaseverify.RootPath,
+			SeenPath:    releaseverify.SeenPath,
+			MetadataDir: stageFlags.metadata,
+			Target:      target,
+			File:        f,
+			Now:         time.Now(),
+		})
+		return err
+	}
+}
+
+// checkVerifierPinned refuses an oramad and a verifier that are not of one
+// release, before either is staged: a halted chain at the upgrade height is the
+// price of finding out later.
+func checkVerifierPinned(binary, verifier string) error {
+	oramad, err := os.ReadFile(binary)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", binary, err)
+	}
+	f, err := os.Open(verifier)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", verifier, err)
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return fmt.Errorf("hash %s: %w", verifier, err)
+	}
+	return install.CheckOramadPinsVerifier(oramad, hex.EncodeToString(h.Sum(nil)))
+}

@@ -1,0 +1,26 @@
+direction: down
+
+submit: "MsgSubmitProposal\ntier open? active proposals fewer than 64?\nupgrade height above now and none pending?"
+voting: "VOTING\nvoting_period (default 7 d)"
+rejected: "REJECTED"
+veto: "VETO_WINDOW\n7 d, parameter proposals only"
+timelock: "TIMELOCK\n14 d parameter, 7 d spend, 60 d other structural"
+executed: "EXECUTED"
+failed: "FAILED"
+closevote: "voting ends:\ntoken quorum, yes greater than no, yes share at least threshold" {shape: diamond}
+ops: "structural: operators yes\nmore than half of the eligible house?" {shape: diamond}
+vetoed: "operators no at least 30% of the eligible house?" {shape: diamond}
+
+submit -> voting
+voting -> closevote: "block time at voting end"
+closevote -> rejected: "token house fails"
+closevote -> veto: "pass, parameter proposal"
+closevote -> ops: "pass, structural proposal"
+ops -> rejected: "no"
+ops -> timelock: "yes"
+veto -> vetoed: "block time at veto end"
+vetoed -> rejected: "yes"
+vetoed -> timelock: "no"
+timelock -> executed: "timelock elapsed:\nEndBlock or MsgExecuteProposal;\napply on a cache context"
+timelock -> failed: "the action is refused"
+voting -> failed: "5 blocks in a row\nthat could not be tallied"

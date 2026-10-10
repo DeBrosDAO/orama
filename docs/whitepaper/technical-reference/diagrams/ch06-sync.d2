@@ -1,0 +1,28 @@
+direction: down
+
+tick: "tick: boot, then every 60 s"
+selfreg: "ensureWireGuardSelfRegistered\nupsert own row, confirmed_at"
+live: "read live peers\nwg show wg0 dump"
+leader: "read wireguard_peers\nleader (weak)" {shape: diamond}
+local: "read local replica\nnon-authoritative" {shape: diamond}
+fail: "pass fails, nothing changes"
+scan: "scanWGPeers\nvalidate each row, one owner per /32"
+add: "add or update every desired peer\nwg set (drift: endpoint, allowed-ips)"
+rm: "authoritative and non-empty?" {shape: diamond}
+remove: "wg set peer remove\nfor peers not desired"
+keep: "skip removal"
+persist: "persist live set to wg0.conf via helper\nunless equal to what was last written"
+
+tick -> selfreg
+selfreg -> live
+live -> leader
+leader -> scan: "ok (authoritative)"
+leader -> local: "error"
+local -> scan: "ok (additive only)"
+local -> fail: "error"
+scan -> add
+add -> rm
+rm -> remove: yes
+rm -> keep: no
+remove -> persist
+keep -> persist

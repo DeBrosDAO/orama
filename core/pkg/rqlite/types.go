@@ -1,11 +1,18 @@
 package rqlite
 
-import "time"
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
+)
 
 // RQLiteStatus represents the response from RQLite's /status endpoint
 type RQLiteStatus struct {
 	Store struct {
-		Raft struct {
+		// NodeID is the raft id this rqlited runs under.
+		NodeID string `json:"node_id"`
+		Raft   struct {
 			AppliedIndex      uint64 `json:"applied_index"`
 			CommitIndex       uint64 `json:"commit_index"`
 			LastLogIndex      uint64 `json:"last_log_index"`
@@ -18,15 +25,29 @@ type RQLiteStatus struct {
 			// "1.2s") or the literal "never" before first contact. Empty/absent
 			// on the leader's own /status. Used by the local-follower freshness
 			// gate (freshness.go) to decide whether a none-read is safe.
-			LastContact       string `json:"last_contact"`
-			Term              uint64 `json:"term"`
-			NumPeers          int    `json:"num_peers"`
-			Voter             bool   `json:"voter"`
+			LastContact LastContactValue `json:"last_contact"`
+			Term        uint64           `json:"term"`
+			NumPeers    int              `json:"num_peers"`
+			Voter       bool             `json:"voter"`
 		} `json:"raft"`
 		DBConf struct {
 			DSN    string `json:"dsn"`
 			Memory bool   `json:"memory"`
 		} `json:"db_conf"`
+		// Leader is who rqlite 8 names in /status. The id used to be
+		// raft.leader_id; this release leaves that field unset and reports
+		// {"node_id","addr"} here instead.
+		Leader struct {
+			NodeID string `json:"node_id"`
+			Addr   string `json:"addr"`
+		} `json:"leader"`
+		// Nodes is the raft configuration as this node holds it. Unlike
+		// /nodes it is read locally, without probing each member.
+		Nodes []struct {
+			ID       string `json:"id"`
+			Addr     string `json:"addr"`
+			Suffrage string `json:"suffrage"`
+		} `json:"nodes"`
 	} `json:"store"`
 	Runtime struct {
 		GOARCH       string `json:"GOARCH"`
@@ -46,13 +67,28 @@ type RQLiteStatus struct {
 	} `json:"node"`
 }
 
+// RaftLeaderID is the raft id of the current leader. rqlite 8 puts it on
+// store.leader; older payloads put it on store.raft.leader_id.
+func (s RQLiteStatus) RaftLeaderID() string {
+	if id := s.Store.Raft.LeaderID; id != "" {
+		return id
+	}
+	return s.Store.Leader.NodeID
+}
+
 // RQLiteNode represents a node in the RQLite cluster
 type RQLiteNode struct {
-	ID        string `json:"id"`
-	Address   string `json:"address"`
-	Leader    bool   `json:"leader"`
-	Voter     bool   `json:"voter"`
-	Reachable bool   `json:"reachable"`
+	ID string `json:"id"`
+
+	// Addr is the member's raft address. rqlite's /nodes calls this field
+	// "addr"; it was decoded as "address", so it was silently always empty and
+	// every consumer that wanted a member's address had to reach for its id
+	// instead — which is exactly the conflation stable raft ids exist to end.
+	Addr string `json:"addr"`
+
+	Leader    bool `json:"leader"`
+	Voter     bool `json:"voter"`
+	Reachable bool `json:"reachable"`
 }
 
 // RQLiteNodes represents the response from RQLite's /nodes endpoint
@@ -77,3 +113,56 @@ type ClusterMetrics struct {
 	CurrentLeader     string
 	AveragePeerHealth float64
 }
+
+// LastContactValue decodes rqlite's `store.raft.last_contact`, whose JSON type
+// depends on the node's raft role:
+//
+//	follower: "last_contact": "30.204191ms"   (duration string, or "never")
+//	leader:   "last_contact": 0               (number)
+//
+// Declaring it as a plain string made json.Unmarshal fail on the LEADER's
+// /status with "cannot unmarshal number into ... of type string". That error
+// aborted the whole RQLiteStatus decode, so GetRaftStatus returned an error,
+// so the freshness gate fail-safed to "not fresh" — silently disabling the
+// local (level=none) read path on the one node where a local read is always
+// authoritative. The gate's own `state == "Leader" → always fresh` fast path
+// was unreachable in production because decoding never got that far.
+//
+// Accepting both shapes keeps the gate working for either role.
+type LastContactValue string
+
+// UnmarshalJSON accepts a JSON string, a JSON number, or null.
+func (v *LastContactValue) UnmarshalJSON(data []byte) error {
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "" || trimmed == "null" {
+		*v = ""
+		return nil
+	}
+	if trimmed[0] == '"' {
+		var s string
+		if err := json.Unmarshal(data, &s); err != nil {
+			return fmt.Errorf("last_contact string: %w", err)
+		}
+		*v = LastContactValue(s)
+		return nil
+	}
+	// Numeric form: rqlite emits nanoseconds (0 on the leader). Render it as a
+	// duration string so downstream has a single representation to parse.
+	var n json.Number
+	if err := json.Unmarshal(data, &n); err != nil {
+		return fmt.Errorf("last_contact number: %w", err)
+	}
+	ns, err := n.Int64()
+	if err != nil {
+		f, ferr := n.Float64()
+		if ferr != nil {
+			return fmt.Errorf("last_contact numeric value %q: %w", n.String(), ferr)
+		}
+		ns = int64(f)
+	}
+	*v = LastContactValue(time.Duration(ns).String())
+	return nil
+}
+
+// String returns the duration text for logging and parsing.
+func (v LastContactValue) String() string { return string(v) }

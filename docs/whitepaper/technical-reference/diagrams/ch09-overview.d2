@@ -1,0 +1,42 @@
+direction: right
+
+client: "wallet client\n(orama namespace create)" {
+  shape: person
+}
+
+node1: "node A (took the request)" {
+  caddy: "Caddy :443"
+  idx: "index gateway\norama-namespace-gateway@index :10104"
+  create: "CreateHandler\nPOST /v1/namespaces"
+  cm: "ClusterManager\nProvisionNamespaceCluster"
+  spawn: "SpawnHandler\n/v1/internal/namespace/spawn"
+  sp: "SystemdSpawner"
+  caddy -> idx
+  idx -> create
+  create -> cm: "in process"
+  cm -> sp: "local member"
+  spawn -> sp
+}
+
+registry: "index RQLite (cluster registry)" {
+  shape: cylinder
+}
+
+nodeB: "member node B and C (same shape)" {
+  spawnB: "SpawnHandler"
+  spB: "SystemdSpawner"
+  spawnB -> spB
+  units: "orama-namespace-rqlite@ns\norama-namespace-olric@ns\norama-namespace-gateway@ns" {
+    shape: queue
+  }
+  spB -> units: "env file + config,\nstart via privhelper"
+}
+
+client -> node1.caddy: "HTTPS, wallet JWT"
+node1.cm -> registry: "namespaces, namespace_clusters,\nnamespace_port_allocations,\nnamespace_cluster_nodes, dns_records"
+node1.cm -> nodeB.spawnB: "HTTP over WireGuard, 10.0.0.x:10104\nPOST spawn-rqlite/olric/gateway\n(coordination MAC v2, audience = node)"
+node1.cm -> nodeB.units: "readiness probes over WireGuard\n(raft state, Olric stats, /v1/health)"
+node1.sp -> node1.units: "local member"
+node1.units: "local tenant units" {
+  shape: queue
+}

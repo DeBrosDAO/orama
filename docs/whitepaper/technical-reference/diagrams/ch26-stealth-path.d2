@@ -1,0 +1,18 @@
+shape: sequence_diagram
+
+app: "Client app"
+gw: "Namespace gateway"
+dns: "Cluster DNS"
+rt: "orama-sni-router :443"
+turn: "orama-turn :5349"
+
+app -> gw: "GET turn credentials"
+gw -> app: "uris: turn:3478 udp, turn:3478 tcp,\nturns:turn-ns.base:5349,\nturns:cdn-hash.base:443"
+app -> dns: "A cdn-hash.base"
+dns -> app: "TURN node IPs"
+app -> rt: "TCP :443, ClientHello SNI = cdn-hash.base"
+rt -> rt: "PeekClientHello, Pick(sni),\nroute must match the stealth host\n(today no route exists: discovery finds no\nturn-*.yaml, so Pick returns the Caddy fallback)"
+rt -> turn: "dial 127.0.0.1:5349,\nreplay peeked ClientHello bytes"
+app <-> turn: "TLS handshake through the router;\nTURN picks the cdn-hash cert by SNI"
+app -> turn: "TURN Allocate (HMAC credential, tenant in username)"
+turn -> app: "relayed address from 49152-65535"

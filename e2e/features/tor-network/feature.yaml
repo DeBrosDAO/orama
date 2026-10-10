@@ -1,0 +1,41 @@
+# The Orama Tor network (Open Network track E, bugboard 2783-2787): the authority
+# key ceremony, the txgate behind the validator onion service, and (where the
+# roles are installed) directory authorities, relays, the opt-in exit and the
+# validator onion service, checked end to end through a throwaway client of the
+# network.
+#
+# The ceremony and txgate tests run on any target: they use the node's own tor
+# and tor-gencert, and a loopback listener. The role tests need
+# `orama global install --services dirauth|relay|relay,exit|onion` on the nodes
+# (website/src/docs/operator/tor-network.mdx, "Rolling it out") and say "not applicable" on a target
+# that has none: the provisioned fleet installs no Tor role, stagenet does.
+id: tor-network
+title: Orama Tor network - ceremony, authorities, relays, exit, validator onion
+area: network
+subtasks: [2783, 2784, 2785, 2786, 2787]
+stage: 8
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  cli:
+    - orama global tor
+    - orama maint global tor ceremony
+    - orama maint global tor archive
+    - orama global tor info
+    - orama maint global tor onions
+    - orama maint global tor onions add
+    - orama maint global tor monitor
+    - orama maint global txgate
+    - orama global install
+  claims:
+    - "website/src/docs/operator/tor-network.mdx#key-ceremony: the ceremony writes the identity key only under offline/ and the deploy bundle holds no identity key"
+    - "website/src/docs/operator/tor-network.mdx#the-network-file: the ceremony writes the one network file (private true, no validator onions) and orama maint global tor onions add puts a validator onion into it, refusing a clearnet host"
+    - "website/src/docs/operator/tor-network.mdx#the-validator-onion-service: the onion service serves the account read, the broadcast and the transaction lookup, and no other path of the chain REST API"
+    - "website/src/docs/operator/tor-network.mdx#directory-authorities: the authorities sign a consensus that lists every relay, and the archive's manifest matches the files"
+    - "website/src/docs/operator/tor-network.mdx#exits: an exit refuses reserved ranges and mail ports; a relay that was not installed as an exit has no Exit flag"
+    - "website/src/docs/operator/tor-network.mdx#relays: the ORPort is reachable from outside and the tx gate is not"
+    - "website/src/docs/operator/tor-network.mdx#relays: a relay and a directory authority each write monitor.json in their own home (in_consensus), which the node report reads"
+    - "website/src/docs/operator/tor-network.mdx#onion-service-time-periods: the authorities vote hsdir_interval as 24 voting intervals, one shared-random run, so a validator's onion service stays reachable across the descriptor rotation at the end of each run"

@@ -1,0 +1,34 @@
+# Fleet-native ports of core/e2e/lifecycle: one node reboots (and starts its
+# units in dependency order), one node's services restart through the CLI,
+# every node stops and starts (the public surfaces serve, then quorum
+# returns), the index rqlite goes down everywhere while DNS keeps answering,
+# crashed daemons come back without an operator and nothing crash-loops, and
+# a destroyed fourth voter is forgotten by every membership view. The
+# rollout scenarios live in rollout-upgrade; join and decommission in
+# install-extra.
+id: boot-lifecycle
+title: Reboot, cold start, crashes and dead voters
+area: infrastructure
+subtasks: [2824]
+stage: 11
+destructive: true
+requires:
+  extra_nodes: 1
+  probe: false
+  chain: false
+covers:
+  cli:
+    - orama node restart
+    - orama node stop
+    - orama node start
+    - orama node setup
+  units:
+    - orama-namespace-rqlite@.service
+    - orama-namespace-olric@.service
+    - orama-namespace-gateway@.service
+    - orama-namespace-coredns@.service
+  claims:
+    - "website/src/docs/contributor/architecture-reference.mdx: every overlay unit starts after the WireGuard unit; the gateway after rqlite"
+    - "website/src/docs/contributor/architecture-reference.mdx: with the index rqlite down, CoreDNS keeps answering for the zone"
+    - "website/src/docs/contributor/architecture-reference.mdx#boot-components-not-a-sequence: a dead voter is evicted automatically and forgotten by raft and every WireGuard peer set"
+    - "website/src/docs/operator/upgrade-notes.mdx: after all nodes restart, gateways and nameservers serve and the cluster reconverges"

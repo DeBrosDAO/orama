@@ -1,0 +1,21 @@
+direction: down
+
+start: "Request arrives\npeer = host part of RemoteAddr"
+q1: "peer inside 10.0.0.0/24?" {shape: diamond}
+q2: "peer is loopback?" {shape: diamond}
+q3: "last X-Forwarded-For entry\nparses as an IP?" {shape: diamond}
+ex1: "client = peer\nEXEMPT (overlay)"
+ex2: "client = peer\nEXEMPT (local process)"
+fw: "client = last entry\nlimited (came through Caddy)"
+dir: "client = peer\nlimited (header ignored)"
+bk: "BucketKey(client)\nIPv4: the address\nIPv4-mapped IPv6: the IPv4\nIPv6: the /64 prefix\nunparseable: as is"
+
+start -> q1
+q1 -> ex1: "yes"
+q1 -> q2: "no"
+q2 -> q3: "yes"
+q2 -> dir: "no"
+q3 -> fw: "yes"
+q3 -> ex2: "no"
+fw -> bk
+dir -> bk

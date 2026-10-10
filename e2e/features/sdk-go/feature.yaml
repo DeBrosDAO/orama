@@ -1,0 +1,33 @@
+# The Go client SDK (core/pkg/client) against the fleet, as a program
+# outside the cluster uses it (website/src/docs/developer/go-sdk.mdx): storage upload, get,
+# pin, status and unpin as the namespace owner; empty and unicode files; a
+# forged JWT and the documented typed-error helpers; an app-runtime key alone,
+# another namespace's session and no credential refused; the database client
+# with the documented configuration; pubsub failing fast without the node
+# socket; the documented absences (Cache, Serverless, proxy) and config
+# validation. The anonymity proxy and tunnel, which the SDK does not expose,
+# over HTTP: private destinations, malformed requests, a key instead of a user,
+# a request that really leaves through Tor, and every tunnel refusal.
+id: sdk-go
+title: Go client SDK against the fleet
+area: clients
+subtasks: [2846]
+stage: 4
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  routes:
+    - /v1/proxy/anon
+    - /v1/proxy/tunnel
+  units:
+    - orama-namespace-tor@.service
+  claims:
+    - "website/src/docs/developer/go-sdk.mdx#storage-client: upload, get, pin, status and unpin through the gateway"
+    - "website/src/docs/developer/go-sdk.mdx#error-handling: client methods return typed errors the errors helpers classify"
+    - "website/src/docs/developer/go-sdk.mdx#database-client: Query, Transaction, CreateTable, DropTable and GetSchema work with the Quick Start configuration"
+    - "website/src/docs/developer/go-sdk.mdx#cache-client: the SDK has no Cache accessor"
+    - "website/src/docs/developer/go-sdk.mdx#serverless-client: the SDK has no Serverless accessor"
+    - "website/src/docs/developer/go-sdk.mdx#anonymity-proxy: private destinations are refused; a runtime key alone is refused; requests leave through Tor"

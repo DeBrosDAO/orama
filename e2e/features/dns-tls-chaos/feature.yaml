@@ -1,0 +1,26 @@
+# The DNS and TLS edge under failure, one disturbance at a time: a
+# nameserver whose CoreDNS loses its index rqlite keeps answering every name
+# it knew (stale, 30s TTL) and SERVFAILs the rest instead of inventing or
+# replaying a negative answer; a node whose Caddy stops must leave the base
+# round-robin (the active-means-TLS promise); a node whose Tor and ntfy stop
+# must not. Every disturbance is undone and the round-robin checked whole
+# again before the test ends.
+id: dns-tls-chaos
+title: DNS serve-stale and the DNS membership promise under failure
+area: network-edge
+subtasks: [2825]
+stage: 11
+destructive: true
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  units:
+    - orama-namespace-coredns@.service
+    - orama-namespace-caddy@.service
+    - orama-namespace-tor@.service
+    - orama-namespace-ntfy@.service
+  claims:
+    - "website/src/docs/operator/monitoring.mdx#namespace-dns-self-management: a node that cannot serve leaves DNS; a degraded subsystem does not take the node out"
+    - "website/src/docs/operator/nameserver.mdx#record-lifecycle-and-self-healing: a silent node leaves the base round-robin after the 120s reap"

@@ -1,0 +1,77 @@
+# Stage 8, E2E-30: the service modules on the live run chain. x/storage
+# (every Msg: CreateDeal shape, size, grant and funding refusals with
+# boundaries; ExtendDeal rules; deal allowances capping spend, piece size,
+# duration and replicas, revoke and expiry; Accept/Decline/SubmitProofs/
+# ReleaseReplica only by the node's hot key; the Slot, Authorization,
+# Challenges and EpochMint queries through abci_query), x/archive (MsgAttest
+# and MsgAttachReplicas shape, canonical-range, piece-size, finality and
+# active-ARCHIVER refusals; the pinning, quorum and overlap paths need three
+# bonded ARCHIVER nodes whose hot keys sign, which a run chain cannot have:
+# a bond is a bank balance and a hot key has no account; retain height), and x/relay (cross-certified
+# relay registration and its refusals; the reporter set closed to messages).
+# Deal escrow, bonds and bids come from a BANK balance no run account holds
+# (features/internal/chain funds.go), so an accepted slot, a real proof and
+# the release rate limit are reported blocked. orama-global (provider,
+# repair, archiver) is not deployed by chain-deploy.sh.
+id: chain-services
+title: Storage deals, archive attestations, relay registry
+area: chain
+subtasks: [2849]
+stage: 8
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: true
+covers:
+  msgs:
+    - orama.storage.v1.MsgCreateDeal
+    - orama.storage.v1.MsgExtendDeal
+    - orama.storage.v1.MsgGrantDealAuthorization
+    - orama.storage.v1.MsgRevokeDealAuthorization
+    - orama.storage.v1.MsgAcceptDeal
+    - orama.storage.v1.MsgDeclineDeal
+    - orama.storage.v1.MsgSubmitProofs
+    - orama.storage.v1.MsgReleaseReplica
+    - orama.archive.v1.MsgAttest
+    - orama.archive.v1.MsgAttachReplicas
+    - orama.relay.v1.MsgRegisterRelay
+    - orama.relay.v1.MsgReportEpoch
+    - orama.relay.v1.MsgUpdateReporters
+  queries:
+    - orama.storage.v1.Params
+    - orama.storage.v1.Deal
+    - orama.storage.v1.Slot
+    - orama.storage.v1.Authorization
+    - orama.storage.v1.Challenges
+    - orama.storage.v1.EpochMint
+    - orama.storage.v1.Queue
+    - orama.storage.v1.Invariants
+    - orama.archive.v1.Params
+    - orama.archive.v1.Range
+    - orama.archive.v1.LastArchivedHeight
+    - orama.archive.v1.RetainHeight
+    - orama.relay.v1.Params
+    - orama.relay.v1.Reporters
+    - orama.relay.v1.Relay
+    - orama.relay.v1.EpochResult
+    - orama.relay.v1.Invariants
+  claims:
+    - "docs/whitepaper/technical-reference/vol2/37-global-nodes.md#xnodes-the-records: orama storage grant is a deal allowance capping spend, piece size, duration and replica count"
+    - "docs/whitepaper/technical-reference/vol2/41-storage-deals.md: accept and decline are signed by the node's hot key"
+    - "website/src/docs/operator/monitoring.mdx#what-it-collects: the provider writes held_slots and pending_slots, and orama status node prints them on the node's Global line"
+    - "docs/whitepaper/technical-reference/vol2/41-storage-deals.md: a deal seed file the delegate refuses is logged as an error each pass and the other deals are still visited"
+    - "docs/whitepaper/technical-reference/vol2/42-archive-and-indexer.md#archive-deals-and-archiving: a range is one of the canonical ranges of range_blocks; an attestation or replica record is signed by the hot key of an active ARCHIVER node"
+    - "docs/whitepaper/technical-reference/vol2/42-archive-and-indexer.md#archive-deals-and-archiving: REFUSAL PATHS ONLY: orama.archive.v1.MsgAttest; pinning a range and the three-archiver quorum need bonded ARCHIVER nodes (trigger: a funding path exists)"
+    - "docs/whitepaper/technical-reference/vol2/42-archive-and-indexer.md#archive-deals-and-archiving: REFUSAL PATHS ONLY: orama.archive.v1.MsgAttachReplicas; recording deals needs a decided range (trigger: a funding path exists)"
+    - "docs/whitepaper/technical-reference/vol2/40-economics.md#the-service-mints: the storage ceiling of a closed epoch is 25% of its schedule; nothing is minted without proofs"
+    - "docs/whitepaper/technical-reference/vol2/41-storage-deals.md#storage-deals: REFUSAL PATHS ONLY: orama.storage.v1.MsgCreateDeal; the success path needs a funded bank balance (trigger: a funding path exists)"
+    - "docs/whitepaper/technical-reference/vol2/41-storage-deals.md#storage-deals: REFUSAL PATHS ONLY: orama.storage.v1.MsgExtendDeal; the success path needs a funded bank balance (trigger: a funding path exists)"
+    - "docs/whitepaper/technical-reference/vol2/41-storage-deals.md#storage-deals: REFUSAL PATHS ONLY: orama.storage.v1.MsgAcceptDeal; the success path needs a funded bank balance (trigger: a funding path exists)"
+    - "docs/whitepaper/technical-reference/vol2/41-storage-deals.md#storage-deals: REFUSAL PATHS ONLY: orama.storage.v1.MsgDeclineDeal; the success path needs a funded bank balance (trigger: a funding path exists)"
+    - "docs/whitepaper/technical-reference/vol2/41-storage-deals.md#storage-deals: REFUSAL PATHS ONLY: orama.storage.v1.MsgSubmitProofs; the success path needs a funded bank balance (trigger: a funding path exists)"
+    - "docs/whitepaper/technical-reference/vol2/41-storage-deals.md#storage-deals: REFUSAL PATHS ONLY: orama.storage.v1.MsgReleaseReplica; the success path needs a funded bank balance (trigger: a funding path exists)"
+    - "docs/whitepaper/technical-reference/vol2/46-relay-rewards.md#relay-rewards: settlement is by the relay end block, never a message; an epoch nobody reported on has no result"
+    - "docs/whitepaper/technical-reference/vol2/46-relay-rewards.md#relay-rewards: REFUSAL PATHS ONLY: relay pay goes through the 90/5/5 service split; a paid epoch needs three reporters, which a run chain does not have (trigger: a reporter set in the run genesis)"
+    - "docs/whitepaper/technical-reference/vol2/39-chain-architecture.md#the-module-set: REFUSAL PATHS ONLY: orama.relay.v1.MsgReportEpoch; the success path needs a funded bank balance (trigger: a funding path exists)"
+    - "docs/whitepaper/technical-reference/vol2/39-chain-architecture.md#the-module-set: REFUSAL PATHS ONLY: orama.relay.v1.MsgUpdateReporters; the success path needs a funded bank balance (trigger: a funding path exists)"

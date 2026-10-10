@@ -20,7 +20,7 @@ func TestExponentialBackoff(t *testing.T) {
 		{1, 200 * time.Millisecond},
 		{2, 400 * time.Millisecond},
 		{3, 800 * time.Millisecond},
-		{4, 1000 * time.Millisecond}, // Maxed out
+		{4, 1000 * time.Millisecond},  // Maxed out
 		{10, 1000 * time.Millisecond}, // Maxed out
 	}
 
@@ -63,7 +63,7 @@ func TestRQLiteDataDirPath(t *testing.T) {
 
 func TestHasExistingState(t *testing.T) {
 	r := &RQLiteManager{}
-	
+
 	// Create a temp directory for testing
 	tmpDir, err := os.MkdirTemp("", "rqlite-test-*")
 	if err != nil {
@@ -96,4 +96,3 @@ func TestHasExistingState(t *testing.T) {
 		t.Errorf("hasExistingState() = false; want true for dir with raft.db")
 	}
 }
-

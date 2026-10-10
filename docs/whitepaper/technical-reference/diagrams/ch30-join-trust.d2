@@ -1,0 +1,17 @@
+shape: sequence_diagram
+
+op: "Operator"
+joiner: "Joining node (root)"
+minter: "Minting node gateway"
+reg: "Index RQLite"
+
+op -> joiner: "orama node install --token invite"
+joiner -> joiner: "decode invite: URL, token,\nfingerprint, SNI"
+joiner -> joiner: "Phase 1, 2, 2d"
+joiner -> joiner: "PreflightJoinArchive:\nmanifest, arch, file digests"
+joiner -> joiner: "EnsureNodeIdentity,\nWireGuard keypair"
+joiner -> minter: "POST /v1/internal/join\ntoken, WG key, peer id, expected signers\nTLS pinned to the SHA-256 fingerprint"
+minter -> reg: "consume invite hash, allocate WG IP,\nregister peer"
+minter -> joiner: "WG IP, peers, secrets,\narchive signers + rotation mark"
+joiner -> joiner: "TrustJoinedArchiveSigners\n(must equal --expect-archive-signers)"
+joiner -> joiner: "Phase 2b: verify archive against\nthe new anchor, install"

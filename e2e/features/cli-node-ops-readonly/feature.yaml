@@ -1,0 +1,56 @@
+# CLI conformance for the read-only operator commands: every `orama node`,
+# `orama status`, `orama nodes` and `orama status` command's help against
+# docs/whitepaper/technical-reference/appendices/d-cli-reference.md and its usage errors; every one-shot monitor view as
+# a table (starting with the verdict) and as JSON, with meaning checked
+# against the fleet (full WireGuard mesh, nameservers serving with valid
+# certificates, no failed unit, no critical alert, a new namespace healthy on
+# every node, gateway traffic counted), --node narrowing, --ssh break-glass,
+# bad flags and no credential; `orama node dns delegation` against the real
+# public delegation; `migrate-raft-id --dry-run` on a fresh cluster; node list
+# equal to nodes; `node logs` on a node; refusals of uninstall, unlock,
+# enroll (CLI and route) and migrate-conf; the operator read routes refusing
+# non-operators. Nothing here changes the fleet (--cloudflare-token-file,
+# --yes, --force and --follow are never passed).
+id: cli-node-ops-readonly
+title: CLI conformance - node and monitor commands (read-only)
+area: cli
+subtasks: [2845]
+stage: 3
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  cli:
+    - orama node
+    - orama node dns
+    - orama node dns delegation
+    - orama maint node enroll
+    - orama node list
+    - orama node logs
+    - orama maint node migrate-conf
+    - orama maint node migrate-raft-id
+    - orama maint rollout
+    - orama node uninstall
+    - orama maint node unlock
+    - orama nodes
+    - orama status
+    - orama status alerts
+    - orama status dns
+    - orama status mesh
+    - orama status namespaces
+    - orama status node
+    - orama status service
+    - orama status traffic
+  routes:
+    - /v1/node/enroll
+    - /v1/operator/telemetry
+    - /v1/operator/nodes
+  claims:
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-monitor: every view starts with the verdict; only the cluster's operators may read the telemetry; --ssh is never chosen automatically"
+    - "website/src/docs/operator/monitoring.mdx: a fresh cluster reports a full WireGuard mesh and no critical alert"
+    - "website/src/docs/contributor/architecture-reference.mdx: a fresh node is on a stable raft id from its first boot"
+    - "website/src/docs/operator/node-replacement.mdx: orama maint node migrate-raft-id --dry-run reports the raft identity and changes nothing"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-node-dns-delegation: prints exactly the NS and glue records the parent zone must hold"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-node-list: the same inventory listing as orama nodes"

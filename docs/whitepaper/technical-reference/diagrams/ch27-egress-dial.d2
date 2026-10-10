@@ -1,0 +1,16 @@
+shape: sequence_diagram
+
+t: "Tenant-controlled input\n(push URL, function fetch, tunnel host)"
+c: "netguard.NewHTTPClient"
+d: "net.Dialer (Control = GuardAddress)"
+r: "Resolver"
+s: "Destination"
+
+t -> c: "request URL"
+c -> d: "DialContext(host:port)"
+d -> r: "resolve name"
+r -> d: "one or more addresses"
+d -> d: "for each attempt, Control(address):\nsplit host/port, parse IP, Reserved(ip)?"
+d -> c: "BlockedError: destination is on an internal network"
+d -> s: "address allowed: connect (10 s dial timeout)"
+c -> c: "a redirect dials again:\nControl runs on every hop"

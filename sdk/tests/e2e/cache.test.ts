@@ -1,12 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { createTestClient, skipIfNoGateway } from "./setup";
+import { createTestClient, hasGateway } from "./setup";
 
-describe("Cache", () => {
-  if (skipIfNoGateway()) {
-    console.log("Skipping cache tests - gateway not available");
-    return;
-  }
-
+describe.skipIf(!hasGateway())("Cache", () => {
   const testDMap = "test-cache";
 
   beforeEach(async () => {
@@ -17,7 +12,7 @@ describe("Cache", () => {
       for (const key of keys.keys) {
         await client.cache.delete(testDMap, key);
       }
-    } catch (err) {
+    } catch {
       // Ignore errors during cleanup
     }
   }, 30000); // 30 second timeout for slow SCAN operations
@@ -156,11 +151,6 @@ describe("Cache", () => {
   it("should handle empty dmap name", async () => {
     const client = await createTestClient();
 
-    try {
-      await client.cache.get("", "test-key");
-      expect.fail("Expected get to fail with empty dmap");
-    } catch (err: any) {
-      expect(err.message).toBeDefined();
-    }
+    await expect(client.cache.get("", "test-key")).rejects.toThrow();
   });
 });

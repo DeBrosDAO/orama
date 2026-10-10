@@ -5,6 +5,7 @@ import (
 	"net/netip"
 	"strings"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/discovery"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/multiformats/go-multiaddr"
@@ -52,60 +53,67 @@ func (c *ClusterDiscoveryService) adjustSelfAdvertisedAddresses(meta *discovery.
 	return true
 }
 
-// selectPeerIP selects the best IP address for a peer
+// selectPeerIP picks the address to advertise a peer's raft and HTTP endpoints
+// on, from everything libp2p knows about it.
 func (c *ClusterDiscoveryService) selectPeerIP(peerID peer.ID) string {
-	var fallback string
-
+	var candidates []string
 	for _, conn := range c.host.Network().ConnsToPeer(peerID) {
-		if ip, public := ipFromMultiaddr(conn.RemoteMultiaddr()); ip != "" {
-			if shouldReplaceHost(ip) {
-				continue
-			}
-			if public {
-				return ip
-			}
-			if fallback == "" {
-				fallback = ip
-			}
+		if ip, _ := ipFromMultiaddr(conn.RemoteMultiaddr()); ip != "" {
+			candidates = append(candidates, ip)
 		}
 	}
-
 	for _, addr := range c.host.Peerstore().Addrs(peerID) {
-		if ip, public := ipFromMultiaddr(addr); ip != "" {
-			if shouldReplaceHost(ip) {
-				continue
-			}
-			if public {
-				return ip
-			}
-			if fallback == "" {
-				fallback = ip
-			}
+		if ip, _ := ipFromMultiaddr(addr); ip != "" {
+			candidates = append(candidates, ip)
 		}
 	}
-
-	return fallback
+	return selectOverlayIP(candidates)
 }
 
-// selectSelfIP selects the best IP address for ourselves
+// selectSelfIP picks the address to advertise our own endpoints on.
 func (c *ClusterDiscoveryService) selectSelfIP() string {
-	var fallback string
-
+	var candidates []string
 	for _, addr := range c.host.Addrs() {
-		if ip, public := ipFromMultiaddr(addr); ip != "" {
-			if shouldReplaceHost(ip) {
-				continue
-			}
-			if public {
-				return ip
-			}
-			if fallback == "" {
-				fallback = ip
-			}
+		if ip, _ := ipFromMultiaddr(addr); ip != "" {
+			candidates = append(candidates, ip)
 		}
 	}
+	return selectOverlayIP(candidates)
+}
 
-	return fallback
+// selectOverlayIP picks the address raft and the HTTP API should be advertised
+// on, which is always a WireGuard overlay address.
+//
+// It used to prefer a PUBLIC address and fall back to the overlay. That is
+// backwards for this system: inter-node traffic runs over the mesh, the public
+// interface has raft's ports closed by UFW, and rewriting a peer's advertised
+// raft address to its public IP therefore replaced a reachable endpoint with an
+// unreachable one — a node that had just been discovered was made undiallable
+// by the act of discovering it.
+//
+// A candidate list with no overlay address returns "": refusing to rewrite
+// leaves whatever the peer advertised for itself, which is at worst stale.
+// Substituting a public IP is worse than stale, because it is confidently
+// wrong and survives until something else corrects it.
+func selectOverlayIP(candidates []string) string {
+	for _, ip := range candidates {
+		if shouldReplaceHost(ip) {
+			continue
+		}
+		if isOverlayIP(ip) {
+			return ip
+		}
+	}
+	return ""
+}
+
+// isOverlayIP reports whether ip is on the WireGuard mesh.
+func isOverlayIP(ip string) bool {
+	addr, err := netip.ParseAddr(ip)
+	if err != nil {
+		return false
+	}
+	return constants.WireGuardOverlay().Contains(addr)
 }
 
 // rewriteAdvertisedAddresses rewrites RaftAddress and HTTPAddress in metadata
@@ -132,8 +140,17 @@ func rewriteAdvertisedAddresses(meta *discovery.RQLiteNodeMetadata, newHost stri
 		}
 	}
 
+	// Only ever rewrite an id that IS an address whose host needs replacing.
+	//
+	// The condition used to include `meta.NodeID == originalNodeID`, which is
+	// vacuously true — originalNodeID is captured from meta.NodeID a few lines
+	// above and nothing mutates it in between — so the id was stamped back to
+	// the raft address on every announcement, including one that had already
+	// been set to a stable peer id. A peer id does not parse as host:port, so
+	// requiring that is what keeps it intact.
 	if allowNodeIDRewrite {
-		if meta.RaftAddress != "" && (meta.NodeID == "" || meta.NodeID == originalNodeID || shouldReplaceHost(hostFromAddress(meta.NodeID))) {
+		idHost := hostFromAddress(meta.NodeID)
+		if meta.RaftAddress != "" && (meta.NodeID == "" || (idHost != "" && shouldReplaceHost(idHost))) {
 			if meta.NodeID != meta.RaftAddress {
 				meta.NodeID = meta.RaftAddress
 				nodeIDChanged = meta.NodeID != originalNodeID
@@ -230,4 +247,3 @@ func shortPeerID(id peer.ID) string {
 	}
 	return s[:8] + "..."
 }
-

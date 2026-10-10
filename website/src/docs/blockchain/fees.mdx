@@ -1,0 +1,96 @@
+# Fees
+
+Every transaction pays a base fee. The base fee behaves like EIP-1559, with integer arithmetic in `norama` per unit of gas.
+
+- The target is a block that is half full (`target_block_gas_fraction` = 0.5).
+- The base fee can move by at most 12.5% from one block to the next.
+- The floor is 1 norama per unit of gas, and genesis starts the base fee there. That floor is a placeholder with no dollar peg.
+- 100% of the base fee is burned.
+- Fee adjustment needs the consensus `max_gas` to be set. The localnet and stagenet scripts set it to 100,000,000. If it is unset the base fee stays where it is.
+
+A transaction must declare at least `base fee x gas limit`. Anything above that is a tip, and the tip goes to the block proposer's earnings account. If the proposer cannot be resolved the whole fee is burned.
+
+## Who pays, in what order
+
+| Part | Paid from |
+|---|---|
+| Tip | The payer's public bank balance only |
+| Base fee | Bank balance first, then the hot key's fee-only balance, then the payer's earnings |
+| Base fee with a fee granter (`feegrant`) | The granter's bank balance only. A granter cannot draw on earnings |
+
+There is also a local, per-validator policy: `minimum-gas-prices = 0.000001norama` in `app.toml`. It applies to a node's mempool on CheckTx only and never during simulation. It sits on top of the chain-wide base fee, not instead of it.
+
+## Earnings accounts
+
+Rewards, tips, sale proceeds, royalties and relay pay are credited to an *earnings account* in `x/fees`, not to the ordinary bank balance. This is how the chain pays people without letting a reward become a transfer to an arbitrary address.
+
+Earnings can pay:
+
+- base fees
+- the signer's own bonds: staking, node bonds
+- the signer's own storage deals and token-creation fees
+- deposits
+- a move into the shielded pool (`MsgShieldEarnings`)
+- funding a node's hot key (`MsgFundHotKey`, with the default earnings source)
+- a move to the signer's own bank balance (`MsgWithdrawEarnings`)
+
+Earnings cannot pay a tip and cannot be sent to another user directly. Bonding and deal messages top up a shortfall in the signer's bank balance from the signer's own earnings inside the same message, all or nothing.
+
+### Withdrawing earnings
+
+`MsgWithdrawEarnings` moves an amount from the signer's earnings to the signer's own bank balance. The amount is a positive whole number of norama and no more than the signer's earnings; a larger amount fails the whole message and moves nothing. The destination is the signer, never a field, so the message cannot aim earnings at another address. From the bank balance an ordinary `MsgSend` pays anyone publicly, a tip can be paid, and the shielded `MsgShield` can move it into the pool. The message emits a `withdraw_earnings` event with the signer, the amount and the earnings left. Withdrawn coins leave the earnings ledger and the `fees` module account together, so `oramad query fees invariants` still holds.
+
+```bash
+oramad tx fees withdraw-earnings 5000000000 --from <key>
+```
+
+The amount is in norama (1 ORAMA is 1,000,000,000). A withdrawal pays its own base fee like any transaction.
+
+### Using your rewards
+
+Earnings are yours to use in four ways, and you choose each time:
+
+1. **Leave them in earnings** and spend them there: base fees, bonds, storage deals, deposits.
+2. **Withdraw, then send publicly.** `orama chain withdraw-earnings 25` signs `MsgWithdrawEarnings` with your RootWallet (the amount is in ORAMA, up to nine decimals), and `orama chain send <to> 5 --public` pays another account from the balance it filled. A public send shows the sender, the recipient and the amount on the chain to everyone, permanently. The command prints that warning and asks you to type `yes` (`--yes` for scripts). Withdrawing is visible too: the chain shows that this account withdrew this amount, and nothing about where it goes next unless you send it publicly.
+3. **Shield them.** `MsgShieldEarnings` moves earnings straight into the shielded pool, and a transfer inside the pool shows no sender, recipient or amount. Building the shielded bundle needs a wallet that holds your shielded spending key; the RootWallet cannot yet, so today this is a path for wallets and tools that build the bundle themselves.
+4. **Send privately.** `orama chain send <to> <amount>` without `--public` is a private send, and private is the default on purpose: with no choice made, a payment can never become public. A private send needs the same shielded wallet, so with today's RootWallet the command stops and says so; it does not fall back to a public payment.
+
+`send` and `withdraw-earnings` sign only for the chain the selected network names (from its registry manifest; `--chain-id` for a network that names none), through an https or local endpoint. `send --public` shows the fee it will sign before you confirm, and any fee over 1 ORAMA is refused unless you raise the limit with `--max-fee`.
+
+The SDK has the same choice: `chain.transfer({ to, amount, public: true })` pays openly, anything else is private, and `chain.withdrawEarnings(amount, signer, tx)` withdraws (see the [SDK reference](/docs/developer/sdk-reference)).
+
+## Hot-key fee balances
+
+A node signs with a *hot key* that holds no ORAMA of its own beyond a fee-only balance. That balance can pay base fees and nothing else. It is funded by `MsgFundHotKey` or by a shielded `FEE_TOPUP` unshield.
+
+`MsgFundHotKey` takes the amount from one of two places, chosen by its `source` field. The default, `FUND_SOURCE_EARNINGS`, moves it out of the operator's earnings. `FUND_SOURCE_BANK` moves it out of the operator's bank balance into the `fees` module account and credits the hot key's fee-only balance with the same amount, so earnings plus fee-only balances still equal the `fees` module balance. The bank source is for an operator that holds ORAMA but has earned nothing yet: a node that runs no validator earns nothing until its storage providers have proven, and a provider cannot prove without a fee balance for the proof's base fee. `oramad tx nodes fund-hot-key <node-id> <amount-norama> --from-bank` sends it, and `orama setup` uses it for every node it sets up. The target is always the node's registered hot key, whichever source is chosen.
+
+## State deposits
+
+Some state is paid for with a deposit that is locked as long as the state exists. When the state is released, 99% of the deposit is refunded to the owner's earnings account and 1% is burned (`deposit_refund_fraction` 0.99, `deposit_burn_fraction` 0.01).
+
+| State | Deposit |
+|---|---|
+| Token metadata | 68,359 norama per byte of text (about 0.07 ORAMA per KiB) |
+| Node registration | 68,359 norama per byte (`deposit_per_byte`) |
+| cNFT tree | 1 norama per modelled byte of tree state |
+| Contract storage | 68,359 norama per byte, one chunk per payer per contract |
+
+## Other fees you will meet
+
+| Fee | Amount | Where it goes |
+|---|---|---|
+| Create a token | 10 ORAMA | Burned |
+| Open a storage deal | 1,000 norama (`deal_fee`) plus the escrow | Fee burned, escrow held until settled |
+| Storage service payment | 90% provider, 5% burn, 5% archive fund | See [Storage deals](/docs/blockchain/storage-deals) |
+| Relay pay | Same split: 90% operator earnings, 5% burn, 5% archive fund | See [Relay rewards](/docs/blockchain/relay-rewards) |
+| Shielded nullifier | 0.001 ORAMA per nullifier | Burned |
+| Shielded gas | `action_gas` 250,000 per action at the base fee | Burned, remainder to the proposer as a tip |
+
+## Queries
+
+`params`, `base-fee`, `earnings [address]`, `deposit [id]` and `invariants` on `oramad query fees`, plus the public `FeeBalance` query (a hot key's fee-only balance, by address): `orama chain query orama.fees.v1.Query/FeeBalance '{"address":"orama1…"}'`. The gateway serves every one of them except `Invariants`. The invariants check that earnings plus fee-only balances equal the `fees` module balance, that open deposits equal the deposits module balance, and that burned plus distributed equals collected.
+
+## What fees are not
+
+App hosting, databases, functions and storage on the Orama gateway are not metered by this chain. Nothing in a gateway charges `norama` for a request, and there is no billing in the platform yet. Chain fees apply only to transactions on `oramad`.

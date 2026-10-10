@@ -1,0 +1,89 @@
+# Stage 8, E2E-29: the chain's economics on the live run chain. x/emission
+# (the epoch closes only when both the duration and the block count hold,
+# cumulative minted equals 60% of the documented schedule, supply equals
+# genesis + minted + development + service - burned, schedule and cap
+# queries at every bracket boundary), x/power (the committee is genesis,
+# lambda monotonic and capped before the gate, documented params, every seat
+# paid each epoch), x/nodes (every Msg: operator, node register with ed25519
+# and secp256k1 bindings and every refusal, update, retire, capacity under
+# the probation cap, bank-only bonds, wrong signers, cluster rows; deposits
+# locked from earnings and released on retire) and x/houses (tiers closed,
+# proposals refused, votes and execution need a proposal, bank-only bond).
+# Signed on the node by the validators' own keyrings (features/internal/chain).
+# Every payout lands in earnings, which the owner leaves there, withdraws to a
+# bank balance and sends in the open (MsgWithdrawEarnings, features/chain-core
+# and chain-transfers), or moves into the shielded pool (features/chain-shielded):
+# none of the three is mandatory.
+id: chain-economics
+title: Emission, power, node registry and two-house governance
+area: chain
+subtasks: [2848]
+stage: 8
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: true
+covers:
+  msgs:
+    - orama.nodes.v1.MsgRegisterOperator
+    - orama.nodes.v1.MsgRegisterNode
+    - orama.nodes.v1.MsgUpdateNode
+    - orama.nodes.v1.MsgRetireNode
+    - orama.nodes.v1.MsgBondNode
+    - orama.nodes.v1.MsgUnbondNode
+    - orama.nodes.v1.MsgDeclareCapacity
+    - orama.nodes.v1.MsgRegisterCluster
+    - orama.nodes.v1.MsgUpdateCluster
+    - orama.nodes.v1.MsgRetireCluster
+    - orama.houses.v1.MsgSubmitProposal
+    - orama.houses.v1.MsgVoteToken
+    - orama.houses.v1.MsgVoteOperator
+    - orama.houses.v1.MsgLockHouseBond
+    - orama.houses.v1.MsgUnlockHouseBond
+    - orama.houses.v1.MsgExecuteProposal
+  queries:
+    - orama.emission.v1.Params
+    - orama.emission.v1.CurrentEpoch
+    - orama.emission.v1.ScheduleAt
+    - orama.emission.v1.CumulativeMinted
+    - orama.emission.v1.SupplyCapSoFar
+    - orama.emission.v1.Invariants
+    - orama.power.v1.Params
+    - orama.power.v1.BootstrapCommittee
+    - orama.power.v1.Lambda
+    - orama.power.v1.ValidatorPower
+    - orama.fees.v1.Deposit
+    - orama.fees.v1.Earnings
+    - orama.nodes.v1.Params
+    - orama.nodes.v1.Operator
+    - orama.nodes.v1.Node
+    - orama.nodes.v1.Cluster
+    - orama.nodes.v1.NodeUnbondings
+    - orama.nodes.v1.Invariants
+    - orama.houses.v1.Params
+    - orama.houses.v1.Proposal
+    - orama.houses.v1.Vote
+    - orama.houses.v1.HouseBond
+    - orama.houses.v1.Tiers
+    - orama.houses.v1.Enacted
+    - orama.houses.v1.Invariants
+  claims:
+    - "docs/whitepaper/technical-reference/vol2/40-economics.md#the-schedule: an epoch closes only when both epoch_duration and min_blocks_per_epoch hold"
+    - "docs/whitepaper/technical-reference/vol2/40-economics.md#the-schedule: 14,848/7,424/3,712/1,856/928/274 ORAMA per epoch; 21,000,640 ORAMA cumulative at epoch 3,650"
+    - "docs/whitepaper/technical-reference/vol2/40-economics.md#burns-and-how-the-supply-is-accounted: cumulative_minted equals 60% of the schedule; supply = genesis + minted + development + service - burned"
+    - "docs/whitepaper/technical-reference/vol2/40-economics.md#burns-and-how-the-supply-is-accounted: genesis supply is zero"
+    - "docs/whitepaper/technical-reference/vol2/39-chain-architecture.md#lambda: the bootstrap committee is the genesis validator set; lambda is monotonic and <= pre_gate_lambda_cap before the gate"
+    - "docs/whitepaper/technical-reference/vol2/39-chain-architecture.md#the-blend-normalisation-and-publication: validator-power returns comet_power; its share fields are always zero"
+    - "docs/whitepaper/technical-reference/vol2/37-global-nodes.md#service-key-bindings: bindings verify over orama-global-bind-v1|chain-id|operator|service|hex(pubkey); a service pubkey is unique and a retired one is never reusable"
+    - "docs/whitepaper/technical-reference/vol2/37-global-nodes.md#capacity: node and cluster deposits lock through x/fees and are released on retire"
+    - "docs/whitepaper/technical-reference/vol2/37-global-nodes.md#capacity: declared capacity without a bond is capped at probation_capacity_bytes"
+    - "docs/whitepaper/technical-reference/vol2/44-governance-and-contracts.md#the-tiers: both tiers stay closed below bootstrap_exit_stake and 21 eligible operators; proposals are refused"
+    - "docs/whitepaper/technical-reference/vol2/37-global-nodes.md#bonds-and-unbonding: REFUSAL PATHS ONLY: orama.nodes.v1.MsgBondNode; the success path needs a funded bank balance (trigger: a funding path exists)"
+    - "docs/whitepaper/technical-reference/vol2/37-global-nodes.md#hot-key-funding: REFUSAL PATHS ONLY: orama.nodes.v1.MsgUnbondNode; the success path needs a funded bank balance (trigger: a funding path exists)"
+    - "docs/whitepaper/technical-reference/vol2/44-governance-and-contracts.md#governance-and-contracts: REFUSAL PATHS ONLY: orama.houses.v1.MsgSubmitProposal; the success path needs a funded bank balance (trigger: a funding path exists)"
+    - "docs/whitepaper/technical-reference/vol2/44-governance-and-contracts.md#governance-and-contracts: REFUSAL PATHS ONLY: orama.houses.v1.MsgVoteToken; the success path needs a funded bank balance (trigger: a funding path exists)"
+    - "docs/whitepaper/technical-reference/vol2/44-governance-and-contracts.md#governance-and-contracts: REFUSAL PATHS ONLY: orama.houses.v1.MsgVoteOperator; the success path needs a funded bank balance (trigger: a funding path exists)"
+    - "docs/whitepaper/technical-reference/vol2/44-governance-and-contracts.md#governance-and-contracts: REFUSAL PATHS ONLY: orama.houses.v1.MsgLockHouseBond; the success path needs a funded bank balance (trigger: a funding path exists)"
+    - "docs/whitepaper/technical-reference/vol2/44-governance-and-contracts.md#proposals: REFUSAL PATHS ONLY: orama.houses.v1.MsgUnlockHouseBond; the success path needs a funded bank balance (trigger: a funding path exists)"
+    - "docs/whitepaper/technical-reference/vol2/44-governance-and-contracts.md#proposals: REFUSAL PATHS ONLY: orama.houses.v1.MsgExecuteProposal; the success path needs a funded bank balance (trigger: a funding path exists)"

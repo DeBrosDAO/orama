@@ -1,0 +1,60 @@
+# Shielded pool
+
+`x/shielded` is the private way to hold and move ORAMA. It is a shielded pool in the style of Zcash Orchard (orchard 0.15.5, "Ironwood" in Orama's naming): value goes in, moves between private notes with no visible sender, receiver or amount, and comes out again.
+
+**Read this first.** The module is implemented and wired, but it fails closed. A node accepts a shielded bundle only if it has *both* proof verifiers: the in-process Orchard library (built with `-tags orchardffi`) and the pinned out-of-process `orama-orchard-verifier` binary. A plain `make build` produces a binary with neither, so it accepts no shielded transaction. Release builds (`build-linux-amd64-full`, `build-linux-amd64-orchard`) link both. On any node without them, only public sends work. The linux binaries have been built and linked but not yet run as a network. The two verifiers share the same upstream crate; a genuinely independent second implementation is an open item.
+
+## Using the pool is optional
+
+Nothing forces value into the pool. A bank send of norama between plain accounts is an ordinary public payment, earnings can be withdrawn to a bank balance (`MsgWithdrawEarnings`) and sent in the open, and a user who never shields is a normal user of the chain. The pool is for people who want a payment to show no sender, recipient or amount.
+
+The tools make that choice explicit and default to the private side. `orama chain send <to> <amount>` and the SDK's `chain.transfer({ to, amount })` are private unless you pass `--public` or `public: true`, so a payment cannot become public by omission, and they never fall back to a public payment when the private one cannot be built. Building a shielded bundle needs the owner's shielded spending key (see Keys below), and the RootWallet cannot do that yet, so today a private send through the CLI stops with that explanation. A wallet or tool that holds the key builds the bundle itself and passes it to the SDK as its `shielded` option.
+
+## Messages
+
+| Message | What it does |
+|---|---|
+| `MsgShieldedTransfer` | A signer-less private transfer. The transaction must contain only this message, with no signature, no fee and no memo, and declare exactly `action_gas x actions` |
+| `MsgShield` | Move bank balance into the pool |
+| `MsgShieldEarnings` | Move the signer's earnings into the pool |
+| `MsgUnshield` | Move value out. The signature hash binds the signer and the target so a copy cannot be redirected |
+
+Unshield targets: `BOND` (the signer's own delegation), `NODE_BOND` (the signer's own `x/nodes` role bond), and `FEE_TOPUP` (the signer's own fee-only balance, at most 0.01 ORAMA per transaction, and the whole transaction fails if over). `DEPOSIT` and `CONTRACT` targets are refused: they are not linked.
+
+Because ORAMA leaves the pool only into the owner's own bond or fee balance, the pool is not a way to pay someone else out of band.
+
+## Rules that protect the pool
+
+- **Turnstile.** The pool can never pay out more than went in.
+- **24 hour cap.** Net outflow is at most 2% of the pool (or 1 ORAMA if larger) per rolling 24 hours. The 2% is an ossified constant. Over-cap `BOND` and `NODE_BOND` unshields are queued and served once a window, pro rata, up to 1,000 payments per window. There is no cancel message.
+- **Nullifiers.** Each spent note's nullifier is recorded in a separate append-only database next to the chain data. The app hash commits to a running SHA-256 of that set and a count, and the node refuses to start if the database does not match.
+- **One pool.** Only vintage 1 and the native asset exist. There is no migration message and no multi-asset mode.
+
+## Parameters
+
+| Parameter | Value |
+|---|---|
+| `anchor_window_blocks` | 14,400 |
+| `nullifier_fee` | 0.001 ORAMA per nullifier, burned |
+| `action_gas` | 250,000 (an unmeasured placeholder) |
+| `max_actions_per_bundle` | 16 |
+| `unshield_floor` | 1 ORAMA |
+| `max_fee_topup` | 0.01 ORAMA |
+| `queue_per_address_cap` | 100 ORAMA |
+| `max_signerless_per_block` | 64 |
+
+A transfer's fee (its value balance) must be at least `base fee x action_gas x actions + nullifier fee x actions`. The base and nullifier parts are burned and any remainder is a tip to the proposer.
+
+Proof sizes: a 1-action bundle is 5,985 bytes and a 2-action bundle 9,141 bytes. Verifying a 1-action bundle takes about 5.6 ms on an Apple M3 with 8 threads; Linux is not measured.
+
+## Keys
+
+Wallet-side shielded keys are derived with ZIP-32 hardened-only derivation from a RootWallet branch of the seed (HKDF salt `orama-shielded-v1`). RootWallet does not use them yet, and its agent refuses shielded messages.
+
+## Not built
+
+The `CONTRACT` unshield path and its adapter, `DEPOSIT` unshields, vintage migration, multi-asset pools, shielded delegation tokens, per-peer admission limits in the mempool, a measured gas price, and a real two-node state-sync test of the nullifier database.
+
+## Queries
+
+`Params`, `TreeState` and `NullifierSpent` are public. `Pools` and `Invariants` are withheld from the gateway.

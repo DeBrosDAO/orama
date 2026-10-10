@@ -1,0 +1,89 @@
+syntax = "proto3";
+package orama.power.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/power/types";
+
+import "google/api/annotations.proto";
+import "gogoproto/gogo.proto";
+import "orama/power/v1/power.proto";
+
+// Query defines the gRPC querier service for x/power. There is no Msg
+// service: bootstrap committee membership, the power formula and its
+// parameters are all genesis-only (see Params).
+service Query {
+  rpc Params(QueryParamsRequest) returns (QueryParamsResponse) {
+    option (google.api.http).get = "/orama/power/v1/params";
+  }
+  rpc BootstrapCommittee(QueryBootstrapCommitteeRequest) returns (QueryBootstrapCommitteeResponse) {
+    option (google.api.http).get = "/orama/power/v1/bootstrap-committee";
+  }
+  rpc Lambda(QueryLambdaRequest) returns (QueryLambdaResponse) {
+    option (google.api.http).get = "/orama/power/v1/lambda";
+  }
+  rpc ValidatorPower(QueryValidatorPowerRequest) returns (QueryValidatorPowerResponse) {
+    option (google.api.http).get = "/orama/power/v1/validator-power/{operator_address}";
+  }
+  rpc Invariants(QueryInvariantsRequest) returns (QueryInvariantsResponse) {
+    option (google.api.http).get = "/orama/power/v1/invariants";
+  }
+}
+
+message QueryParamsRequest {}
+
+message QueryParamsResponse {
+  Params params = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryBootstrapCommitteeRequest {}
+
+message QueryBootstrapCommitteeResponse {
+  repeated BootstrapMember members = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryLambdaRequest {}
+
+message QueryLambdaResponse {
+  string lambda = 1 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+  uint64 last_updated_epoch = 2;
+  uint64 current_cap_bps = 3;
+  uint64 below_step_up_streak_epochs = 4;
+}
+
+message QueryValidatorPowerRequest {
+  string operator_address = 1;
+}
+
+message QueryValidatorPowerResponse {
+  string operator_address = 1;
+  string bootstrap_share = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+  string capped_share = 3 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+  string power_share = 4 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+  int64 comet_power = 5;
+  // operator is the operator the validator's stake counts toward under the
+  // per-operator cap: the account that registered the x/nodes node binding the
+  // validator's consensus key, or "unlinked" when no live node binds it. Empty
+  // when there is no such validator.
+  string operator = 6;
+}
+
+message QueryInvariantsRequest {}
+
+message QueryInvariantsResponse {
+  // module_account_empty is true when x/power's module account holds no norama.
+  // It only passes reward mints through in one call, so any balance between
+  // blocks is a stranded amount.
+  bool module_account_empty = 1;
+  string detail = 2;
+}

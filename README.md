@@ -8,7 +8,7 @@ A decentralized infrastructure platform combining distributed SQL, IPFS storage,
 |---------|----------|-------------|
 | [core/](core/) | Go | API gateway, distributed node, CLI, and client SDK |
 | [sdk/](sdk/) | TypeScript | `@debros/orama` — JavaScript/TypeScript SDK ([npm](https://www.npmjs.com/package/@debros/orama)) |
-| [website/](website/) | TypeScript | Marketing website and invest portal |
+| [website/](website/) | TypeScript | Public website (orama.network), whitepaper and docs |
 | [vault/](vault/) | Zig | Distributed secrets vault (Shamir's Secret Sharing) |
 | [os/](os/) | Go + Buildroot | OramaOS — hardened minimal Linux for network nodes |
 
@@ -32,14 +32,21 @@ make vault-build
 
 | Document | Description |
 |----------|-------------|
-| [Architecture](core/docs/ARCHITECTURE.md) | System architecture and design patterns |
-| [Deployment Guide](core/docs/DEPLOYMENT_GUIDE.md) | Deploy apps, databases, and domains |
-| [Dev & Deploy](core/docs/DEV_DEPLOY.md) | Building, deploying to VPS, rolling upgrades |
-| [Security](core/docs/SECURITY.md) | Security hardening and threat model |
-| [Monitoring](core/docs/MONITORING.md) | Cluster health monitoring |
-| [Client SDK](core/docs/CLIENT_SDK.md) | Go SDK documentation |
-| [Serverless](core/docs/SERVERLESS.md) | WASM serverless functions |
-| [Common Problems](core/docs/COMMON_PROBLEMS.md) | Troubleshooting known issues |
+| [Whitepaper](docs/whitepaper/WHITEPAPER.md) | What Orama is, how it works, what runs on it today |
+| [Architecture](website/src/docs/contributor/architecture-reference.mdx) | System architecture and design patterns |
+| [Client surface](website/src/docs/developer/getting-started.mdx) | Humans use the CLI; programs use the SDK / HTTP. No dashboard, no Orama MCP |
+| [One-VPS eval](website/src/docs/operator/getting-started.mdx) | Single machine: index + tenant, not HA |
+| [Deployment Guide](website/src/docs/developer/deployments.mdx) | Deploy apps, databases, and domains |
+| [Dev & Deploy](website/src/docs/contributor/deployment.mdx) | Building, deploying to VPS, rolling upgrades |
+| [Authentication](docs/whitepaper/technical-reference/vol1/13-identity.md) | Who someone is, what they may do, and how the gateway decides |
+| [Security](docs/whitepaper/technical-reference/vol1/05-privilege-and-filesystem-trust.md) | Security hardening and threat model |
+| [Monitoring](website/src/docs/operator/monitoring.mdx) | Cluster health monitoring |
+| [TypeScript SDK](website/src/docs/developer/sdk-reference.mdx) | `@debros/orama` — the client applications use |
+| [Go Client SDK](website/src/docs/developer/go-sdk.mdx) | The Go client for the same gateway |
+| [Serverless](website/src/docs/developer/functions.mdx) | WASM serverless functions |
+| [API Surface](docs/whitepaper/technical-reference/appendices/i-api-surface.md) | Every gateway route and which client owns it |
+| [CLI Reference](docs/whitepaper/technical-reference/appendices/d-cli-reference.md) | Every command and flag, generated from the code |
+| [Common Problems](website/src/docs/operator/troubleshooting.mdx) | Troubleshooting known issues |
 
 ## Contributing
 

@@ -1,0 +1,17 @@
+shape: sequence_diagram
+
+op: "Operator"
+gw: "Gateway handling the request"
+store: "Key store\nstate dir file, or\nprivhelper gateway-key put"
+reg: "signing_keys\n(index RQLite)"
+peers: "Other gateways"
+
+op -> gw: "POST /v1/operator/rotate-signing-key"
+gw -> gw: "Authorize (operator list)"
+gw -> gw: "generate Ed25519 key, kid = ed_ + hex(sha256(pub)[:8])"
+gw -> store: "write new private key first (temp file + rename)"
+gw -> reg: "Publish: INSERT kid, namespace, public key"
+gw -> gw: "SetEdDSAKey: sign with the new key"
+gw -> reg: "Retire previous kid at now + 15 min"
+gw -> op: "200 {kid, previous_kid, previous_accepted_for: 15m0s}"
+peers -> reg: "reload published keys every 30 s,\nor 1 s after a token names an unknown kid"

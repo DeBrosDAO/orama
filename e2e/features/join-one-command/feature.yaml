@@ -1,0 +1,57 @@
+# A newcomer's whole join: `orama setup`, unattended, on fresh servers. The
+# first run turns one fresh server into a full node of the network (the
+# cluster node, the chain restored by state sync, the operator, the node and
+# the validator on the chain), a second run of the same command changes
+# nothing, a third adds two more servers to the same cluster, and every step
+# ends with `orama status --json` saying "healthy": true. A cluster-only run
+# installs the cluster node and none of the global layer. The refusals that
+# happen before any server is touched (an unpinned host key, an exit relay
+# nobody accepted, a missing name) are checked without a server.
+#
+# `orama setup --create-network` makes a network from nothing on three fresh
+# servers (the bootstrap committee, the genesis built from their keys, the
+# operator and nodes registered, networks/<name>/ written for publishing) and,
+# run again, keeps the genesis; E2E_SETUP_RELEASE_ROOT names the
+# release-root.json it needs (E2E_SETUP_RELEASE_REPO and E2E_SETUP_RELEASE_CHANNEL
+# say where the release comes from; for a network the registry announced the root,
+# chain id and release come from the announcement). A production chain id is
+# refused before any server is touched.
+#
+# The network is the fleet's chain: E2E_SETUP_NETWORK names a network the CLI
+# knows (built in, or added from E2E_SETUP_MANIFEST_URL) whose seeds and
+# release are the fleet's. Without it the tests that need a network report
+# "not applicable" and the refusals still run.
+id: join-one-command
+title: Join a network with orama setup, 1 to 3 nodes
+area: infrastructure
+subtasks: [3306]
+stage: 9
+destructive: true
+requires:
+  extra_nodes: 3
+  probe: false
+  chain: true
+covers:
+  cli:
+    - orama setup
+  msgs:
+    - orama.nodes.v1.MsgClaimNodeName
+  queries:
+    - orama.nodes.v1.NameOfNode
+  claims:
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-setup: unattended, a machine needs a --host-key and a host key setup was not given is never trusted"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-setup: the first machine creates the cluster, the others join it, and a second run with the same arguments changes nothing"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-setup: running it again with more addresses adds nodes to the same cluster"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-setup: --cluster-only installs the cluster node alone"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-setup: --exit needs a relay (the Tor network file the network pins, or --tor-network) and the warning accepted"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-setup: a network that pins its Tor network file gives every full node a relay, --tor-network gives another file and --no-relay leaves it out (unit-tested in cmd/orama/internal/setup)"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-setup: nothing is installed on any machine until every machine passes"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-setup: each machine downloads the release from the release repository itself, in parallel, and checks it against the digest of the release metadata verified on the operator's computer; the archive does not pass through it"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-setup: --upload-release downloads the release on the operator's computer and uploads it to each machine in turn, for machines that cannot reach the release repository (the download failing on a machine is unit-tested in cmd/orama/internal/setup)"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-setup: --create-network makes the machines the bootstrap committee of a new chain, builds its genesis from their keys and writes networks/<name>/ for publishing"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-setup: running a creation again keeps the keys the machines made and the genesis they carry"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-setup: a network announced in the registry supplies its chain id, release repository, channel, seeds, faucet and release root to --create-network, and cannot be joined before it is created"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-setup: the validator's node and every seat of a created network bind their consensus key to the operator, signed on the node"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-setup: a production chain id needs 30 bootstrap validators and is refused before any machine is touched"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-setup: setup claims each full node's name on the chain, and a second run does not claim it again"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-setup: a created test network's genesis sets the faucet's largest drip to 10,000 ORAMA, and the creator is funded by a drip signed on a seat, since the seeds serve no public faucet yet (unit-tested in cmd/orama/internal/setup)"

@@ -1,0 +1,29 @@
+direction: down
+
+start: "nodes (inventory) + roles (ReadRoles)"
+unk: "any node Unknown or missing?" {shape: diamond}
+e1: "ErrUnreachable:\nlists the hosts, no plan"
+two: "two nodes report Leader?" {shape: diamond}
+e2: "error: mid-election,\nre-run once it settles"
+none: "no node reports Leader?" {shape: diamond}
+e3: "ErrNoLeader: no quorum\nor host cannot reach it"
+split: "split: leader / followers\nfollowers sorted by host"
+inter: "interleaveNameservers:\nns0, other0, ns1, other1, ...\n(unchanged if all one kind)"
+ordered: "steps: followers in that order,\nthen the leader last"
+filt: "--node given?" {shape: diamond}
+cut: "keep only the named node's step\n(the whole cluster was still checked)"
+unknown: "named host not in plan:\nerror"
+out: "printed plan"
+
+start -> unk
+unk -> e1: "yes"
+unk -> two: "no"
+two -> e2: "yes"
+two -> none: "no"
+none -> e3: "yes"
+none -> split: "no"
+split -> inter -> ordered -> filt
+filt -> out: "no"
+filt -> cut: "yes, found"
+filt -> unknown: "yes, absent"
+cut -> out

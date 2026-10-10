@@ -1,0 +1,9 @@
+{
+  "version": "0.6.0",
+  "installed_at": "2026-07-13T12:19:15Z",
+  "files": {
+    ".claude/skills/rules-bugboard/SKILL.md": "ed4579800c8173340b18b02f5d8a1538cf4fd31b99236cac0ebfb0e8bfedb3e9",
+    ".claude/skills/rules-orama/SKILL.md": "c405850bdfb9e73b0385ed64f1784e8a201d62303d85a619e7741d2eb3990965",
+    ".claude/skills/rules-rootwallet/SKILL.md": "08d037e6893d8ab5e9e8862ddd461d8cd8c5bfd7ad88c95194c792a0927c4fee"
+  }
+}

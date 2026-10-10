@@ -1,8 +1,11 @@
 package checks
 
 import (
+	"strconv"
+	"strings"
 	"testing"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
 )
 
@@ -38,7 +41,8 @@ func TestCheckOlric_HealthyNode(t *testing.T) {
 	expectStatus(t, results, "olric.service_active", inspector.StatusPass)
 	expectStatus(t, results, "olric.memberlist_port", inspector.StatusPass)
 	expectStatus(t, results, "olric.restarts", inspector.StatusPass)
-	expectStatus(t, results, "olric.log_suspects", inspector.StatusPass)
+	expectStatus(t, results, "olric.log_failed_members", inspector.StatusPass)
+	expectStatus(t, results, "olric.log_suspicions", inspector.StatusPass)
 	expectStatus(t, results, "olric.log_flapping", inspector.StatusPass)
 	expectStatus(t, results, "olric.log_errors", inspector.StatusPass)
 }
@@ -85,12 +89,31 @@ func TestCheckOlric_Memory(t *testing.T) {
 	}
 }
 
+// A member memberlist marked failed is a critical failure; suspicions that
+// were refuted (a member answering late, e.g. on a starved node, or one leaving
+// with its namespace) are a warning: they used to fail the whole inspection.
 func TestCheckOlric_LogSuspects(t *testing.T) {
-	nd := makeNodeData("1.1.1.1", "node")
-	nd.Olric = &inspector.OlricData{ServiceActive: true, LogSuspects: 5}
-	data := makeCluster(map[string]*inspector.NodeData{"1.1.1.1": nd})
-	results := CheckOlric(data)
-	expectStatus(t, results, "olric.log_suspects", inspector.StatusFail)
+	tests := []struct {
+		name       string
+		deadMarks  int
+		suspects   int
+		wantFailed inspector.Status
+		wantSuspic inspector.Status
+	}{
+		{"quiet", 0, 0, inspector.StatusPass, inspector.StatusPass},
+		{"suspicions only", 0, 10, inspector.StatusPass, inspector.StatusWarn},
+		{"member marked failed", 1, 0, inspector.StatusFail, inspector.StatusPass},
+		{"both", 2, 5, inspector.StatusFail, inspector.StatusWarn},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			nd := makeNodeData("1.1.1.1", "node")
+			nd.Olric = &inspector.OlricData{ServiceActive: true, LogDeadMarks: tt.deadMarks, LogSuspects: tt.suspects}
+			results := CheckOlric(makeCluster(map[string]*inspector.NodeData{"1.1.1.1": nd}))
+			expectStatus(t, results, "olric.log_failed_members", tt.wantFailed)
+			expectStatus(t, results, "olric.log_suspicions", tt.wantSuspic)
+		})
+	}
 }
 
 func TestCheckOlric_LogErrors(t *testing.T) {
@@ -145,5 +168,23 @@ func TestCheckOlric_NilData(t *testing.T) {
 	results := CheckOlric(data)
 	if len(results) != 0 {
 		t.Errorf("expected 0 results for nil Olric data, got %d", len(results))
+	}
+}
+
+// The collector probes the memberlist on constants.OlricMemberlistPort; the
+// check used to tell the operator to look at 3322, a port nothing listens on.
+func TestCheckOlric_memberlistNamesTheRealPort(t *testing.T) {
+	for _, up := range []bool{true, false} {
+		nd := makeNodeData("1.1.1.1", "node")
+		nd.Olric = &inspector.OlricData{ServiceActive: true, MemberlistUp: up}
+		results := CheckOlric(makeCluster(map[string]*inspector.NodeData{"1.1.1.1": nd}))
+		c := findCheck(results, "olric.memberlist_port")
+		if c == nil {
+			t.Fatal("no memberlist check")
+		}
+		port := strconv.Itoa(constants.OlricMemberlistPort)
+		if !strings.Contains(c.Name, port) || !strings.Contains(c.Message, port) || strings.Contains(c.Message, "3322") {
+			t.Errorf("up=%v: name %q, message %q; want port %s", up, c.Name, c.Message, port)
+		}
 	}
 }

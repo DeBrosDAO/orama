@@ -1,0 +1,20 @@
+shape: sequence_diagram
+
+owner: "owner / admin\n(members:write)"
+gw: "index gateway"
+reg: "registry\nprincipals, grants"
+mgr: "deployment process manager\n(deployments/process)"
+unit: "app unit\n(its own user)"
+
+owner -> gw: "POST /v1/deployments/grants\nname, role runtime or reader, resource"
+gw -> reg: "EnsureWorkloadPrincipal: app:ns/name"
+gw -> reg: "Grant(role, selector)"
+mgr -> gw: "start: workloadTokenMinter"
+gw -> reg: "deployment row exists?"
+gw -> reg: "GrantIn(app principal)"
+gw -> mgr: "JWT sub app:ns/name,\nscopes claim, 1 h"
+mgr -> unit: "stage token file;\nORAMA_TOKEN_FILE"
+unit -> gw: "POST /v1/auth/renew with the token"
+gw -> reg: "MintWorkloadToken: grant read again\n(no check that the deployment or grant exists)"
+gw -> unit: "fresh token, 1 h"
+mgr -> mgr: "every 20 min: restage a fresh token\nfor each running local deployment"

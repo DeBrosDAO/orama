@@ -1,0 +1,40 @@
+direction: right
+
+client: "Deal owner\n(orama storage, RootWallet signs)" {shape: person}
+
+chain: "oramad: x/storage" {
+  deals: "Deals, slots, auths\nreplica index, challenges" {shape: cylinder}
+  queue: "Settlement queue" {shape: cylinder}
+  begin: "BeginBlock\nsync nodes, close epoch, assign,\nexpire windows, open challenges, expire deals"
+  end: "EndBlock\ndrain settlement queue"
+  begin -> deals
+  end -> queue
+  queue -> deals
+}
+
+nodes: "x/nodes\n(roles, bond, hot key,\ncapacity, operator, /16, ASN)" {shape: hexagon}
+emission: "x/emission\n(epoch counter, storage ceiling,\nonly minter)" {shape: hexagon}
+fees: "x/fees\n(earnings, deposits)" {shape: hexagon}
+archive: "x/archive\n(ARCHIVE deals)" {shape: hexagon}
+
+nodes -> chain.begin: "storage change queue,\nIsActive, HotKey, Slash, Jail"
+emission -> chain.begin: "CurrentEpoch"
+chain.begin -> emission: "MintStorageService(epoch, total)"
+chain.end -> fees: "CreditEarnings (90%)"
+archive -> chain.deals: "CreateArchiveDeal"
+
+host: "Global node host" {
+  prov: "orama-global provider\n:31013 /pieces, /pins" {shape: hexagon}
+  store: "Piece store\npieces/, meta/, assignments/" {shape: cylinder}
+  kubo: "Public Kubo\n(PUBLIC_PIN, ARCHIVE only)"
+  prov -> store
+  prov -> kubo: "add, pin, unpin (bearer, loopback)"
+}
+
+rep: "Repair delegate\norama-global repair\n(holds repair seeds)" {shape: hexagon}
+
+client -> chain.deals: "MsgCreateDeal, MsgExtendDeal,\nMsgGrantDealAuthorization"
+client -> host.prov: "POST /pieces/ROOT\n(sealed slot bytes)"
+host.prov -> chain.deals: "MsgAcceptDeal, MsgDeclineDeal,\nMsgSubmitProofs (hot key)"
+chain.deals -> host.prov: "storage_slot_assigned events,\nSlot, Challenges queries (RPC)"
+rep -> host.prov: "GET survivor, POST rewrapped slot"

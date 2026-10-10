@@ -1,0 +1,38 @@
+# Stage 8: the gateway's /v1/chain/ account and validator reads that the website
+# explorer (website/src/explorer/data/chain) calls: the staking validator list
+# (the node's SDK REST API, fixed page size, no caller query), an address's bank
+# balances, delegations and unbonding through the cosmos-sdk Query methods of
+# /v1/chain/query/, and
+# the indexer routes added for it (the newest transactions, hourly statistics,
+# an account's summary) and the aggregates the indexer keeps for the explorer's
+# epoch, supply and validator pages (the epochs, the supply per epoch, each
+# validator's epochs, slashes and jail periods, and the hourly, daily and weekly
+# series), checked for their order, their bounds and their refusals. The REST routes are checked against the run's own
+# validators (the bank balance equals `orama chain balance`'s answer, the
+# validator set holds the run's validators bonded) and every refusal (a
+# malformed address, a caller query, another method) is checked for its status.
+# The run chain deploy installs the indexer beside every node, so the index tests run in every
+# fleet run.
+id: chain-explorer
+title: Explorer reads through the gateway - balances, validators, index
+area: chain
+subtasks: [2776]
+stage: 8
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: true
+covers:
+  routes:
+    - /v1/chain/
+  claims:
+    - "docs/whitepaper/technical-reference/vol2/39-chain-architecture.md#how-core-reads-and-writes-the-chain: AllBalances, DelegatorDelegations and DelegatorUnbondingDelegations of /v1/chain/query/ answer an address's balances, delegations and unbonding, at most 100 entries"
+    - "docs/whitepaper/technical-reference/vol2/39-chain-architecture.md#how-core-reads-and-writes-the-chain: GET /v1/chain/staking/validators is the node's REST staking validators, at most 200"
+    - "docs/whitepaper/technical-reference/vol2/39-chain-architecture.md#how-core-reads-and-writes-the-chain: the validator list route takes no query and a page limit above 100 on a wallet query is a 400"
+    - "docs/whitepaper/technical-reference/vol2/39-chain-architecture.md#how-core-reads-and-writes-the-chain: every Orama module serves its queries over the node's REST API at the google.api.http paths of its query.proto"
+    - "docs/whitepaper/technical-reference/vol2/42-archive-and-indexer.md#the-indexer: GET /index/v1/txs, /index/v1/stats and /index/v1/accounts/{address} answer the newest transactions, 48 hourly buckets and an account's transaction count and dates"
+    - "docs/whitepaper/technical-reference/vol2/42-archive-and-indexer.md#the-indexer: /index/v1/stats/hourly, /stats/daily and /stats/weekly answer a page of buckets newest first, each interval apart, with no holes"
+    - "docs/whitepaper/technical-reference/vol2/42-archive-and-indexer.md#the-indexer: /index/v1/epochs, /epochs/{epoch}, /epochs/{epoch}/validators and /supply answer the closed emission epochs, an epoch's validators and one supply point per epoch, newest first, and an unknown epoch is a 404"
+    - "docs/whitepaper/technical-reference/vol2/42-archive-and-indexer.md#the-indexer: /index/v1/validators, /validators/{operator} and its /epochs, /slashes and /jails answer a validator's power, uptime, slashes and jail periods"
+    - "docs/whitepaper/technical-reference/vol2/42-archive-and-indexer.md#the-indexer: every aggregate list takes page 1 to 1000 and limit 1 to 100 and refuses a value outside them, an unknown parameter and a repeated one"

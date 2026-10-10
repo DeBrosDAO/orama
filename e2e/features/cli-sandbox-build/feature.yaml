@@ -1,0 +1,31 @@
+# CLI conformance for the commands that must never run against real
+# infrastructure in a fleet run: every `orama maint sandbox` command and `orama
+# build` only through --help and usage errors (help matches
+# docs/whitepaper/technical-reference/appendices/d-cli-reference.md, unknown flags and subcommands, `sandbox ssh` arity),
+# the read-only sandbox commands on a machine with no sandbox configured, and
+# build refusing outside a checkout, refusing a bad architecture and warning
+# on the deprecated --sign. No Hetzner credential ever reaches the CLI.
+id: cli-sandbox-build
+title: CLI conformance - sandbox and build (help and usage only)
+area: cli
+subtasks: [2845]
+stage: 3
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  cli:
+    - orama maint build
+    - orama maint sandbox
+    - orama maint sandbox create
+    - orama maint sandbox destroy
+    - orama maint sandbox list
+    - orama maint sandbox reset
+    - orama maint sandbox rollout
+    - orama maint sandbox setup
+    - orama maint sandbox ssh
+    - orama maint sandbox status
+  claims:
+    - "website/src/docs/contributor/sandbox.mdx: a machine with no sandbox configured is told to run orama maint sandbox setup"

@@ -1,0 +1,315 @@
+package hostfunctions
+
+import (
+	"context"
+	"errors"
+	"math"
+	"testing"
+	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/olric/olrictest"
+	"github.com/DeBrosOfficial/network/pkg/serverless"
+	olriclib "github.com/olric-data/olric"
+)
+
+// bug-421: cache_set dropped its ttl, so every entry was immortal. These tests
+// run against a real embedded Olric so they pin the expiry itself, not a mock
+// that records an argument.
+
+const testNamespace = "anchat"
+
+// expiryDriftMs is how far an entry's deadline may move when an increment
+// stores it again, far below the 60s a reset would add.
+const expiryDriftMs = 2000
+
+func newEmbeddedCache(t *testing.T) *HostFunctions {
+	t.Helper()
+	return &HostFunctions{cacheClient: fixedOlric(olrictest.Start(t).EmbeddedClient())}
+}
+
+// nsCtx is an invocation in testNamespace; the cache is scoped by it.
+func nsCtx() context.Context {
+	return invocationCtx(&serverless.InvocationContext{Namespace: testNamespace})
+}
+
+func storedTTL(t *testing.T, h *HostFunctions, key string) int64 {
+	t.Helper()
+	dm, err := h.cacheClient().NewDMap(cacheDMapName + ":" + testNamespace)
+	if err != nil {
+		t.Fatalf("failed to open DMap: %v", err)
+	}
+	res, err := dm.Get(nsCtx(), key)
+	if err != nil {
+		t.Fatalf("failed to read %q back: %v", key, err)
+	}
+	return res.TTL()
+}
+
+func TestCacheSet_positiveTTLExpires(t *testing.T) {
+	h := newEmbeddedCache(t)
+	ctx := nsCtx()
+
+	if err := h.CacheSet(ctx, "price:sol", []byte("1.23"), 1); err != nil {
+		t.Fatalf("CacheSet: %v", err)
+	}
+	if ttl := storedTTL(t, h, "price:sol"); ttl <= 0 {
+		t.Fatalf("stored TTL = %d, want an expiry to be set", ttl)
+	}
+	got, err := h.CacheGet(ctx, "price:sol")
+	if err != nil || string(got) != "1.23" {
+		t.Fatalf("immediate CacheGet = %q, %v; want the stored value", got, err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		_, err := h.CacheGet(ctx, "price:sol")
+		if errors.Is(err, olriclib.ErrKeyNotFound) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("entry written with ttl=1s was still readable after 5s (last err: %v)", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+func TestCacheSet_zeroTTLHasNoExpiry(t *testing.T) {
+	h := newEmbeddedCache(t)
+
+	if err := h.CacheSet(nsCtx(), "forever", []byte("v"), 0); err != nil {
+		t.Fatalf("CacheSet: %v", err)
+	}
+	if ttl := storedTTL(t, h, "forever"); ttl != 0 {
+		t.Fatalf("stored TTL = %d, want 0 (no expiry) for ttl_seconds=0", ttl)
+	}
+}
+
+func TestCacheSet_negativeTTLRejected(t *testing.T) {
+	h := newEmbeddedCache(t)
+	ctx := nsCtx()
+
+	err := h.CacheSet(ctx, "neg", []byte("v"), -5)
+	if err == nil {
+		t.Fatal("CacheSet with ttl=-5 succeeded; a negative TTL must not be stored as immortal")
+	}
+	if _, err := h.CacheGet(ctx, "neg"); !errors.Is(err, olriclib.ErrKeyNotFound) {
+		t.Fatalf("rejected write left an entry behind (CacheGet err: %v)", err)
+	}
+}
+
+func TestCacheSet_negativeTTLRejectedWithoutCache(t *testing.T) {
+	// The TTL is validated before the cache is touched, so a bad argument is
+	// reported as a bad argument even when Olric is unavailable.
+	h := &HostFunctions{}
+	err := h.CacheSet(nsCtx(), "k", []byte("v"), -1)
+	if err == nil || errors.Is(err, serverless.ErrCacheUnavailable) {
+		t.Fatalf("CacheSet(ttl=-1) err = %v; want a ttl validation error", err)
+	}
+}
+
+func TestCacheSet_noCacheClient(t *testing.T) {
+	h := &HostFunctions{}
+	err := h.CacheSet(nsCtx(), "k", []byte("v"), 10)
+	if !errors.Is(err, serverless.ErrCacheUnavailable) {
+		t.Fatalf("CacheSet without a cache client: err = %v, want ErrCacheUnavailable", err)
+	}
+}
+
+func TestCacheDelete_removesImmortalEntry(t *testing.T) {
+	// cache_delete is the only way a guest can heal an entry written before
+	// the TTL fix, so it must remove a no-expiry key.
+	h := newEmbeddedCache(t)
+	ctx := nsCtx()
+
+	if err := h.CacheSet(ctx, "stale", []byte("old"), 0); err != nil {
+		t.Fatalf("CacheSet: %v", err)
+	}
+	if err := h.CacheDelete(ctx, "stale"); err != nil {
+		t.Fatalf("CacheDelete: %v", err)
+	}
+	if _, err := h.CacheGet(ctx, "stale"); !errors.Is(err, olriclib.ErrKeyNotFound) {
+		t.Fatalf("CacheGet after delete: err = %v, want ErrKeyNotFound", err)
+	}
+}
+
+func TestCacheDelete_missingKeyIsNotAnError(t *testing.T) {
+	h := newEmbeddedCache(t)
+	if err := h.CacheDelete(nsCtx(), "never-set"); err != nil {
+		t.Fatalf("CacheDelete of a missing key: %v; want nil (delete is idempotent)", err)
+	}
+}
+
+func TestCacheSet_overLongTTLRejected(t *testing.T) {
+	// Olric stores expiry as now+ttl in UnixNano; a ttl past the bound would
+	// overflow it and the entry would be stored already expired while the
+	// write reported success.
+	h := newEmbeddedCache(t)
+	for _, ttl := range []int64{maxCacheTTLSeconds + 1, 7_500_000_000, math.MaxInt64} {
+		err := h.CacheSet(nsCtx(), "long", []byte("v"), ttl)
+		if !errors.Is(err, serverless.ErrInvalidCacheTTL) {
+			t.Errorf("CacheSet(ttl=%d) err = %v, want ErrInvalidCacheTTL", ttl, err)
+		}
+	}
+	if err := h.CacheSet(nsCtx(), "long", []byte("v"), maxCacheTTLSeconds); err != nil {
+		t.Fatalf("CacheSet at the maximum ttl: %v", err)
+	}
+	if ttl := storedTTL(t, h, "long"); ttl <= 0 {
+		t.Fatalf("entry at the maximum ttl stored with TTL %d; it expired on write", ttl)
+	}
+}
+
+func TestCache_isolatedPerNamespace(t *testing.T) {
+	// The cluster gateway runs functions for every namespace against one
+	// Olric; one namespace must not see, overwrite or delete another's keys.
+	h := newEmbeddedCache(t)
+	a := invocationCtx(&serverless.InvocationContext{Namespace: "ns-a"})
+	b := invocationCtx(&serverless.InvocationContext{Namespace: "ns-b"})
+
+	if err := h.CacheSet(a, "shared", []byte("from-a"), 0); err != nil {
+		t.Fatalf("CacheSet in ns-a: %v", err)
+	}
+	if _, err := h.CacheGet(b, "shared"); !errors.Is(err, olriclib.ErrKeyNotFound) {
+		t.Fatalf("ns-b read ns-a's key (err: %v)", err)
+	}
+	if err := h.CacheDelete(b, "shared"); err != nil {
+		t.Fatalf("CacheDelete in ns-b: %v", err)
+	}
+	got, err := h.CacheGet(a, "shared")
+	if err != nil || string(got) != "from-a" {
+		t.Fatalf("ns-a's key after ns-b's delete = %q, %v; want it untouched", got, err)
+	}
+}
+
+func TestCache_refusedOutsideAnInvocation(t *testing.T) {
+	// No invocation means no namespace to scope by; the call is refused rather
+	// than served from some shared map.
+	h := newEmbeddedCache(t)
+	if err := h.CacheSet(context.Background(), "k", []byte("v"), 0); err == nil {
+		t.Fatal("CacheSet outside an invocation succeeded")
+	}
+	if _, err := h.CacheGet(context.Background(), "k"); err == nil {
+		t.Fatal("CacheGet outside an invocation succeeded")
+	}
+}
+
+func TestCacheGet_missIsErrCacheMiss(t *testing.T) {
+	// The engine logs every cache_get failure except a miss; the sentinel is
+	// how it tells them apart without knowing the cache is Olric.
+	h := newEmbeddedCache(t)
+	_, err := h.CacheGet(nsCtx(), "absent")
+	if !errors.Is(err, serverless.ErrCacheMiss) {
+		t.Fatalf("CacheGet of an absent key: err = %v, want ErrCacheMiss", err)
+	}
+	if _, err := (&HostFunctions{}).CacheGet(nsCtx(), "k"); errors.Is(err, serverless.ErrCacheMiss) {
+		t.Fatal("an unavailable cache reported a miss; it must be distinguishable")
+	}
+}
+
+// The gateway replaces its Olric client when the supervisor reconnects; a host
+// function must use the client current at the call, not the one at startup.
+func TestCacheHostFunctions_followTheCurrentClient(t *testing.T) {
+	var current olriclib.Client
+	h := &HostFunctions{cacheClient: func() olriclib.Client { return current }}
+	ctx := nsCtx()
+
+	if err := h.CacheSet(ctx, "k", []byte("v"), 0); !errors.Is(err, serverless.ErrCacheUnavailable) {
+		t.Fatalf("with no client CacheSet = %v, want ErrCacheUnavailable", err)
+	}
+
+	current = olrictest.Start(t).EmbeddedClient() // reconnected
+	if err := h.CacheSet(ctx, "k", []byte("v"), 0); err != nil {
+		t.Fatalf("after reconnect CacheSet: %v", err)
+	}
+	if got, err := h.CacheGet(ctx, "k"); err != nil || string(got) != "v" {
+		t.Fatalf("after reconnect CacheGet = %q, %v", got, err)
+	}
+
+	current = nil // dropped again
+	if _, err := h.CacheGet(ctx, "k"); !errors.Is(err, serverless.ErrCacheUnavailable) {
+		t.Fatalf("after the drop CacheGet = %v, want ErrCacheUnavailable", err)
+	}
+}
+
+// An increment is the only thing that changes the counter: it never gives the
+// key an expiry and never takes one away. A counter that cache_set stored with
+// a ttl keeps that expiry through increments, and one that an increment created
+// has none.
+func TestCacheIncrBy_leavesTheExpiryAlone(t *testing.T) {
+	h := newEmbeddedCache(t)
+	ctx := nsCtx()
+
+	if got, err := h.CacheIncrBy(ctx, "created-by-incr", 5); err != nil || got != 5 {
+		t.Fatalf("CacheIncrBy on a missing key = %d, %v; want 5", got, err)
+	}
+	if ttl := storedTTL(t, h, "created-by-incr"); ttl != 0 {
+		t.Fatalf("a counter an increment created has TTL %d, want none", ttl)
+	}
+
+	if err := h.CacheSet(ctx, "windowed", []byte("10"), 60); err != nil {
+		t.Fatalf("CacheSet: %v", err)
+	}
+	before := storedTTL(t, h, "windowed")
+	if got, err := h.CacheIncrBy(ctx, "windowed", 1); err != nil || got != 11 {
+		t.Fatalf("CacheIncrBy on a counter set with a ttl = %d, %v; want 11", got, err)
+	}
+	after := storedTTL(t, h, "windowed")
+	// The expiry is a deadline in unix milliseconds; re-storing the value moves
+	// it by the rounding of the remaining time, never toward a fresh 60s.
+	if drift := after - before; after == 0 || drift < -expiryDriftMs || drift > expiryDriftMs {
+		t.Fatalf("increment changed the expiry: deadline %d before, %d after", before, after)
+	}
+}
+
+// A counter with a short ttl still expires although it is incremented, and the
+// next increment starts a new counter at the delta.
+func TestCacheIncrBy_expiredCounterStartsOver(t *testing.T) {
+	h := newEmbeddedCache(t)
+	ctx := nsCtx()
+
+	if err := h.CacheSet(ctx, "short", []byte("7"), 1); err != nil {
+		t.Fatalf("CacheSet: %v", err)
+	}
+	if got, err := h.CacheIncr(ctx, "short"); err != nil || got != 8 {
+		t.Fatalf("CacheIncr before expiry = %d, %v; want 8", got, err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := h.CacheGet(ctx, "short"); errors.Is(err, olriclib.ErrKeyNotFound) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("a counter with a 1s ttl was still readable after 5s: an increment extended it")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if got, err := h.CacheIncr(ctx, "short"); err != nil || got != 1 {
+		t.Fatalf("CacheIncr after expiry = %d, %v; want 1", got, err)
+	}
+}
+
+func TestCacheIncrBy_noCacheClient(t *testing.T) {
+	h := &HostFunctions{}
+	if _, err := h.CacheIncr(nsCtx(), "k"); !errors.Is(err, serverless.ErrCacheUnavailable) {
+		t.Fatalf("CacheIncr without a cache = %v, want ErrCacheUnavailable", err)
+	}
+}
+
+// Olric counts a value that is not a number as 0 and replaces it; the host
+// function does not turn that into an error (website/src/docs/developer/functions.mdx#cache-olric-distributed-cache).
+func TestCacheIncrBy_nonNumericValueCountsAsZero(t *testing.T) {
+	h := newEmbeddedCache(t)
+	ctx := nsCtx()
+
+	if err := h.CacheSet(ctx, "text", []byte("hello"), 0); err != nil {
+		t.Fatalf("CacheSet: %v", err)
+	}
+	if got, err := h.CacheIncrBy(ctx, "text", 3); err != nil || got != 3 {
+		t.Fatalf("CacheIncrBy on text = %d, %v; want 3", got, err)
+	}
+	if got, err := h.CacheIncrBy(ctx, "text", -5); err != nil || got != -2 {
+		t.Fatalf("CacheIncrBy with a negative delta = %d, %v; want -2", got, err)
+	}
+	if v, err := h.CacheGet(ctx, "text"); err != nil || string(v) != "-2" {
+		t.Fatalf("cache_get of a counter = %q, %v; want its decimal text", v, err)
+	}
+}

@@ -59,6 +59,7 @@ func NewTCPSNIGateway(logger *logging.ColoredLogger, cfg *config.SNIConfig) (*TC
 		cancel: cancel,
 		tlsConfig: &tls.Config{
 			Certificates: []tls.Certificate{cert},
+			MinVersion:   tls.VersionTLS12,
 		},
 	}
 

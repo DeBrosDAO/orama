@@ -1,0 +1,135 @@
+syntax = "proto3";
+package orama.storage.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/storage/types";
+
+import "google/api/annotations.proto";
+import "gogoproto/gogo.proto";
+import "orama/storage/v1/storage.proto";
+
+// Query is x/storage's gRPC query service.
+service Query {
+  rpc Params(QueryParamsRequest) returns (QueryParamsResponse) {
+    option (google.api.http).get = "/orama/storage/v1/params";
+  }
+  rpc Deal(QueryDealRequest) returns (QueryDealResponse) {
+    option (google.api.http).get = "/orama/storage/v1/deal/{deal_id}";
+  }
+  rpc Slot(QuerySlotRequest) returns (QuerySlotResponse) {
+    option (google.api.http).get = "/orama/storage/v1/slot/{deal_id}/{slot}";
+  }
+  rpc Authorization(QueryAuthorizationRequest) returns (QueryAuthorizationResponse) {
+    option (google.api.http).get = "/orama/storage/v1/authorization/{granter}/{grantee}";
+  }
+  rpc Challenges(QueryChallengesRequest) returns (QueryChallengesResponse) {
+    option (google.api.http).get = "/orama/storage/v1/challenges/{epoch}/{node_id}";
+  }
+  rpc EpochMint(QueryEpochMintRequest) returns (QueryEpochMintResponse) {
+    option (google.api.http).get = "/orama/storage/v1/epoch-mint/{epoch}";
+  }
+  rpc Queue(QueryQueueRequest) returns (QueryQueueResponse) {
+    option (google.api.http).get = "/orama/storage/v1/queue";
+  }
+  rpc NodeFailures(QueryNodeFailuresRequest) returns (QueryNodeFailuresResponse) {
+    option (google.api.http).get = "/orama/storage/v1/node-failures/{node_id}";
+  }
+  rpc Invariants(QueryInvariantsRequest) returns (QueryInvariantsResponse) {
+    option (google.api.http).get = "/orama/storage/v1/invariants";
+  }
+}
+
+message QueryNodeFailuresRequest {
+  string node_id = 1;
+}
+
+// QueryNodeFailuresResponse lists the consecutive-failure counts of one node: empty when the
+// node's work is applying cleanly.
+message QueryNodeFailuresResponse {
+  repeated FailureCount failures = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryParamsRequest {}
+
+message QueryParamsResponse {
+  Params params = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryDealRequest {
+  uint64 deal_id = 1;
+}
+
+message QueryDealResponse {
+  Deal deal = 1 [(gogoproto.nullable) = false];
+}
+
+message QuerySlotRequest {
+  uint64 deal_id = 1;
+  uint32 slot = 2;
+}
+
+message QuerySlotResponse {
+  Slot slot = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryAuthorizationRequest {
+  string granter = 1;
+  string grantee = 2;
+}
+
+message QueryAuthorizationResponse {
+  DealAuthorization authorization = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryChallengesRequest {
+  uint64 epoch = 1;
+  string node_id = 2;
+}
+
+message Challenge {
+  uint64 deal_id = 1;
+  uint32 slot = 2;
+  uint64 leaf_index = 3;
+  bool proved = 4;
+}
+
+message QueryChallengesResponse {
+  repeated Challenge challenges = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryEpochMintRequest {
+  uint64 epoch = 1;
+}
+
+message QueryEpochMintResponse {
+  string minted = 1 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  string ceiling = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+}
+
+message QueryQueueRequest {}
+
+message QueryQueueResponse {
+  uint64 pending = 1;
+  uint64 head = 2;
+  uint64 tail = 3;
+}
+
+message QueryInvariantsRequest {}
+
+message QueryInvariantsResponse {
+  bool escrow_conserved = 1;
+  // subsidy_within_ceiling: each epoch's storage payments are minted by
+  // x/emission when the epoch closes, which refuses more than the epoch's
+  // ceiling, and the storage module account holds exactly the payments the
+  // settlement queue still owes.
+  bool subsidy_within_ceiling = 2;
+  bool distinct_operators = 3;
+  bool reserved_within_declared = 4;
+  bool queue_well_formed = 5;
+  string detail = 6;
+}

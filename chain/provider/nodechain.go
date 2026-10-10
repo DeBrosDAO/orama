@@ -1,0 +1,97 @@
+package provider
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	sdk "github.com/cosmos/cosmos-sdk/types"
+
+	"github.com/DeBrosOfficial/network/chain/client/node"
+	"github.com/DeBrosOfficial/network/chain/client/tx"
+	emissiontypes "github.com/DeBrosOfficial/network/chain/x/emission/types"
+	nodestypes "github.com/DeBrosOfficial/network/chain/x/nodes/types"
+	"github.com/DeBrosOfficial/network/chain/x/storage/types"
+)
+
+// NodeChain is Chain over one oramad RPC, signing with the node's hot key.
+type NodeChain struct {
+	*node.Client
+	hot tx.Account
+}
+
+// NewNodeChain pairs an RPC client with the hot key that signs for the node.
+func NewNodeChain(client *node.Client, hot tx.Account) (*NodeChain, error) {
+	if client == nil {
+		return nil, errors.New("chain client is nil")
+	}
+	if hot.Address == "" {
+		return nil, errors.New("hot key account is empty")
+	}
+	return &NodeChain{Client: client, hot: hot}, nil
+}
+
+// Params returns x/storage's parameters.
+func (c *NodeChain) Params(ctx context.Context) (types.Params, error) {
+	var resp types.QueryParamsResponse
+	if err := c.Query(ctx, "/orama.storage.v1.Query/Params", &types.QueryParamsRequest{}, &resp); err != nil {
+		return types.Params{}, err
+	}
+	return resp.Params, nil
+}
+
+// Slot returns one deal slot.
+func (c *NodeChain) Slot(ctx context.Context, dealID uint64, slot uint32) (types.Slot, error) {
+	var resp types.QuerySlotResponse
+	if err := c.Query(ctx, "/orama.storage.v1.Query/Slot", &types.QuerySlotRequest{DealId: dealID, Slot: slot}, &resp); err != nil {
+		return types.Slot{}, err
+	}
+	return resp.Slot, nil
+}
+
+// Deal returns one storage deal.
+func (c *NodeChain) Deal(ctx context.Context, dealID uint64) (types.Deal, error) {
+	var resp types.QueryDealResponse
+	if err := c.Query(ctx, "/orama.storage.v1.Query/Deal", &types.QueryDealRequest{DealId: dealID}, &resp); err != nil {
+		return types.Deal{}, err
+	}
+	return resp.Deal, nil
+}
+
+// CurrentEpoch is x/emission's epoch, the one x/storage challenges in.
+func (c *NodeChain) CurrentEpoch(ctx context.Context) (uint64, error) {
+	var resp emissiontypes.QueryCurrentEpochResponse
+	if err := c.Query(ctx, "/orama.emission.v1.Query/CurrentEpoch", &emissiontypes.QueryCurrentEpochRequest{}, &resp); err != nil {
+		return 0, err
+	}
+	return resp.EpochState.CurrentEpoch, nil
+}
+
+// Challenges lists this node's challenges for epoch.
+func (c *NodeChain) Challenges(ctx context.Context, epoch uint64, nodeID string) ([]types.Challenge, error) {
+	var resp types.QueryChallengesResponse
+	req := &types.QueryChallengesRequest{Epoch: epoch, NodeId: nodeID}
+	if err := c.Query(ctx, "/orama.storage.v1.Query/Challenges", req, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Challenges, nil
+}
+
+// Submit signs msgs with the hot key and waits for inclusion.
+func (c *NodeChain) Submit(ctx context.Context, msgs ...sdk.Msg) error {
+	_, err := c.Client.Submit(ctx, c.hot, msgs...)
+	return err
+}
+
+// RegisteredHeight is the block at which x/nodes registered nodeID. Nothing
+// is assigned to a node before it, so it is where a new provider starts.
+func (c *NodeChain) RegisteredHeight(ctx context.Context, nodeID string) (int64, error) {
+	var resp nodestypes.QueryNodeResponse
+	if err := c.Query(ctx, "/orama.nodes.v1.Query/Node", &nodestypes.QueryNodeRequest{NodeId: nodeID}, &resp); err != nil {
+		return 0, fmt.Errorf("read node %s from x/nodes: %w", nodeID, err)
+	}
+	if resp.Node.RegisteredAtHeight < 1 {
+		return 0, fmt.Errorf("node %s has no registration height in x/nodes", nodeID)
+	}
+	return resp.Node.RegisteredAtHeight, nil
+}

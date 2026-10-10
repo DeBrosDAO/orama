@@ -1,0 +1,90 @@
+# What works today
+
+This page is the honest inventory. It is written against the code on the `nightly` branch (network version 0.3.0). When a page elsewhere in these docs describes something not listed as live here, treat this page as the authority and report the mismatch.
+
+## Services you can use
+
+| Service | State | Notes |
+|---|---|---|
+| Static, Next.js, Node.js and Go hosting | Live | Five runtimes: `static`, `nextjs-static`, `nextjs`, `nodejs-backend`, `go-backend` |
+| Namespace database (RQLite) | Live | Replicated across the namespace's three nodes |
+| Per-app SQLite | Live | Backups to content storage |
+| Cache (Olric) | Live | Distributed maps with TTLs |
+| File storage (IPFS) | Live | Private swarm, pinned across the cluster. Quotas exist but are opt-in |
+| Pub/sub and presence | Live | WebSocket and REST |
+| Serverless functions | Live | WebAssembly, HTTP/WebSocket/pub-sub/cron triggers |
+| HTTPS for deployments | Live | Under the cluster's own domain |
+| Custom domains | Partial | Verified by TXT record. Certificates for custom domains are not issued, see [Domains](/docs/developer/domains) |
+| Voice and video | Live | SFU plus TURN, relay-only by design |
+| Stealth TURN | Live, optional per node | TURN over TLS on port 443, routed by server name |
+| Push notifications | Live | Direct APNs, self-hosted ntfy, Expo |
+| Anonymity proxy and tunnel | Live | Tor client on every node. Not a private Tor network, see [Privacy network](/docs/privacy/overview) |
+| Relayed fetch | Live | Download a stored object without the storing node learning your address |
+| Vault | Partial | Shamir-split secrets across guardian nodes. Do not use as the only copy of anything important |
+| Sign-in with wallets, devices, scoped keys | Live | See [Sign-in](/docs/developer/sign-in) |
+| Audit trail | Live | 90 days, `orama audit` |
+
+## Running a cluster
+
+| Capability | State |
+|---|---|
+| Install a cluster of 3 or more nodes with `orama node setup` | Live |
+| One-machine evaluation cluster | Live, not highly available |
+| Rolling upgrades with signed archives | Live |
+| Releases through a TUF release root, with reproducible builds and opt-in auto-update (`notify` by default) | Live |
+| Monitoring from your own machine (`orama status`, `orama status`) | Live |
+| Public `/status` page, telemetry API | Live |
+| Node replacement runbook | Live |
+| OramaOS (locked-down node OS) | Built, never booted on a live network |
+| Disk encryption for Ubuntu nodes | Design only |
+| Billing, metering | Not built |
+| Dashboard | Not built, and not planned |
+| Tenant metrics endpoint and alerting | Not built |
+
+## The chain
+
+The chain is implemented and tested in the repository. It is not what `orama maint node install` starts, it is not on the request path of any app, and nothing about it has run on a public network.
+
+| Part | State |
+|---|---|
+| ORAMA token, emission schedule, fees, voting power | Implemented |
+| Staking, delegation, slashing | Implemented |
+| Two-house governance (`x/houses`) | Implemented, gated closed at genesis |
+| Storage deals with proofs and repair | Implemented. A lost piece is rebuilt by the deal's repair delegate or by the owner with `orama storage repair` |
+| Relay registry, reporting and payout | Implemented. The end block settles each reported epoch and splits pay 90/5/5. No relay is registered or running yet |
+| Token factory | Implemented, including a CosmWasm contract as a token's transfer hook |
+| Compressed NFTs and market | Implemented |
+| Shielded pool | Implemented. A node accepts shielded bundles only when both verifiers are present. Shielding is optional: a public send between accounts works, and `orama chain send` is private unless `--public`. The RootWallet does not build shielded bundles yet, so a private send stops with that explanation |
+| CosmWasm contracts | Implemented in builds with cgo. Five standard contracts in genesis |
+| Block explorer | The page reads the chain through the gateway's `/v1/chain/` routes and the chain indexer, with no demo data |
+| Public chain | Not built. Devnet, stagenet and localnet only |
+
+Details are in the [Blockchain](/docs/blockchain/what-it-is) section.
+
+## The privacy network
+
+| Part | State |
+|---|---|
+| Tor client on every node, anonymity proxy, tunnel, `anon_fetch` | Live |
+| Relayed fetch over Tor | Live (Node.js clients) |
+| Submitting chain transactions to a validator over an onion address | Client and server side built (`--onion`, `--onion-network`, `orama global install --services onion`). Never run against a real Tor network |
+| A private Orama Tor network (directory authorities, relays, opt-in exits) | Code and installer built, one `tor-network.json`. Never run on a real network; Orama runs every authority |
+| `orama maint vpn up` and `orama maint vpn check` | A loopback SOCKS5 proxy client for a private network. Not a system-wide tunnel |
+| Public VPN | Not built. The launch gate (`chain/x/vpnlaunch`) is off in every build |
+
+## RootWallet
+
+| Part | State |
+|---|---|
+| CLI (`rw`) | Stable |
+| Desktop app (macOS, Linux) | Stable. No Windows build |
+| Mobile app (iOS, Android) | In active development |
+| Independent security audit | Planned |
+
+See [RootWallet](/docs/rootwallet/overview).
+
+## Other things people ask about
+
+- **Public sign-up.** Not open. Namespaces exist only on clusters whose operators allow them.
+- **Open sign-in for end users.** A namespace can allow any wallet to sign in to it. See [Sign-in policy](/docs/developer/sign-in#sign-in-policy).
+- **Mainnet.** There is none. The chain has not run on a public network.

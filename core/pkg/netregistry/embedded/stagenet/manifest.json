@@ -1,0 +1,17 @@
+{
+  "name": "stagenet",
+  "chain_id": "orama-stagenet-6",
+  "genesis_sha256": "dbe9274973444cf17525b95001f1e636ca1d0d5290e3221013c4580e2ec1f303",
+  "seeds": [
+    "ns1.stagenet.orama.network",
+    "ns2.stagenet.orama.network",
+    "ns3.stagenet.orama.network",
+    "ns4.stagenet.orama.network",
+    "ns5.stagenet.orama.network"
+  ],
+  "channel": "nightly",
+  "min_version": "0.3.0",
+  "release_repo": "https://test-releases.orama.network",
+  "release_root_sha256": "dd557145ffc834afb620d3519c930e6961e60f011d648e2f050dde7cbedc593e",
+  "faucet": true
+}

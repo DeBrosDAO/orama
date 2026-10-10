@@ -18,7 +18,7 @@ func TestJWTGenerateAndParse(t *testing.T) {
 		Bytes: x509.MarshalPKCS1PrivateKey(key),
 	})
 
-	svc, err := auth.NewService(nil, nil, string(keyPEM), "default")
+	svc, err := auth.NewService(nil, emptyRegistryNet{}, string(keyPEM), "default")
 	if err != nil {
 		t.Fatalf("failed to create service: %v", err)
 	}
@@ -44,7 +44,7 @@ func TestJWTExpired(t *testing.T) {
 		Bytes: x509.MarshalPKCS1PrivateKey(key),
 	})
 
-	svc, err := auth.NewService(nil, nil, string(keyPEM), "default")
+	svc, err := auth.NewService(nil, emptyRegistryNet{}, string(keyPEM), "default")
 	if err != nil {
 		t.Fatalf("failed to create service: %v", err)
 	}

@@ -1,0 +1,136 @@
+# Reading the chain
+
+There are four ways to read the chain: the `orama chain` command, the gateway's read-only proxy, the TypeScript SDK, and `oramad` itself on a node. Writing is separate: transactions are built by `orama global`, `orama storage` and `orama cluster`, and signed by RootWallet. See [Wallet clients](#wallet-clients-and-transactions).
+
+## The gateway proxy: `/v1/chain/`
+
+Every gateway can serve a read-only proxy to a chain node. It is an open route (no credential). Upstream addresses come from `ORAMA_CHAIN_RPC_URL`, `ORAMA_CHAIN_REST_URL` and `ORAMA_CHAIN_INDEX_URL`; they default to the loopback of the node, or to the global network namespace address `198.18.0.2` on a co-located node.
+
+| Route | What it returns |
+|---|---|
+| `status` | CometBFT status: network id, latest block, sync state |
+| `block`, `blocks` | A block, or up to 20 |
+| `tx` | A transaction (404 with `Retry-After: 2` until it is in a block and indexed) |
+| `validators` | The CometBFT validator set |
+| `supply/norama` | Total supply |
+| `staking/pool` | Staking pool |
+| `staking/validators` | The staking validator list (REST, fixed page size, no query) |
+| `index/status`, `index/stats`, `index/blocks/{h}`, `index/txs`, `index/txs/{hash}` | The chain indexer |
+| `index/accounts/{addr}`, `index/accounts/{addr}/txs` | An address's summary and its transactions |
+| `index/cnft/assets/{id}`, `index/cnft/owners/{addr}/assets` | Compressed NFT ownership |
+| `index/epochs`, `index/epochs/{n}`, `index/epochs/{n}/validators` | Closed emission epochs (minted, burned, fees, rewards credited) and each epoch's validators |
+| `index/supply` | The supply breakdown (total, minted, burned, bonded, unbonding, earnings pools, storage escrow, circulating), one point per epoch |
+| `index/validators`, `index/validators/{operator}`, `index/validators/{operator}/epochs`, `…/slashes`, `…/jails` | Validators with their voting power, uptime, slashes and jail periods |
+| `index/stats/hourly`, `index/stats/daily`, `index/stats/weekly` | Transaction statistics beyond the 48 hourly buckets of `index/stats` |
+| `query/{package.Service}/{Method}` | Any allowed module query, and the wallet queries below |
+| `simulate`, `broadcast` (POST) | Price and submit a signed transaction for a wallet with no node of its own |
+
+Limits that protect the node differ by route. The other routes copy a healthy upstream body unchanged up to 8 MiB (the largest is one block), and `blocks` spans at most 20 blocks (a `max_height` at most 19 above `min_height`). The `query/…` route adds its own: a `data` or `json` parameter of at most 4 KiB, `height` only within the last 100 blocks, at most 16 queries at once (the rest get 503 with `Retry-After`), responses up to 4 MiB, and a separate bucket of 120 requests per minute with a burst of 30 per address (IPv6 per /64). The node's `query-gas-limit` (2,000,000) bounds the cost of a single query. `simulate` and `broadcast` take a signed `TxRaw` of at most 1 MiB and have their own in-flight and rate limits.
+
+`query/…` serves an allow-list of query methods. Every module's `Invariants` query, the houses `Tiers` query and the shielded `Pools` query are withheld.
+
+### Wallet queries
+
+A wallet with no node of its own reads one address through the same `query/…` route. It serves 15 cosmos-sdk and wasmd methods and refuses the rest (so bank's whole-chain supply and staking's validator list are not reachable this way):
+
+| Service | Methods |
+|---|---|
+| `cosmos.bank.v1beta1.Query` | `Balance`, `AllBalances`, `SpendableBalances` |
+| `cosmos.auth.v1beta1.Query` | `Account` (a typed account: `@type` names it, for example `/cosmos.auth.v1beta1.BaseAccount`), `AccountInfo` |
+| `cosmos.staking.v1beta1.Query` | `Delegation`, `DelegatorDelegations`, `UnbondingDelegation`, `DelegatorUnbondingDelegations`, `Validator`, `Pool`, `Params` |
+| `cosmos.distribution.v1beta1.Query` | `DelegationRewards`, `DelegationTotalRewards` |
+| `cosmwasm.wasm.v1.Query` | `ContractInfo` (an address that is not a contract is a 404) |
+
+Numbers that need 64 bits are JSON strings: an account's `account_number` and `sequence` are read as `uint64`, never as a JavaScript `number`. An account number is not a counter: the chain derives it from a hash when the account is created, with the top bit set, so it is always between 2^63 and 2^64-1. Keep it as a string or a BigInt, and sign with the exact value.
+
+The list methods take `pagination.limit` up to 100. The explorer's wallet page uses `AllBalances`, `DelegatorDelegations` and `DelegatorUnbondingDelegations` here; the duplicate REST routes for them are gone, and only the staking validator list stays REST.
+
+### Simulate and broadcast
+
+Both routes take `Content-Type: application/json` and `{"tx_bytes":"<base64 TxRaw>"}`.
+
+**Simulate** runs the transaction without keeping anything and answers 200 `{"gas_wanted":"…","gas_used":"…","fee":{"denom":"norama","amount":"…"},"base_fee":"…"}`. `gas_used` is what it consumed. `gas_wanted` is the gas limit the transaction declares (0 if it declares none), so a wallet can see a limit that is below `gas_used`. The chain simulates with an unlimited gas meter, so the figure it reports itself is always 18446744073709551615 (2^64-1); the gateway does not pass that on. Both gas figures, like every 64-bit integer the proxy answers, are decimal strings: read them into a `BigInt`, never a JavaScript `number`.
+
+**Broadcast** submits the transaction with `broadcast_tx_sync` and answers once the node's mempool has checked it, not when it is in a block. The field to keep is `tx_hash` (upper-case hex). Poll `tx?hash=` until the transaction is in a block (404 with `Retry-After` until then).
+
+| Case | Status | Body |
+|---|---|---|
+| Simulate ran | 200 | `{gas_wanted, gas_used, fee, base_fee}` |
+| Simulate: the chain refused | 422 | `{"code":6,"codespace":"sdk","log":"…"}` (the query's wrapper code; the reason is in `log`) |
+| Broadcast: accepted by the mempool | 200 | `{"code":0,"codespace":"","log":"","tx_hash":"…"}` |
+| Broadcast: `CheckTx` refused | 422 | `{"code":N,"codespace":"…","log":"…","tx_hash":"…"}` with the transaction's own code (13 insufficient fee, 32 sequence mismatch) |
+| Broadcast: the mempool already has these bytes | 422 | the same shape, code 19, codespace `sdk`, log `tx already in mempool cache`, and the hash |
+| Broadcast: the mempool is full | 503 | text, `Retry-After: 2` |
+| The chain is unreachable or does not answer within 10 seconds | 502 | text `chain unreachable` |
+| Too many in flight | 503 | text, `Retry-After: 2` |
+| Rate limited | 429 | the `RATE_LIMITED` envelope, `Retry-After: 10` |
+
+A refusal is a 422 with a JSON `code`, `codespace` and `log` on both routes, and only a refusal is shaped that way; every other failure is a plain-text body. The `log` is sanitised. An accepted broadcast is in one node's mempool, not in a block, so it can still be dropped. A 502 after a timeout does not say the transaction was not taken: send the same bytes again, and if the mempool has them the answer is the code 19 refusal with the hash.
+
+Reads are live. The proxy keeps no copy of a read and every answer is `Cache-Control: no-store`; a `status` comes from the node of the gateway that took the request, and its `sync_info.latest_block_time` and `catching_up` say how fresh that node is.
+
+## `orama chain`
+
+```bash
+orama chain status
+orama chain validator
+orama chain balance orama1…  --node http://127.0.0.1:31003
+orama chain earnings orama1…
+orama chain node <node-id>
+orama chain deal <deal-id>
+orama chain query orama.nodes.v1.Query/Node '{"node_id":"node-1"}'
+orama chain query --list
+```
+
+Three read paths exist and each command uses one: `--gateway` (default: the active environment's gateway), `--node` (a node's Cosmos REST API, for accounts, bank balances and staking validators) and `--rpc` (a node's CometBFT RPC, which also reaches the Orama modules, which answer gRPC only, through `abci_query`). `orama chain balance` still reads through `--node`'s REST API; the gateway's wallet queries serve the same balance to a wallet that has no node.
+
+`orama chain faucet <recipient>` funds an account on a test network. It signs on a node over SSH with that node's test operator key and refuses any chain id that does not contain `-stagenet-`, `-devnet-` or `-localnet-`. Full flags: [`orama chain`](/docs/developer/cli/chain).
+
+Someone with no node of the network is funded through a gateway instead: `POST /v1/chain/faucet` on a gateway that was given a faucet key.
+
+```bash
+curl -sS -X POST https://<gateway>/v1/chain/faucet \
+  -H 'Content-Type: application/json' \
+  -d '{"recipient":"orama1…","amount":"100000000000"}'
+```
+
+The amount is norama, a decimal string, and optional (100 ORAMA). The answer is `{"tx_hash","amount","height"}` once the drip is in a block. A refusal is `{"error","message"}` with one of these errors: `bad_recipient` (400), `bad_amount` (400, over the network's maximum drip), `cooldown` (429, one drip per recipient per day by default), `allowance_spent` (429, 20,000 ORAMA a day per client network and 200,000 ORAMA a day per gateway; a client network is the address the gateway sees the connection come from, never a name the caller writes in `X-Forwarded-For`, so behind the node's reverse proxy the public callers share one allowance until the proxy proves itself to the gateway), `epoch_cap` (503), `faucet_disabled` (403), `busy` and `unavailable` (503), `pending` (504, being made or sent and not yet in a block: look at the balance of the recipient). A gateway with no faucet key answers 404. `orama setup` uses this route on a network whose manifest says it has a faucet. Operators who run it: [Run a faucet](/docs/operator/global-nodes#run-a-faucet).
+
+## The TypeScript SDK
+
+`@debros/orama/chain` builds `SIGN_MODE_DIRECT` transactions and reads module state. See [SDK reference](/docs/developer/sdk-reference#the-chain-module) and the relay queries (`relayParams`, `relayReporters`, `relay`, `relayEpochResult`).
+
+## `oramad` on a node
+
+```bash
+oramad query emission current-epoch     --node tcp://127.0.0.1:31001
+oramad query emission cumulative-minted --node tcp://127.0.0.1:31001
+oramad query emission invariants        --node tcp://127.0.0.1:31001
+oramad query power lambda               --node tcp://127.0.0.1:31001
+oramad query power bootstrap-committee  --node tcp://127.0.0.1:31001
+oramad query fees base-fee              --node tcp://127.0.0.1:31001
+oramad query fees earnings <address>    --node tcp://127.0.0.1:31001
+```
+
+Every module has an `invariants` query. They return false if the module's accounting is off (supply identity, deposits, escrow). Operators run them as health checks; the stagenet script runs them on every node.
+
+## The chain indexer
+
+`orama-global indexer` (loopback port 31015) indexes blocks, transactions, per-address transactions and cNFT assets into a Pebble database. It feeds the `index/…` routes.
+
+It also keeps aggregates for the explorer, computed once as each block is indexed and never per request:
+
+- One row per closed emission epoch: its first and last block and time, what was minted (validator and delegator share, storage and relay services, development, faucet) and burned during it, the fees collected, burned and distributed, and what the closing block credited to earnings accounts. Each figure is the chain's own, taken from its running totals at the epoch's closing height or from the closing block's events.
+- The supply breakdown at each epoch's end: total supply, minted and burned to date, bonded, unbonding, the earnings pools, the storage escrow, what other protocol accounts hold, and the circulating remainder.
+- Each validator's voting power, signed and missed blocks, slashes and jail periods per epoch.
+- Transaction statistics by hour, day and week.
+
+Every list is paged like the others (`page` up to 1000, `limit` up to 100, newest first). The first epoch an index tracks is marked `partial` when the index began inside it. The chain does not expose the reward each validator was paid, the split of the validator share between validators and delegators, or the split of service mints between storage and relay, so the index does not show them.
+
+## The explorer
+
+The site has an explorer page at `/explorer` (Home, Block, Transaction, Wallet and Validators views). It reads the chain only through the gateway routes above, on the origin it is served from, and has no demo data: when the proxy or the indexer is down a page shows an error box and nothing else. The transaction, block and wallet pages need the chain indexer on the node the gateway reads.
+
+## Wallet clients and transactions
+
+Transactions are signed with `SIGN_MODE_DIRECT` using the RootWallet agent: `orama global`, `orama storage` and `orama cluster` ask the agent's `/v1/orama/tx/sign` endpoint, which decodes the transaction itself, shows it in an approval window, and refuses anything it cannot decode. See [The agent](/docs/rootwallet/agent). Add `--onion <addr.onion>` to submit through Tor ([Tor](/docs/privacy/tor)). Reads do not go through Tor yet. A wallet that cannot use Tor or reach a validator submits through the gateway's `POST /v1/chain/broadcast` instead.

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -61,58 +62,60 @@ func TestClient_Add(t *testing.T) {
 		expectedName := "test.txt"
 		testContent := "test content"
 		expectedSize := int64(len(testContent)) // Client overrides server size with actual content length
+		var pinned atomic.Bool
 
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path != "/add" {
-				t.Errorf("Expected path '/add', got %s", r.URL.Path)
-			}
 			if r.Method != "POST" {
 				t.Errorf("Expected method POST, got %s", r.Method)
 			}
-
-			// Verify multipart form
-			if err := r.ParseMultipartForm(32 << 20); err != nil {
-				t.Errorf("Failed to parse multipart form: %v", err)
-				return
+			switch r.URL.Path {
+			case "/api/v0/add":
+				if r.URL.Query().Get("pin") != "true" || r.URL.Query().Get("cid-version") != "0" {
+					t.Errorf("kubo add query = %s", r.URL.RawQuery)
+				}
+				if strings.Contains(r.URL.RawQuery, "extract") {
+					t.Error("kubo add must not ask cluster to extract")
+				}
+				if err := r.ParseMultipartForm(32 << 20); err != nil {
+					t.Errorf("Failed to parse multipart form: %v", err)
+					return
+				}
+				file, header, err := r.FormFile("file")
+				if err != nil {
+					t.Errorf("Failed to get file: %v", err)
+					return
+				}
+				defer file.Close()
+				if header.Filename != expectedName {
+					t.Errorf("Expected filename %s, got %s", expectedName, header.Filename)
+				}
+				body, _ := io.ReadAll(file)
+				if string(body) != testContent {
+					t.Errorf("kubo received %q", body)
+				}
+				// Size here is the DAG size. The client must report the original byte count.
+				fmtJSON(w, ipfsDaemonAddResponse{Name: expectedName, Hash: expectedCID, Size: "999"})
+			case "/pins/" + expectedCID:
+				if !pinned.CompareAndSwap(false, true) {
+					t.Error("pinned twice")
+				}
+				q := r.URL.Query()
+				if q.Get("replication-min") != "-1" || q.Get("replication-max") != "-1" {
+					t.Errorf("pin query = %s", r.URL.RawQuery)
+				}
+				fmtJSON(w, PinResponse{Cid: expectedCID, Name: expectedName})
+			default:
+				t.Errorf("unexpected path %s", r.URL.Path)
+				http.NotFound(w, r)
 			}
-
-			file, header, err := r.FormFile("file")
-			if err != nil {
-				t.Errorf("Failed to get file: %v", err)
-				return
-			}
-			defer file.Close()
-
-			if header.Filename != expectedName {
-				t.Errorf("Expected filename %s, got %s", expectedName, header.Filename)
-			}
-
-			// Read file content
-			_, _ = io.ReadAll(file)
-
-			// Return a different size to verify the client correctly overrides it
-			response := AddResponse{
-				Cid:  expectedCID,
-				Name: expectedName,
-				Size: 999, // Client will override this with actual content size
-			}
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(response)
 		}))
 		defer server.Close()
 
-		cfg := Config{ClusterAPIURL: server.URL}
-		client, err := NewClient(cfg, logger)
-		if err != nil {
-			t.Fatalf("Failed to create client: %v", err)
-		}
-
-		reader := strings.NewReader(testContent)
-		resp, err := client.Add(context.Background(), reader, expectedName)
+		client := newTestClient(t, logger, server.URL)
+		resp, err := client.Add(context.Background(), strings.NewReader(testContent), expectedName)
 		if err != nil {
 			t.Fatalf("Failed to add content: %v", err)
 		}
-
 		if resp.Cid != expectedCID {
 			t.Errorf("Expected CID %s, got %s", expectedCID, resp.Cid)
 		}
@@ -122,27 +125,116 @@ func TestClient_Add(t *testing.T) {
 		if resp.Size != expectedSize {
 			t.Errorf("Expected size %d, got %d", expectedSize, resp.Size)
 		}
+		if !pinned.Load() {
+			t.Error("import was not pinned on the cluster")
+		}
+	})
+
+	t.Run("tarball_uses_kubo", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/add" || strings.Contains(r.URL.RawQuery, "extract") {
+				t.Errorf("tarball went to cluster add: %s?%s", r.URL.Path, r.URL.RawQuery)
+			}
+			if r.URL.Path == "/api/v0/add" {
+				fmtJSON(w, ipfsDaemonAddResponse{Hash: "QmTar"})
+				return
+			}
+			if r.URL.Path == "/pins/QmTar" {
+				fmtJSON(w, PinResponse{Cid: "QmTar"})
+				return
+			}
+			http.NotFound(w, r)
+		}))
+		defer server.Close()
+
+		client := newTestClient(t, logger, server.URL)
+		resp, err := client.Add(context.Background(), strings.NewReader("tar-bytes"), "orama-deploy.tar.gz")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.Cid != "QmTar" || resp.Size != int64(len("tar-bytes")) {
+			t.Fatalf("resp = %+v", resp)
+		}
 	})
 
 	t.Run("server_error", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/api/v0/add" {
+				t.Errorf("pin was called after a failed import: %s", r.URL.Path)
+			}
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte("internal error"))
 		}))
 		defer server.Close()
 
-		cfg := Config{ClusterAPIURL: server.URL}
-		client, err := NewClient(cfg, logger)
-		if err != nil {
-			t.Fatalf("Failed to create client: %v", err)
-		}
-
-		reader := strings.NewReader("test")
-		_, err = client.Add(context.Background(), reader, "test.txt")
+		client := newTestClient(t, logger, server.URL)
+		_, err := client.Add(context.Background(), strings.NewReader("test"), "test.txt")
 		if err == nil {
 			t.Error("Expected error for server error")
 		}
 	})
+
+	t.Run("a_path_returns_the_file_not_the_directory", func(t *testing.T) {
+		const fileCID = "QmFile"
+		const dirCID = "QmDir"
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/v0/add" {
+				enc := json.NewEncoder(w)
+				_ = enc.Encode(ipfsDaemonAddResponse{Name: "proof/build.txt", Hash: fileCID})
+				_ = enc.Encode(ipfsDaemonAddResponse{Name: "proof", Hash: dirCID})
+				return
+			}
+			if r.URL.Path == "/pins/"+fileCID {
+				fmtJSON(w, PinResponse{Cid: fileCID})
+				return
+			}
+			if r.URL.Path == "/pins/"+dirCID {
+				t.Error("pinned the directory instead of the file")
+			}
+			http.NotFound(w, r)
+		}))
+		defer server.Close()
+
+		client := newTestClient(t, logger, server.URL)
+		resp, err := client.Add(context.Background(), strings.NewReader("hello"), "proof/build.txt")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.Cid != fileCID {
+			t.Fatalf("cid = %s, want the file %s", resp.Cid, fileCID)
+		}
+	})
+
+	t.Run("pin_error", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/v0/add" {
+				fmtJSON(w, ipfsDaemonAddResponse{Hash: "QmPinFail"})
+				return
+			}
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte("pin failed"))
+		}))
+		defer server.Close()
+
+		client := newTestClient(t, logger, server.URL)
+		if _, err := client.Add(context.Background(), strings.NewReader("test"), "test.txt"); err == nil {
+			t.Error("expected pin failure")
+		}
+	})
+}
+
+func newTestClient(t *testing.T, logger *zap.Logger, url string) *Client {
+	t.Helper()
+	client, err := NewClient(Config{ClusterAPIURL: url, IPFSAPIURL: url}, logger)
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	return client
+}
+
+func fmtJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(v)
 }
 
 func TestClient_Pin(t *testing.T) {
@@ -292,6 +384,174 @@ func TestClient_PinStatus(t *testing.T) {
 			t.Error("Expected error for not found")
 		}
 	})
+}
+
+// TestClient_PinStatus_aggregation asserts PinStatus reports the cluster-wide
+// status HONESTLY from the peer_map (bugboard #137): "pinned" ONLY when every
+// peer is pinned, errors win over in-progress, and an empty peer_map is
+// "unknown" — never the old optimistic "pinned" default.
+func TestClient_PinStatus_aggregation(t *testing.T) {
+	logger := zap.NewNop()
+
+	tests := []struct {
+		name       string
+		peerMap    map[string]interface{}
+		wantStatus string
+		wantPinned int
+		wantTotal  int
+	}{
+		{
+			name: "all_pinned",
+			peerMap: map[string]interface{}{
+				"peer1": map[string]interface{}{"status": "pinned"},
+				"peer2": map[string]interface{}{"status": "pinned"},
+				"peer3": map[string]interface{}{"status": "pinned"},
+			},
+			wantStatus: "pinned",
+			wantPinned: 3,
+			wantTotal:  3,
+		},
+		{
+			name: "one_pinning_rest_pinned",
+			peerMap: map[string]interface{}{
+				"peer1": map[string]interface{}{"status": "pinned"},
+				"peer2": map[string]interface{}{"status": "pinning"},
+				"peer3": map[string]interface{}{"status": "pinned"},
+			},
+			wantStatus: "pinning",
+			wantPinned: 2,
+			wantTotal:  3,
+		},
+		{
+			name: "pin_error_wins",
+			peerMap: map[string]interface{}{
+				"peer1": map[string]interface{}{"status": "pinned"},
+				"peer2": map[string]interface{}{"status": "pinning"},
+				"peer3": map[string]interface{}{"status": "pin_error", "error": "boom"},
+			},
+			wantStatus: "error",
+			wantPinned: 1,
+			wantTotal:  3,
+		},
+		{
+			name:       "empty_peer_map_unknown",
+			peerMap:    map[string]interface{}{},
+			wantStatus: "unknown",
+			wantPinned: 0,
+			wantTotal:  0,
+		},
+		{
+			name: "no_optimistic_pinned_default",
+			peerMap: map[string]interface{}{
+				"peer1": map[string]interface{}{"status": "remote"},
+				"peer2": map[string]interface{}{"status": "remote"},
+			},
+			wantStatus: "unknown",
+			wantPinned: 0,
+			wantTotal:  0,
+		},
+		{
+			name: "remote_peers_ignored_all_allocated_pinned",
+			peerMap: map[string]interface{}{
+				"peer1": map[string]interface{}{"status": "pinned"},
+				"peer2": map[string]interface{}{"status": "pinned"},
+				"peer3": map[string]interface{}{"status": "pinned"},
+				"peer4": map[string]interface{}{"status": "remote"},
+				"peer5": map[string]interface{}{"status": "remote"},
+			},
+			wantStatus: "pinned",
+			wantPinned: 3,
+			wantTotal:  3,
+		},
+		{
+			name: "remote_peers_ignored_allocated_pinning",
+			peerMap: map[string]interface{}{
+				"peer1": map[string]interface{}{"status": "pinned"},
+				"peer2": map[string]interface{}{"status": "pinning"},
+				"peer3": map[string]interface{}{"status": "remote"},
+			},
+			wantStatus: "pinning",
+			wantPinned: 1,
+			wantTotal:  2,
+		},
+		{
+			name: "remote_peers_ignored_allocated_error",
+			peerMap: map[string]interface{}{
+				"peer1": map[string]interface{}{"status": "pin_error", "error": "boom"},
+				"peer2": map[string]interface{}{"status": "remote"},
+			},
+			wantStatus: "error",
+			wantPinned: 0,
+			wantTotal:  1,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				response := map[string]interface{}{
+					"cid":      "QmAgg",
+					"name":     "agg-file",
+					"peer_map": tc.peerMap,
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(response)
+			}))
+			defer server.Close()
+
+			client, err := NewClient(Config{ClusterAPIURL: server.URL}, logger)
+			if err != nil {
+				t.Fatalf("NewClient: %v", err)
+			}
+
+			status, err := client.PinStatus(context.Background(), "QmAgg")
+			if err != nil {
+				t.Fatalf("PinStatus: %v", err)
+			}
+			if status.Status != tc.wantStatus {
+				t.Errorf("Status = %q, want %q", status.Status, tc.wantStatus)
+			}
+			if status.PinnedPeers != tc.wantPinned {
+				t.Errorf("PinnedPeers = %d, want %d", status.PinnedPeers, tc.wantPinned)
+			}
+			if status.TotalPeers != tc.wantTotal {
+				t.Errorf("TotalPeers = %d, want %d", status.TotalPeers, tc.wantTotal)
+			}
+		})
+	}
+}
+
+// TestClient_PinStatus_numericStatus asserts the per-peer status is normalized
+// correctly when the cluster API encodes TrackerStatus as a number rather than
+// a string.
+func TestClient_PinStatus_numericStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		response := map[string]interface{}{
+			"cid": "QmNum",
+			"peer_map": map[string]interface{}{
+				// Numeric status that is NOT "pinned" must not be treated as pinned.
+				"peer1": map[string]interface{}{"status": 5},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{ClusterAPIURL: server.URL}, zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	status, err := client.PinStatus(context.Background(), "QmNum")
+	if err != nil {
+		t.Fatalf("PinStatus: %v", err)
+	}
+	if status.Status == "pinned" {
+		t.Errorf("numeric non-pinned status must not aggregate to 'pinned', got %q", status.Status)
+	}
+	if status.PinnedPeers != 0 {
+		t.Errorf("PinnedPeers = %d, want 0", status.PinnedPeers)
+	}
 }
 
 func TestClient_Unpin(t *testing.T) {
@@ -487,5 +747,289 @@ func TestClient_Close(t *testing.T) {
 	err = client.Close(context.Background())
 	if err != nil {
 		t.Errorf("Close should not error, got: %v", err)
+	}
+}
+
+// --- EvictLocal (bugboard #153) -----------------------------------------------
+
+// newEvictTestClient points a Client's kubo API at a stub daemon.
+func newEvictTestClient(t *testing.T, handler http.HandlerFunc) (*Client, func()) {
+	t.Helper()
+	// Every eviction first waits for this node's kubo to drop its own pin.
+	// Unless a test overrides it, answer "not pinned" so the wait completes
+	// immediately and the test exercises the removal path it cares about.
+	inner := handler
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/pin/ls") {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"Message":"path 'x' is not pinned","Code":0,"Type":"error"}`))
+			return
+		}
+		inner(w, r)
+	}))
+	c, err := NewClient(Config{IPFSAPIURL: srv.URL, Timeout: 5 * time.Second}, zap.NewNop())
+	if err != nil {
+		srv.Close()
+		t.Fatalf("NewClient: %v", err)
+	}
+	return c, srv.Close
+}
+
+// The DAG walk must be local-only. Without offline=true kubo treats a missing
+// block as a cache miss and goes to the network, so enumerating a DAG this node
+// does not hold blocks until the caller's deadline — which failed the whole
+// cluster-wide eviction fan-out instead of reporting "nothing here".
+func TestEvictLocal_refsAreOfflineOnly(t *testing.T) {
+	var sawOffline string
+	c, done := newEvictTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/refs") {
+			sawOffline = r.URL.Query().Get("offline")
+			_, _ = w.Write([]byte(`{"Ref":"QmChild","Err":""}` + "\n"))
+			return
+		}
+		_, _ = w.Write([]byte(`{"Hash":"x","Error":""}` + "\n"))
+	})
+	defer done()
+
+	if _, err := c.EvictLocal(context.Background(), "QmRoot"); err != nil {
+		t.Fatalf("EvictLocal: %v", err)
+	}
+	if sawOffline != "true" {
+		t.Errorf("refs offline param = %q, want \"true\"", sawOffline)
+	}
+}
+
+// A node that does not hold the DAG has nothing to reclaim. That is the normal
+// case for most nodes whenever the replication factor is below the cluster
+// size, so it must not be reported as a failure — doing so would make a
+// cluster-wide eviction permanently incomplete on any cluster larger than RF.
+func TestEvictLocal_nodeWithoutTheDAGIsNotAFailure(t *testing.T) {
+	c, done := newEvictTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/refs") {
+			_, _ = w.Write([]byte(`{"Ref":"","Err":"block was not found locally (offline): ipld: could not find QmRoot"}` + "\n"))
+			return
+		}
+		t.Error("block/rm must not be called when the DAG is absent")
+	})
+	defer done()
+
+	removed, err := c.EvictLocal(context.Background(), "QmRoot")
+	if err != nil {
+		t.Fatalf("absent DAG must not be an error, got %v", err)
+	}
+	if removed != 0 {
+		t.Errorf("removed = %d, want 0", removed)
+	}
+}
+
+// A real traversal failure must still surface — the not-found tolerance above
+// must not swallow every refs error.
+func TestEvictLocal_realRefsFailureStillErrors(t *testing.T) {
+	c, done := newEvictTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/refs") {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte("datastore is corrupt"))
+			return
+		}
+	})
+	defer done()
+
+	if _, err := c.EvictLocal(context.Background(), "QmRoot"); err == nil {
+		t.Fatal("want an error for a genuine refs failure")
+	}
+}
+
+// Every block of the DAG plus the root must be removed, and an already-absent
+// block counts as success (idempotent reclaim).
+func TestEvictLocal_removesEveryBlockIncludingRoot(t *testing.T) {
+	var removed []string
+	c, done := newEvictTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/refs") {
+			_, _ = w.Write([]byte(`{"Ref":"QmA","Err":""}` + "\n" + `{"Ref":"QmB","Err":""}` + "\n"))
+			return
+		}
+		arg := r.URL.Query().Get("arg")
+		removed = append(removed, arg)
+		if arg == "QmB" {
+			_, _ = w.Write([]byte(`{"Hash":"QmB","Error":"blockstore: block not found"}` + "\n"))
+			return
+		}
+		_, _ = w.Write([]byte(`{"Hash":"` + arg + `","Error":""}` + "\n"))
+	})
+	defer done()
+
+	n, err := c.EvictLocal(context.Background(), "QmRoot")
+	if err != nil {
+		t.Fatalf("EvictLocal: %v", err)
+	}
+	if n != 3 {
+		t.Errorf("removed = %d, want 3 (QmA, QmB already-absent, QmRoot)", n)
+	}
+	want := []string{"QmA", "QmB", "QmRoot"}
+	if len(removed) != len(want) {
+		t.Fatalf("block/rm called for %v, want %v", removed, want)
+	}
+	for i := range want {
+		if removed[i] != want[i] {
+			t.Errorf("block/rm[%d] = %q, want %q", i, removed[i], want[i])
+		}
+	}
+}
+
+// A block that is still part of another pinned DAG must be surfaced, not
+// silently counted as reclaimed — that is the pin-safety guarantee.
+func TestEvictLocal_stillPinnedBlockSurfaces(t *testing.T) {
+	c, done := newEvictTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/refs") {
+			_, _ = w.Write([]byte(`{"Ref":"QmA","Err":""}` + "\n"))
+			return
+		}
+		_, _ = w.Write([]byte(`{"Hash":"QmA","Error":"pinned: pinned via QmOther"}` + "\n"))
+	})
+	defer done()
+
+	if _, err := c.EvictLocal(context.Background(), "QmRoot"); err == nil {
+		t.Fatal("a still-pinned block must be reported, not swallowed")
+	}
+}
+
+// Bugboard #153 propagation race.
+//
+// IPFS-Cluster's unpin returns once the removal is committed to its consensus
+// log; each peer's kubo then unpins asynchronously. The eviction fan-out fires
+// immediately after that return, so on every node except the one that served
+// the request the pin was typically still in place — and `block rm` without
+// --force correctly refuses a pinned block. Observed live on devnet: two of
+// three nodes reported an incomplete reclaim and kept the blocks.
+func TestEvictLocal_waitsForTheLocalPinToClear(t *testing.T) {
+	var pinChecks int32
+	var blockRms int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/pin/ls"):
+			// Still pinned for the first two polls, then the cluster unpin
+			// lands and kubo reports it gone.
+			if atomic.AddInt32(&pinChecks, 1) <= 2 {
+				_, _ = w.Write([]byte(`{"Keys":{"QmRoot":{"Type":"recursive"}}}`))
+				return
+			}
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"Message":"path 'QmRoot' is not pinned","Code":0,"Type":"error"}`))
+		case strings.Contains(r.URL.Path, "/refs"):
+			_, _ = w.Write([]byte(`{"Ref":"QmChild","Err":""}` + "\n"))
+		default:
+			atomic.AddInt32(&blockRms, 1)
+			_, _ = w.Write([]byte(`{"Hash":"x","Error":""}` + "\n"))
+		}
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(Config{IPFSAPIURL: srv.URL, Timeout: 10 * time.Second}, zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	removed, err := c.EvictLocal(context.Background(), "QmRoot")
+	if err != nil {
+		t.Fatalf("EvictLocal: %v", err)
+	}
+	if removed != 2 {
+		t.Errorf("removed = %d, want 2 (child + root)", removed)
+	}
+	if got := atomic.LoadInt32(&pinChecks); got < 3 {
+		t.Errorf("pin was polled %d times; the wait must re-check until the pin clears", got)
+	}
+	if atomic.LoadInt32(&blockRms) == 0 {
+		t.Error("no block was removed after the pin cleared")
+	}
+}
+
+// A node whose kubo never drops the pin must be reported, not silently counted
+// as reclaimed — that is the difference between "the bytes are gone" and "the
+// bytes are still here and we told the user otherwise".
+func TestEvictLocal_stillPinnedAfterTheBoundIsReported(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/pin/ls") {
+			_, _ = w.Write([]byte(`{"Keys":{"QmRoot":{"Type":"recursive"}}}`))
+			return
+		}
+		t.Error("block removal must not be attempted while the CID is still pinned")
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(Config{IPFSAPIURL: srv.URL, Timeout: 10 * time.Second}, zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	// Bound the test by its own context rather than waiting the full
+	// propagation timeout.
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+
+	removed, err := c.EvictLocal(ctx, "QmRoot")
+	if err == nil {
+		t.Fatal("a CID still pinned locally must be reported as an incomplete reclaim")
+	}
+	if removed != 0 {
+		t.Errorf("removed = %d, want 0", removed)
+	}
+}
+
+// kubo answers an unpinned CID with a 500 and "is not pinned". Treating that as
+// a transport failure would make every eviction fail.
+func TestIsPinnedLocally_readsKuboResponses(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+		want   bool
+	}{
+		{"pinned recursively", 200, `{"Keys":{"QmRoot":{"Type":"recursive"}}}`, true},
+		{"pinned indirectly", 200, `{"Keys":{"QmRoot":{"Type":"indirect"}}}`, true},
+		{"not pinned", 500, `{"Message":"path 'QmRoot' is not pinned","Code":0,"Type":"error"}`, false},
+		{"empty pinset", 200, `{"Keys":{}}`, false},
+		{"a different cid", 200, `{"Keys":{"QmOther":{"Type":"recursive"}}}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+
+			c, err := NewClient(Config{IPFSAPIURL: srv.URL, Timeout: 5 * time.Second}, zap.NewNop())
+			if err != nil {
+				t.Fatalf("NewClient: %v", err)
+			}
+			got, err := c.isPinnedLocally(context.Background(), "QmRoot")
+			if err != nil {
+				t.Fatalf("isPinnedLocally: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("isPinnedLocally = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// AddLocal imports into Kubo and never pins on the cluster: the caller pins
+// once, with the replication it wants.
+func TestClient_AddLocal_doesNotPinOnTheCluster(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v0/add" {
+			t.Errorf("AddLocal reached %s; it must only import into Kubo", r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		fmtJSON(w, ipfsDaemonAddResponse{Name: "f.txt", Hash: "QmLocal", Size: "9"})
+	}))
+	defer server.Close()
+	client := newTestClient(t, zap.NewNop(), server.URL)
+	resp, err := client.AddLocal(context.Background(), strings.NewReader("content"), "f.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Cid != "QmLocal" || resp.Size != int64(len("content")) {
+		t.Fatalf("AddLocal = %+v", resp)
 	}
 }

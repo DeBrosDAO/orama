@@ -1,0 +1,212 @@
+package node
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"os"
+	"os/exec"
+	"strings"
+	"time"
+
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/utils"
+	"github.com/DeBrosOfficial/network/pkg/config"
+	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/olric"
+	"github.com/DeBrosOfficial/network/pkg/rqlite"
+	"github.com/spf13/cobra"
+)
+
+var doctorCmd = &cobra.Command{
+	Use:   "doctor",
+	Short: "Diagnose common node issues",
+	Long: `Run a series of diagnostic checks on this node to identify
+common issues with services, connectivity, disk space, and more.`,
+	RunE: runDoctor,
+}
+
+type check struct {
+	Name   string
+	Status string // PASS, FAIL, WARN
+	Detail string
+}
+
+// olricProbeTimeout bounds doctor's call to the index Olric.
+const olricProbeTimeout = 5 * time.Second
+
+func runDoctor(cmd *cobra.Command, args []string) error {
+	fmt.Println("Node Doctor")
+	fmt.Println("===========")
+	fmt.Println()
+
+	var checks []check
+
+	// 1. Check if services exist
+	services := utils.GetProductionServices()
+	if len(services) == 0 {
+		checks = append(checks, check{"Services installed", "FAIL", "No Orama services found. Run 'orama maint node install' first."})
+	} else {
+		checks = append(checks, check{"Services installed", "PASS", fmt.Sprintf("%d services found", len(services))})
+	}
+
+	// 2. Check each service status
+	running := 0
+	stopped := 0
+	for _, svc := range services {
+		active, _ := utils.IsServiceActive(svc)
+		if active {
+			running++
+		} else {
+			stopped++
+		}
+	}
+	if stopped > 0 {
+		checks = append(checks, check{"Services running", "WARN", fmt.Sprintf("%d running, %d stopped", running, stopped)})
+	} else if running > 0 {
+		checks = append(checks, check{"Services running", "PASS", fmt.Sprintf("All %d services running", running)})
+	}
+
+	// 3. Check RQLite health, where it binds and with its credentials.
+	if ep, err := rqlite.LocalNodeEndpoint(); err != nil {
+		checks = append(checks, check{"RQLite reachable", "FAIL", err.Error()})
+	} else if _, err := ep.Admin().Status(context.Background()); err != nil {
+		checks = append(checks, check{"RQLite reachable", "FAIL", fmt.Sprintf("Cannot read %s/status: %v", ep, err)})
+	} else {
+		checks = append(checks, check{"RQLite reachable", "PASS", fmt.Sprintf("HTTP API responding on %s", ep)})
+	}
+
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	// 4. Check Olric health, where the installer bound it (the WireGuard address), with an Olric
+	// client call: Olric has no HTTP API on that port.
+	if addr, err := config.InstalledOlricAddr(config.ProductionNodeConfigPath); err != nil {
+		checks = append(checks, check{"Olric reachable", "FAIL", err.Error()})
+	} else if members, err := olric.Members(context.Background(), addr, olricProbeTimeout); err != nil {
+		checks = append(checks, check{"Olric reachable", "FAIL", fmt.Sprintf("Cannot reach: %v", err)})
+	} else {
+		checks = append(checks, check{"Olric reachable", "PASS", fmt.Sprintf("Responding on %s, %d member(s)", addr, len(members))})
+	}
+
+	// 5. Check Gateway health
+	// 8443 was never the gateway's port on a node; the index gateway listens on
+	// constants.GatewayAPIPort. The check therefore always failed, which is
+	// half of why doctor exited 1 on a healthy node.
+	resp, err := client.Get(constants.LocalGatewayURL() + "/health")
+	if err != nil {
+		checks = append(checks, check{"Gateway reachable", "FAIL", fmt.Sprintf("Cannot connect: %v", err)})
+	} else {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			var health map[string]interface{}
+			if json.Unmarshal(body, &health) == nil {
+				if s, ok := health["status"].(string); ok {
+					checks = append(checks, check{"Gateway reachable", "PASS", fmt.Sprintf("Status: %s", s)})
+				} else {
+					checks = append(checks, check{"Gateway reachable", "PASS", "Responding"})
+				}
+			} else {
+				checks = append(checks, check{"Gateway reachable", "PASS", "Responding"})
+			}
+		} else {
+			checks = append(checks, check{"Gateway reachable", "WARN", fmt.Sprintf("HTTP %d", resp.StatusCode)})
+		}
+	}
+
+	// 6. Check disk space
+	out, err := exec.Command("df", "-h", "/opt/orama").Output()
+	if err == nil {
+		lines := strings.Split(string(out), "\n")
+		if len(lines) > 1 {
+			fields := strings.Fields(lines[1])
+			if len(fields) >= 5 {
+				usePercent := fields[4]
+				checks = append(checks, check{"Disk space (/opt/orama)", "PASS", fmt.Sprintf("Usage: %s (available: %s)", usePercent, fields[3])})
+			}
+		}
+	}
+
+	// 7. Check DNS resolution of this node's own domain.
+	if host := configuredNodeDomain(); host == "" {
+		checks = append(checks, check{"DNS resolution", "WARN", "no domain in " + config.ProductionNodeConfigPath})
+	} else if _, err = net.LookupHost(host); err != nil {
+		checks = append(checks, check{"DNS resolution", "WARN", fmt.Sprintf("Cannot resolve %s: %v", host, err)})
+	} else {
+		checks = append(checks, check{"DNS resolution", "PASS", host + " resolves"})
+	}
+
+	// 8. Check if ports are conflicting (only for stopped services)
+	ports, err := utils.CollectPortsForServices(services, true)
+	if err == nil && len(ports) > 0 {
+		var conflicts []string
+		for _, spec := range ports {
+			ln, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", spec.Port))
+			if err != nil {
+				conflicts = append(conflicts, fmt.Sprintf("%s (:%d)", spec.Name, spec.Port))
+			} else {
+				ln.Close()
+			}
+		}
+		if len(conflicts) > 0 {
+			checks = append(checks, check{"Port conflicts", "WARN", fmt.Sprintf("Ports in use: %s", strings.Join(conflicts, ", "))})
+		} else {
+			checks = append(checks, check{"Port conflicts", "PASS", "No conflicts detected"})
+		}
+	}
+
+	// Print results
+	maxName := 0
+	for _, c := range checks {
+		if len(c.Name) > maxName {
+			maxName = len(c.Name)
+		}
+	}
+
+	pass, fail, warn := 0, 0, 0
+	for _, c := range checks {
+		fmt.Printf("  [%s] %-*s  %s\n", c.Status, maxName, c.Name, c.Detail)
+		switch c.Status {
+		case "PASS":
+			pass++
+		case "FAIL":
+			fail++
+		case "WARN":
+			warn++
+		}
+	}
+
+	fmt.Printf("\nSummary: %d passed, %d failed, %d warnings\n", pass, fail, warn)
+
+	if fail > 0 {
+		// A failing check is the answer this command exists to give, so the
+		// message is the summary above, not a second error line.
+		return clierr.Wrap(clierr.CodeFailure, errCheckFailed(fail))
+	}
+	return nil
+}
+
+// errCheckFailed names how many diagnostics failed.
+func errCheckFailed(n int) error {
+	return fmt.Errorf("%d diagnostic check(s) failed", n)
+}
+
+// configuredNodeDomain is the domain this node was installed with. Doctor
+// resolves that name, not a network this computer does not belong to.
+func configuredNodeDomain() string {
+	data, err := os.ReadFile(config.ProductionNodeConfigPath)
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "domain:") {
+			continue
+		}
+		return strings.Trim(strings.TrimSpace(strings.TrimPrefix(line, "domain:")), `"'`)
+	}
+	return ""
+}

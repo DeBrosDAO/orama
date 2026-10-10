@@ -1,0 +1,19 @@
+# Tor stopped on one node: the anonymity proxy, the tunnel and anon_fetch
+# fail closed there (never a direct request), /v1/health stays 200 with
+# checks.anon_proxy "unavailable", the node stays in DNS, and the proxy works
+# again after the restart.
+id: anon-tor-chaos
+title: Anonymity proxy with Tor down
+area: network
+subtasks: [2840]
+stage: 11
+destructive: true
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  claims:
+    - "website/src/docs/contributor/architecture-reference.mdx: checks.anon_proxy is unavailable (never error) with Tor down; the node stays in DNS"
+    - "website/src/docs/developer/functions.mdx#http: anon_fetch has no direct fallback; Tor down is status 0 with an error"
+    - "docs/whitepaper/technical-reference/vol1/21-serverless.md#outbound-http-and-the-egress-guard: every anon_fetch connection goes to the Tor SOCKS port"

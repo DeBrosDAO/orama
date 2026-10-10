@@ -57,7 +57,7 @@ func (h *StatsHandler) HandleStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	deployPath := filepath.Join(h.baseDeployPath, deployment.Namespace, deployment.Name)
+	deployPath := process.DeployDir(h.baseDeployPath, deployment.Namespace, deployment.Name)
 
 	resp := map[string]interface{}{
 		"name":   deployment.Name,

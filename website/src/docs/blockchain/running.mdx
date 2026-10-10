@@ -1,0 +1,34 @@
+# Running a chain node
+
+`orama maint node install` does not start the chain. A machine runs it as a global node, installed with `sudo orama global install --services chain,...`: see [Run a global node](/docs/blockchain/run-a-global-node) for the install, the start and stop commands, validators, the double-sign guard and removal. A network is created by `orama setup --create-network` ([Create a network](/docs/operator/setup#create-a-network)); `chain/scripts/stagenet/deploy.sh` resets, checks and smoke-tests the stagenet that command makes. A seat's account is a key in an unencrypted test keyring on its machine. That is a test-network convenience. It is not acceptable once the token has value outside a test.
+
+The chain's own epoch on that script is 300 seconds and 10 blocks. Production parameters require 24 hours and 14,400 blocks unless `--allow-bootstrap-stake` is set, which that devnet path does set.
+
+## Process
+
+| | |
+|---|---|
+| Binary | `oramad` |
+| Unit | `orama-global-chain.service` |
+| User | `orama-chain` |
+| Home | `/var/lib/orama-global/chain` |
+
+The unit runs `oramad` under cosmovisor. It is not one of the `orama-namespace-*` services. Stopping the Orama node supervisor does not stop the chain, and the chain installer does not touch the cluster's other services.
+
+## Ports
+
+| Port | What | Where it listens |
+|---|---|---|
+| 31000 | CometBFT peers | The WireGuard address |
+| 31001 | CometBFT RPC | 127.0.0.1 only |
+| 31002 | Cosmos gRPC | Local |
+| 31003 | Cosmos REST | Local |
+| 31004 | Prometheus | 127.0.0.1 only |
+
+The Orama node reads height, block time, and whether this machine is a validator from the RPC on 127.0.0.1:31001. It does not import the chain's Go types.
+
+## What a running chain is not
+
+Installing this unit does not put ORAMA in front of apps. Gateway requests stay on the gateway. Whether `orama-global-chain` is up on a given machine is a fact about that machine, not a consequence of installing Orama.
+
+Queries against the chain use `oramad query`. The platform CLI `orama` does not wrap them.

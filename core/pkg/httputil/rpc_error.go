@@ -29,6 +29,23 @@ import (
 	"net/http"
 )
 
+// HeaderTenantOrigin marks a response as the tenant's code's own answer, not
+// the platform's: a function's status or the failure to load it, written by a
+// namespace gateway, or the response of a deployed app, relayed by its home
+// node to the node that forwarded the request. The circuit breaker of the
+// gateway that forwarded does not count a 502, 503 or 504 that carries it,
+// because what a tenant's code answers says nothing about the node or gateway
+// that ran it. The forwarding gateway removes it before the client sees it.
+const HeaderTenantOrigin = "X-Orama-Tenant-Origin"
+
+// MarkTenantOrigin sets the tenant-origin marker on h. It removes any value
+// first, so one the tenant's code put there (an empty one, say) cannot sit
+// beside it.
+func MarkTenantOrigin(h http.Header) {
+	h.Del(HeaderTenantOrigin)
+	h.Set(HeaderTenantOrigin, "1")
+}
+
 // RPCErrorCode is the typed error-code enum. New codes go here, alphabetic
 // within their class. Codes are stable strings — clients pin to them.
 type RPCErrorCode string
@@ -42,11 +59,21 @@ const (
 	ErrCodeConflict         RPCErrorCode = "CONFLICT"
 	ErrCodeRateLimited      RPCErrorCode = "RATE_LIMITED"
 	ErrCodePayloadTooLarge  RPCErrorCode = "PAYLOAD_TOO_LARGE"
+	// ErrCodeStorageQuotaExceeded — the namespace's configured storage budget
+	// (max_storage_bytes) would be exceeded by this pin/upload, RF-aware
+	// (bugboard #141). Non-retryable: the caller must free space or raise the
+	// budget. Only enforced for namespaces that have a positive budget row.
+	ErrCodeStorageQuotaExceeded RPCErrorCode = "STORAGE_QUOTA_EXCEEDED"
 
 	// 5xx — server error
 	ErrCodeInternal           RPCErrorCode = "INTERNAL"
 	ErrCodeServiceUnavailable RPCErrorCode = "SERVICE_UNAVAILABLE"
 	ErrCodeTimeout            RPCErrorCode = "TIMEOUT"
+	// ErrCodeNamespaceGatewayUnavailable — none of the namespace's gateways
+	// could be reached (every member refused the connection or has its circuit
+	// open). Nothing was sent to any of them, so the exact request is safe to
+	// retry; a WebSocket client should reconnect with backoff.
+	ErrCodeNamespaceGatewayUnavailable RPCErrorCode = "NAMESPACE_GATEWAY_UNAVAILABLE"
 
 	// Function-specific (5xx-mapped but distinct codes for client routing)
 	ErrCodeFunctionExecution RPCErrorCode = "FUNCTION_EXECUTION_FAILED"
@@ -62,8 +89,8 @@ const (
 // RPCErrorEnvelope is the canonical wire shape. Use WriteRPCError to emit;
 // the struct is exported so SDK clients can decode/match against it.
 type RPCErrorEnvelope struct {
-	OK    bool             `json:"ok"`
-	Error *RPCErrorDetail  `json:"error"`
+	OK    bool            `json:"ok"`
+	Error *RPCErrorDetail `json:"error"`
 }
 
 // RPCErrorDetail is the typed error body. `Code` and `Message` are
@@ -79,6 +106,7 @@ type RPCErrorDetail struct {
 
 // RPCErrorOption customizes the envelope (request id, retry-after, etc.).
 // Callers build chains like WriteRPCError(w, 429, code, msg,
+//
 //	WithRetryAfter(2.5), WithRequestID(reqID)).
 type RPCErrorOption func(*RPCErrorDetail)
 
@@ -170,6 +198,8 @@ func defaultMessageFor(code RPCErrorCode) string {
 		return "service temporarily unavailable"
 	case ErrCodeTimeout:
 		return "request timed out"
+	case ErrCodeNamespaceGatewayUnavailable:
+		return "no namespace gateway could be reached, retry"
 	case ErrCodeFunctionExecution:
 		return "function execution failed"
 	case ErrCodeFunctionUnavailable:
@@ -187,7 +217,7 @@ func defaultMessageFor(code RPCErrorCode) string {
 // Callers can override via WithRetryable() / WithRetryAfter().
 func defaultRetryableFor(code RPCErrorCode) bool {
 	switch code {
-	case ErrCodeRateLimited, ErrCodeServiceUnavailable, ErrCodeTimeout, ErrCodeFunctionUnavailable:
+	case ErrCodeRateLimited, ErrCodeServiceUnavailable, ErrCodeTimeout, ErrCodeFunctionUnavailable, ErrCodeNamespaceGatewayUnavailable:
 		return true
 	default:
 		return false

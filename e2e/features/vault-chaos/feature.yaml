@@ -1,0 +1,17 @@
+# The vault with a guardian down (reads survive on K=2, writes are refused
+# below W=3 and succeed again after the restart) and the per-address push
+# limit against a spoofed X-Forwarded-For (an unpaced flood, so it runs alone).
+id: vault-chaos
+title: Vault with a guardian down
+area: vault
+subtasks: [2841]
+stage: 11
+destructive: true
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  claims:
+    - "docs/whitepaper/technical-reference/vol1/28-vault.md#failure-modes: a push reported stored has W > K shares; one guardian down refuses writes and keeps reads"
+    - "docs/whitepaper/technical-reference/vol1/28-vault.md#trust-and-security: the per-address limit cannot be bypassed with X-Forwarded-For"

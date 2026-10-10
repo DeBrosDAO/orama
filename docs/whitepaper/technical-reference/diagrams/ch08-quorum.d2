@@ -1,0 +1,15 @@
+shape: sequence_diagram
+
+a: "observer A (lowest id)"
+b: "observer B"
+db: "node_health_events"
+cm: "ClusterManager (on A)"
+
+a -> db: "12th miss: INSERT dead"
+a -> db: "checkQuorum: COUNT DISTINCT observers"
+db -> a: "1 (needs 2)"
+b -> db: "12th miss: INSERT dead"
+b -> db: "checkQuorum: COUNT, MIN(observer_id)"
+db -> b: "2 observers, lowest = A"
+b -> b: "lowest is not me: do nothing"
+a -> cm: "never called (no later check)"

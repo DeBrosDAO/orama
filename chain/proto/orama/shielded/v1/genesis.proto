@@ -1,0 +1,31 @@
+syntax = "proto3";
+package orama.shielded.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/shielded/types";
+
+import "gogoproto/gogo.proto";
+import "orama/shielded/v1/shielded.proto";
+
+// GenesisState is x/shielded's genesis and export state.
+message GenesisState {
+  Params params = 1 [(gogoproto.nullable) = false];
+  repeated PoolBalance pools = 2 [(gogoproto.nullable) = false];
+  repeated Limiter limiters = 3 [(gogoproto.nullable) = false];
+  repeated QueuedUnshield queue = 4 [(gogoproto.nullable) = false];
+  uint64 next_queue_id = 5;
+  // frontier is the note-commitment tree frontier, empty for an empty tree.
+  bytes frontier = 6;
+  uint64 tree_size = 7;
+  // current_root is the root after the last append, empty for an empty tree.
+  bytes current_root = 8;
+  repeated Anchor anchors = 9 [(gogoproto.nullable) = false];
+  // nullifier_accumulator is SHA-256 folded over every spent nullifier in
+  // insertion order, and nullifier_count how many there are. Import refuses a
+  // nullifier list that does not fold to this accumulator. The list is in
+  // insertion order and carries no heights: an import makes every record
+  // visible to the chain that starts from the genesis, whatever its initial
+  // height.
+  bytes nullifier_accumulator = 10;
+  uint64 nullifier_count = 11;
+  repeated bytes nullifiers = 12;
+}

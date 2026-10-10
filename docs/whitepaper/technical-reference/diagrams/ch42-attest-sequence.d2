@@ -1,0 +1,21 @@
+shape: sequence_diagram
+
+a1: Archiver A
+a2: Archiver B
+a3: Archiver C
+x: x/archive
+s: x/storage
+p: Providers
+
+a1 -> a1: "read 1000 blocks, pack ORBH bundle, tuple = CID, content hash, Merkle root, piece commitment"
+a1 -> x: "MsgAttest"
+a2 -> x: "MsgAttest (same tuple)"
+a3 -> x: "MsgAttest (same tuple)"
+x -> x: "third distinct operator: range decided"
+a1 -> x: "MsgCreateArchiveDeal (piece must equal the winner's)"
+x -> s: "CreateArchiveDeal: 3 replicas, 3650 epochs, protocol price"
+s -> p: "next block: slots assigned"
+a1 -> p: "POST /pieces/ROOT (bundle)"
+p -> s: "MsgAcceptDeal, then proofs"
+a1 -> x: "MsgAttachReplicas (deal ids, now ACTIVE)"
+x -> x: "3 operators + 3 live deals: archived, last archived height may advance"

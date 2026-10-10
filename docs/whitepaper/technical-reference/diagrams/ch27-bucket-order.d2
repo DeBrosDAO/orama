@@ -1,0 +1,27 @@
+direction: down
+
+in: "rateLimitMiddleware\nclient, exempt = Resolve(r); key = BucketKey(client)"
+ex: "exempt: call next, no bucket"
+a: "credential path?\nauth bucket 30/min burst 10" {shape: diamond}
+b: "path under /v1/chain/query/?\nchain query bucket 120/min burst 30" {shape: diamond}
+c: "POST simulate or broadcast?\nper-address bucket, then route bucket" {shape: diamond}
+d: "capability WebSocket upgrade?\n60/min burst 20" {shape: diamond}
+e: "path = /v1/proxy/relay?\n30/min burst 10" {shape: diamond}
+f: "general bucket\n10,000/min burst 5,000" {shape: diamond}
+ok: "next handler"
+r429: "429 RATE_LIMITED\nRetry-After 60 / 10 / 10 / 60 / 60 / 5"
+
+in -> ex: "exempt"
+in -> a: "not exempt"
+a -> r429: "empty"
+a -> b: "pass or n/a"
+b -> r429: "empty"
+b -> c: "pass or n/a"
+c -> r429: "either empty"
+c -> d: "pass or n/a"
+d -> r429: "empty"
+d -> e: "pass or n/a"
+e -> r429: "empty"
+e -> f: "pass or n/a"
+f -> r429: "empty"
+f -> ok: "token taken"

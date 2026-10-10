@@ -1,0 +1,29 @@
+# orama edit and the node-side commands behind orama upgrade and orama edit.
+# Naming nothing to change is a usage error and an unknown node is not found.
+# On a node without the global layer every change is refused as a conflict,
+# turning the layer on points at the setup flow, and the layer already off is no
+# change; on a node that has it, turning it off is refused with what removes a
+# node. On a node with the public Kubo, orama edit --storage-gb --no-chain sizes
+# it (StorageMax = capacity + 10%) and the node's original config is restored;
+# on a node with a Tor relay, --exit switches the relay's exit section and the
+# torrc is restored. The node's own maint global refresh is a no-op on the
+# release already installed, and maint global edit refuses what the node cannot do.
+id: operator-edit
+title: orama edit, maint global edit and maint global refresh
+area: infrastructure
+subtasks: [3306]
+stage: 9
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  cli:
+    - orama edit
+    - orama maint global edit
+    - orama maint global refresh
+  claims:
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-edit: --storage-gb sizes the node's public Kubo and the exit role rewrites only the relay's exit section"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-edit: the global layer cannot be turned on or off by edit, and the refusal says what does it"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-maint-global-refresh: a refresh to the release already installed replaces nothing and restarts nothing"

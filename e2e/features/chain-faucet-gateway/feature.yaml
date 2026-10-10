@@ -1,0 +1,39 @@
+# Stage 8, epic 3306: the public faucet of a test network, POST /v1/chain/faucet. A newcomer with
+# no account, no node and no SSH access is funded through the gateway alone: the gateway signs
+# MsgFaucet with a key of its own, the chain mints the drip, and the answer is the transaction
+# hash, the amount and the block, after the drip is in it. The route is there only on a gateway
+# whose node.yaml turns chain.faucet on (without it the path is as unknown as any other, a 404);
+# `orama maint faucet init` makes the key on the node, owned by the gateway's account with mode
+# 0600, and prints the account to fund (it pays one fee per drip and holds nothing else; a genesis
+# account is refused by the chain, so it is funded by an `orama chain faucet` drip). The chain
+# polices the drip and the gateway types its refusals: a second drip to the same recipient is a 429
+# cooldown, a module account a 400 bad_recipient, one norama over faucet_max_drip a 400 bad_amount.
+# The route has buckets of its own per client (burst 3) and for the route. The test writes
+# chain.faucet into node.yaml of the last node and restarts it, restores both afterwards, and so
+# runs alone.
+id: chain-faucet-gateway
+title: Public faucet - POST /v1/chain/faucet and orama maint faucet init
+area: chain
+subtasks: [3306]
+stage: 8
+destructive: true
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: true
+covers:
+  cli:
+    - orama maint faucet
+    - orama maint faucet init
+  routes:
+    - /v1/chain/
+  msgs:
+    - orama.emission.v1.MsgFaucet
+  config:
+    - "node.yaml:chain.faucet.enabled"
+    - "node.yaml:chain.faucet.key_file"
+  claims:
+    - "docs/whitepaper/technical-reference/appendices/i-api-surface.md: POST /v1/chain/faucet on a gateway with a faucet key signs MsgFaucet for the recipient and answers tx_hash, amount and height once the drip is in a block; on any other gateway the path is a 404"
+    - "docs/whitepaper/technical-reference/appendices/i-api-surface.md: POST /v1/chain/faucet refuses a second drip to a recipient inside the cooldown as a 429 cooldown, a module account as a 400 bad_recipient and an amount over the maximum drip as a 400 bad_amount, each as {error, message}"
+    - "docs/whitepaper/technical-reference/appendices/i-api-surface.md: POST /v1/chain/faucet has its own per-client and per-route rate-limit buckets, and a client network may ask 20,000 ORAMA a day in all (unit-tested in core/pkg/gateway/handlers/chainread)"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-maint-faucet-init: creates the faucet key owned by the gateway's account with mode 0600, prints the account to fund, and never replaces a key"

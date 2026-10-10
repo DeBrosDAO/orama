@@ -1,0 +1,32 @@
+{
+  "route": "/v1/cache/scan",
+  "method": "POST",
+  "sdk": "cache.scan()",
+  "goStruct": "cache.ScanRequest",
+  "call": {
+    "module": "cache",
+    "method": "scan",
+    "args": [
+      "sessions",
+      "user-.*"
+    ]
+  },
+  "request": {
+    "dmap": "sessions",
+    "match": "user-.*"
+  },
+  "response": {
+    "keys": [
+      "user-1"
+    ],
+    "count": 1,
+    "dmap": "sessions"
+  },
+  "returns": {
+    "keys": [
+      "user-1"
+    ],
+    "count": 1,
+    "dmap": "sessions"
+  }
+}

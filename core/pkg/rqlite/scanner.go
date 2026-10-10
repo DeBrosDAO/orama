@@ -10,8 +10,26 @@ import (
 	"time"
 )
 
-// scanIntoDest scans multiple rows into dest (pointer to slice of structs or maps).
+// ColumnRows is a Query destination that keeps what a []map[string]any cannot:
+// the order of the statement's columns. A caller that hands rows to a program
+// which indexes them by position needs it, and a map has none.
+type ColumnRows struct {
+	Columns []string
+	Rows    []map[string]any
+}
+
+// scanIntoDest scans multiple rows into dest (pointer to slice of structs or
+// maps, or a *ColumnRows).
 func scanIntoDest(rows *sql.Rows, dest any) error {
+	if cr, ok := dest.(*ColumnRows); ok {
+		cols, err := rows.Columns()
+		if err != nil {
+			return err
+		}
+		cr.Columns = cols
+		cr.Rows = make([]map[string]any, 0, 16)
+		return scanIntoDest(rows, &cr.Rows)
+	}
 	// dest must be pointer to slice (of struct or map)
 	rv := reflect.ValueOf(dest)
 	if rv.Kind() != reflect.Pointer || rv.IsNil() {
@@ -150,7 +168,7 @@ func buildFieldIndex(t reflect.Type) map[string]int {
 	m := make(map[string]int)
 	for i := 0; i < t.NumField(); i++ {
 		f := t.Field(i)
-		if f.IsExported() == false {
+		if !f.IsExported() {
 			continue
 		}
 		tag := f.Tag.Get("db")

@@ -1,0 +1,21 @@
+shape: sequence_diagram
+
+c: Publisher {shape: person}
+gw: Namespace gateway
+svc: Pubsub service
+gs: GossipSub
+local: Subscribers on this node
+remote: Pubsub services on other nodes
+fn: PubSubDispatcher
+
+c -> gw: "POST /v1/pubsub/publish {topic, data_base64}"
+gw -> gw: "namespace from auth, 1 MiB body, base64 decode"
+gw -> gw: "reserved topic? topic grant? reserved _orama key?"
+gw -> svc: "POST /publish {namespace, topic, data} on the unix socket (10 s)"
+svc -> gs: "Publish(ns.topic, data)"
+gs -> local: "loopback to this service's subscription"
+gs -> remote: "flood to every connected peer subscribed to ns.topic"
+svc -> gw: "200"
+gw -> fn: "go Dispatch(ns, topic, data)"
+gw -> c: "200 {status: ok}"
+local -> local: "SSE event -> gateway stream -> each socket's channel -> WebSocket frame"

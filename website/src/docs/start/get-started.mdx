@@ -1,0 +1,148 @@
+# Get started
+
+This is the one page for joining the Orama network with machines of your own: from empty servers and a wallet to nodes that show up in `orama status`, a validator on the chain, and rewards you can use. Everything is typed on your own computer. You never log in to a server yourself.
+
+If you want to *use* a network (deploy an app, a database, a function) rather than run machines on it, start with the [Quickstart](/docs/developer/getting-started) instead.
+
+## 1. Pick your path
+
+Both paths install the same signed release, one node per machine you give, and both end at `orama status`. They differ in what you run and what you need.
+
+| | Validator on the network | Your own cluster, and a validator |
+|---|---|---|
+| What you get | Machines that join the network as nodes with the chain, public storage and a Tor relay, and a validator for your operator account | The same, plus a private cluster of your own where you deploy apps under your own domain |
+| Command | `orama setup --network <name> --name <name> <ip> ...` | `orama setup --network <name> --name <name> --domain <your domain> <ip> ...` |
+| Domain | None. Each node can have a free identification name, `<name>.<zone>`, in the network's names sub-zone | One you control, with NS and glue records you publish |
+| Machines | One or more | Three or more for a cluster that survives a failure; one for evaluation |
+
+A third, smaller choice is `--cluster-only`: only the cluster node, with no chain, storage or relay, and so no validator and no rewards. It is for a private cluster that does not take part in the chain.
+
+## 2. Prerequisites
+
+Check each box before you start. Setup checks the hardware on every machine first and installs nothing anywhere until every machine passes.
+
+**Per machine**
+
+| Profile | vCPU | Memory | Free disk | What it runs |
+|---|---|---|---|---|
+| `--cluster-only` | 2 | 2 GiB | 10 GiB | The cluster node |
+| Full (the default) | 4 | 8 GiB | 80 GiB, plus the storage you offer (`--storage-gb`, 50 GB unless you say) | The cluster node, the chain, public storage and its provider, a relay |
+
+- Debian 12 or 13, or Ubuntu 22.04, 24.04 or 26.04, on amd64 or arm64. Interim Ubuntu releases are not supported.
+- A static public IPv4 address, and a way in over SSH as root or a sudo user: a key your RootWallet already installed, the root password in your vault (`rw vault add <ip>`, then `--password`), or a private key that opens the machine today (`--bootstrap-key <file>`, used once to install the RootWallet key and never stored). Setup logs in as `root` unless you pass `--user`; a machine whose image logs in as another user (Ubuntu images often use `ubuntu`) is given as `--ip ubuntu@<address>`.
+- Ports `22`, `51820/udp`, `80`, `443` open in your provider's firewall too. The installer opens them in `ufw`, which cannot open a provider's firewall for you. A nameserver also needs `53` (TCP and UDP).
+- The SSH **host-key fingerprint** of each machine, from your provider's console. Setup never trusts a host key it was not given.
+
+**On your computer**
+
+- [RootWallet](/docs/rootwallet/install), installed, with a wallet created and **unlocked**. It holds your SSH keys and signs every chain transaction; there is no key on disk and no password flag.
+- The `orama` CLI (next section).
+- Nothing for a relay on a network whose manifest pins its Tor network file: every node runs one (`--no-relay` leaves it out, `--tor-network <file>` gives it another file). On a network that pins none, a node runs a relay only when you give the file with `--tor-network`.
+
+**On the chain**
+
+- ORAMA for the operator account: the bonds, and a validator's **1,000 ORAMA** self-bond. On a network with a faucet, such as stagenet, setup requests it from the network's seeds, with no node of yours involved. On any other network setup stops, tells you how much to send and to which address, and carries on when you run it again.
+
+**If you use your own domain:** a domain whose DNS you can change, delegated as described in [DNS](#5-dns).
+
+## 3. Install RootWallet and the CLI
+
+```bash
+brew install DeBrosDAO/tap/rootwallet     # macOS or Linux; or download the desktop app
+brew install DeBrosDAO/tap/orama          # the CLI
+orama version
+```
+
+The RootWallet desktop app, the `rw` CLI for Windows, Debian and Ubuntu packages and tarballs are covered in [RootWallet install](/docs/rootwallet/install) and the [CLI overview](/docs/developer/cli-overview#install). Open RootWallet, create a wallet and leave it unlocked while setup runs.
+
+Choose the network you are joining:
+
+```bash
+orama network list
+orama network use stagenet
+```
+
+## 4. Run `orama setup`
+
+```bash
+orama setup --network stagenet --name alice 203.0.113.10 203.0.113.11 203.0.113.12
+```
+
+On a terminal, `orama setup` with no addresses asks for everything instead. In a script, add `--yes`: it then asks nothing, so give the addresses, `--name` and the host-key fingerprints.
+
+| Flag | What it does |
+|---|---|
+| `--network` | The network to join, from `orama network list` |
+| `--ip`, or the addresses as arguments | Machines to turn into nodes, one public IPv4 each, or `<user>@<address>` for a machine that logs in as another user than `--user` |
+| `--host-key` | The SSH host-key fingerprint, `<ip>=SHA256:...` for each machine (required with `--yes`) |
+| `--bootstrap-key` | A private key that opens the machines today, used once |
+| `--name` | Your node name, the node's id on the chain. Several machines become `alice`, `alice-2`, `alice-3` |
+| `--cluster-only` | The cluster node alone, no chain, storage or relay |
+| `--exit` | Make the relay an **exit** relay (see [Exit relays](#exit-relays-read-this-first)) |
+| `--storage-gb` | Public storage each node offers, in GB (50 unless you say). It counts towards the disk floor: a machine with 90 GiB free passes with `--storage-gb 10`, not with the default |
+| `--domain` | The base domain of a cluster of your own |
+| `--yes` | Ask nothing |
+
+For each machine setup then does these in order, and a machine that already has a step does not get it again, so a run that stopped can be run again:
+
+1. Gives your RootWallet an SSH key on the machine and pins its host key, then checks the hardware for the profile.
+2. Fetches the signed release of the network's channel and verifies it against the release root the network pins.
+3. Creates the cluster on the first machine and joins the others to it, minting the invites itself.
+4. Installs the global layer beside it (unless `--cluster-only`): the chain, which joins by state sync, public storage with its provider, and the Tor relay.
+5. Registers your operator, each node, its bonds and its storage capacity on the chain and creates your validator, each transaction signed by your RootWallet. You approve them in the app.
+6. Restarts the nodes one at a time, waiting until each carries its share of the cluster again.
+7. Handles DNS (next section), then prints what to do next.
+
+Re-run `orama setup` with more addresses later to add nodes to the same cluster.
+
+### Exit relays: read this first
+
+By default a relay only passes Tor traffic between other relays. **An exit relay is different: other people's traffic leaves the network from your IP address.** Whatever strangers do through it, including abuse, appears to come from your machine, and the complaints about it come to you and your hosting provider. Some providers forbid exits and will suspend a server that runs one. Exit relays are paid twice as much as ordinary relays, which is why they are tempting and why they are opt-in.
+
+Setup never turns an exit on for you. It needs `--exit`, a Tor network file and `--yes`, and you give a contact address for abuse complaints with `--contact`. Do not use `--exit` unless you have read your provider's terms and accept responsibility for the traffic.
+
+## 5. DNS
+
+There are two ways to be found by name.
+
+**A free identification name** (the default). `<name>.<zone>`, in the dedicated names sub-zone the network publishes under its domain (for example `nodes.stagenet.orama.network`), is one address record, A or AAAA, for each literal public IP of your node, served by the network's own nameservers from the chain. It identifies the node and nothing more: no NS records, no glue, no certificate, and nothing delegated to you. Setup claims it on the chain for the `--name` you give (`MsgClaimNodeName`, with a 1 ORAMA deposit that comes back when you release the name or retire the node), signed by your RootWallet like the other registrations. Names are 3 to 32 characters, first come first served, one per node. See [Serving node names](/docs/operator/nameserver#serving-node-names).
+
+**Your own domain** (`--domain`). Your cluster becomes the authoritative nameserver for it, so apps, namespaces and certificates under it are answered by your own nodes. You publish NS and glue records at your registrar, or in the parent zone for a subdomain. Setup prints the exact records in two rounds: once the first machine is installed, the records of its nameserver, which the cluster needs before any other machine can join; and at the end, the records the joined machines add. Each time it waits until they resolve and the cluster has a certificate. The steps, and the choice between a subdomain and a whole domain, are in [DNS and nameservers](/docs/operator/nameserver).
+
+## 6. Verify
+
+`orama status` reads the cluster's health from the gateway, which shows it only to a session that holds the cluster's operator permission: your wallet, signed in to a namespace you own. The first time, create one (it is also where your apps will live) and sign in to it:
+
+```bash
+orama auth login                          # sign in with your RootWallet
+orama namespace create <name>             # a namespace of your own, e.g. ops
+orama auth login --namespace <name>       # once `orama namespace list` shows it ready
+orama status
+orama status --json      # for scripts: healthy only if every node and the chain are caught up
+```
+
+Without a session, `orama status --ssh` reads every node over SSH with your RootWallet key instead.
+
+You should see each node healthy, the chain height rising and not syncing, your validator, and your operator's earnings and bond. If something is wrong, the alert says what and how to fix it. [Troubleshooting](/docs/operator/troubleshooting) lists the named failures.
+
+## 7. Use your rewards
+
+Validators, storage providers and relays are paid every epoch. The pay is credited to your **earnings** account, not to a bank balance. [What do I earn](/docs/blockchain/what-do-i-earn) has the numbers. You choose what happens next:
+
+```bash
+orama chain earnings <your-address>           # see what you have
+orama chain withdraw-earnings 25              # move 25 ORAMA to your own balance
+orama chain send <to> 5 --public              # pay someone in the open
+```
+
+- **Withdraw, then send publicly.** `withdraw-earnings` moves earnings to your own balance and nowhere else. `send --public` then pays another account. A public payment shows the sender, the recipient and the amount on the chain to everyone, permanently; the command says so and asks you to type `yes`.
+- **Shield.** Earnings can go into the shielded pool, where a payment shows no sender, recipient or amount.
+- **Private by default.** `orama chain send` without `--public` is a private send, so a payment cannot become public by omission. A private send needs a wallet that builds the shielded bundle, which the RootWallet cannot yet, so for now that command stops and says so; it never falls back to paying publicly.
+
+All of this is in [Fees](/docs/blockchain/fees#using-your-rewards).
+
+## Where next
+
+- [What do I earn](/docs/blockchain/what-do-i-earn), [Validators and staking](/docs/blockchain/validators) and [Running a global node](/docs/blockchain/run-a-global-node) for the chain side.
+- [Install a cluster from scratch](/docs/operator/install-from-scratch), [Joining nodes](/docs/operator/joining-nodes) and [Installing by hand](/docs/operator/node-setup) are the reference for what setup does step by step.
+- [First namespace and app](/docs/operator/first-app) to prove a cluster of your own works, then the [Quickstart](/docs/developer/getting-started).

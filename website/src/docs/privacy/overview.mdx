@@ -1,0 +1,47 @@
+# Privacy network overview
+
+This section covers every privacy feature in Orama, who each one hides information from, and what is not built. Read this page first. It is deliberately blunt about limits.
+
+## What is hidden from whom
+
+| Feature | Hides | From | Does not hide |
+|---|---|---|---|
+| Wallet sign-in | Your identity beyond a public address | The platform and everyone else | The address itself, which is your identity |
+| No shared tenant data | One app's data from another | Other tenants | Anything from the node operators (see below) |
+| Relay-only calls (WebRTC) | Each caller's IP address | The other caller | Your IP from the TURN node |
+| [Stealth TURN](/docs/privacy/stealth-turn) | That a connection is a call | A network observer who blocks VoIP ports | The `cdn-…` hostname (it is visible in TLS) |
+| [Anonymity proxy and tunnel](/docs/privacy/tor) | The server's address from a destination | The destination site | The destination host and port from the gateway (tunnel), and the whole request from the gateway (proxy) |
+| [Relayed fetch](/docs/privacy/relayed-fetch) | A downloader's address | The node that stores the file | The downloader's address from the relay, and the CID from the storage node |
+| Push through APNs or ntfy | Message content | Push brokers | That a notification was sent |
+| Sealed storage deals | File contents | Storage providers | File size and the fact of storage |
+| Shielded pool | Sender, receiver and amount | Chain observers | That a shield or unshield happened (the pool boundary is visible) |
+
+## What the platform does not protect
+
+- **Memory.** An operator or hosting provider that can snapshot a machine's RAM can read what it is processing. See the [security model](/docs/architecture/security-model).
+- **Metadata at the gateway.** The gateway that serves you sees your address, unless you use a feature built to avoid it.
+- **A global passive observer.** Tor does not defend against one. Nor does anything here.
+- **Ubuntu node operators.** On an ordinary Ubuntu node the operator has root. This is why joining as an operator is by invitation today, and why OramaOS exists.
+
+## What is built and what is not
+
+| Part | State |
+|---|---|
+| Tor client on every node, anonymity proxy, tunnel, `anon_fetch` | Built, live |
+| Relayed fetch | Built, live. Node.js clients only |
+| Stealth TURN | Built. Per-node opt-in |
+| Submitting chain transactions to a validator's onion address | Built. Client with `--onion` or `--onion-network`; server side with `orama global install --services onion` |
+| A private Orama Tor network: directory authorities, relays, opt-in exits, `tor-network.json`, the `orama maint vpn` proxy client | Code and installer built. **Never run against a real network**, and Orama runs every authority |
+| Relay rewards on chain | Registry, reports and payout built (90/5/5 split). Bandwidth measurement and relay registration tooling missing |
+| Public VPN | **Not built.** The launch gate is off in every build |
+| Mixnet, paid relay admission, cross-operator relay selection | Not built |
+| Browser and React Native transport for relayed fetch | Not built |
+
+When this page says "Tor" it means the public Tor network, reached by the Tor client on each node. Orama's own Tor network is a separate, private network ([Tor](/docs/privacy/tor#oramas-own-tor-network)); the anonymity proxy and relayed fetch do not use it.
+
+## Pages
+
+- [Tor: anonymity proxy, tunnel and onion submission](/docs/privacy/tor)
+- [Relayed fetch](/docs/privacy/relayed-fetch)
+- [Stealth TURN](/docs/privacy/stealth-turn)
+- [VPN](/docs/privacy/vpn)

@@ -1,8 +1,6 @@
 package auth
 
 import (
-	"encoding/hex"
-	"os"
 	"strings"
 	"testing"
 )
@@ -93,7 +91,7 @@ func TestExtractDomainFromURL(t *testing.T) {
 // ValidateWalletAddress
 // ---------------------------------------------------------------------------
 
-func TestValidateWalletAddress(t *testing.T) {
+func TestValidateEVMWalletAddress(t *testing.T) {
 	validHex40 := "aabbccddee1122334455aabbccddee1122334455"
 
 	tests := []struct {
@@ -160,9 +158,9 @@ func TestValidateWalletAddress(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := ValidateWalletAddress(tt.address)
+			got := validateEVMWalletAddress(tt.address)
 			if got != tt.want {
-				t.Errorf("ValidateWalletAddress(%q) = %v, want %v", tt.address, got, tt.want)
+				t.Errorf("validateEVMWalletAddress(%q) = %v, want %v", tt.address, got, tt.want)
 			}
 		})
 	}
@@ -171,180 +169,3 @@ func TestValidateWalletAddress(t *testing.T) {
 // ---------------------------------------------------------------------------
 // FormatWalletAddress
 // ---------------------------------------------------------------------------
-
-func TestFormatWalletAddress(t *testing.T) {
-	tests := []struct {
-		name    string
-		address string
-		want    string
-	}{
-		{
-			name:    "already lowercase with 0x",
-			address: "0xaabbccddee1122334455aabbccddee1122334455",
-			want:    "0xaabbccddee1122334455aabbccddee1122334455",
-		},
-		{
-			name:    "uppercase gets lowercased",
-			address: "0xAABBCCDDEE1122334455AABBCCDDEE1122334455",
-			want:    "0xaabbccddee1122334455aabbccddee1122334455",
-		},
-		{
-			name:    "without 0x prefix gets it added",
-			address: "aabbccddee1122334455aabbccddee1122334455",
-			want:    "0xaabbccddee1122334455aabbccddee1122334455",
-		},
-		{
-			name:    "0X uppercase prefix gets normalized",
-			address: "0XAABBCCDDEE1122334455AABBCCDDEE1122334455",
-			want:    "0xaabbccddee1122334455aabbccddee1122334455",
-		},
-		{
-			name:    "mixed case gets normalized",
-			address: "0xAaBbCcDdEe1122334455AaBbCcDdEe1122334455",
-			want:    "0xaabbccddee1122334455aabbccddee1122334455",
-		},
-		{
-			name:    "empty string gets 0x prefix",
-			address: "",
-			want:    "0x",
-		},
-		{
-			name:    "just 0x stays as 0x",
-			address: "0x",
-			want:    "0x",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := FormatWalletAddress(tt.address)
-			if got != tt.want {
-				t.Errorf("FormatWalletAddress(%q) = %q, want %q", tt.address, got, tt.want)
-			}
-		})
-	}
-}
-
-// ---------------------------------------------------------------------------
-// GenerateRandomString
-// ---------------------------------------------------------------------------
-
-func TestGenerateRandomString(t *testing.T) {
-	t.Run("returns correct length", func(t *testing.T) {
-		lengths := []int{8, 16, 32, 64}
-		for _, l := range lengths {
-			s, err := GenerateRandomString(l)
-			if err != nil {
-				t.Fatalf("GenerateRandomString(%d) returned error: %v", l, err)
-			}
-			if len(s) != l {
-				t.Errorf("GenerateRandomString(%d) returned string of length %d, want %d", l, len(s), l)
-			}
-		}
-	})
-
-	t.Run("two calls produce different values", func(t *testing.T) {
-		s1, err := GenerateRandomString(32)
-		if err != nil {
-			t.Fatalf("first call returned error: %v", err)
-		}
-		s2, err := GenerateRandomString(32)
-		if err != nil {
-			t.Fatalf("second call returned error: %v", err)
-		}
-		if s1 == s2 {
-			t.Errorf("two calls to GenerateRandomString(32) produced the same value: %q", s1)
-		}
-	})
-
-	t.Run("returns hex characters only", func(t *testing.T) {
-		s, err := GenerateRandomString(32)
-		if err != nil {
-			t.Fatalf("GenerateRandomString(32) returned error: %v", err)
-		}
-		// hex.DecodeString requires even-length input; pad if needed
-		toDecode := s
-		if len(toDecode)%2 != 0 {
-			toDecode = toDecode + "0"
-		}
-		if _, err := hex.DecodeString(toDecode); err != nil {
-			t.Errorf("GenerateRandomString(32) returned non-hex string: %q, err: %v", s, err)
-		}
-	})
-
-	t.Run("length zero returns empty string", func(t *testing.T) {
-		s, err := GenerateRandomString(0)
-		if err != nil {
-			t.Fatalf("GenerateRandomString(0) returned error: %v", err)
-		}
-		if s != "" {
-			t.Errorf("GenerateRandomString(0) = %q, want empty string", s)
-		}
-	})
-
-	t.Run("length one returns single hex char", func(t *testing.T) {
-		s, err := GenerateRandomString(1)
-		if err != nil {
-			t.Fatalf("GenerateRandomString(1) returned error: %v", err)
-		}
-		if len(s) != 1 {
-			t.Errorf("GenerateRandomString(1) returned string of length %d, want 1", len(s))
-		}
-		// Must be a valid hex character
-		const hexChars = "0123456789abcdef"
-		if !strings.Contains(hexChars, s) {
-			t.Errorf("GenerateRandomString(1) = %q, not a valid hex character", s)
-		}
-	})
-}
-
-// ---------------------------------------------------------------------------
-// phantomAuthURL
-// ---------------------------------------------------------------------------
-
-func TestPhantomAuthURL(t *testing.T) {
-	t.Run("returns default when env var not set", func(t *testing.T) {
-		// Ensure the env var is not set
-		os.Unsetenv("ORAMA_PHANTOM_AUTH_URL")
-
-		got := phantomAuthURL()
-		if got != defaultPhantomAuthURL {
-			t.Errorf("phantomAuthURL() = %q, want default %q", got, defaultPhantomAuthURL)
-		}
-	})
-
-	t.Run("returns custom URL when env var is set", func(t *testing.T) {
-		custom := "https://custom-phantom.example.com"
-		os.Setenv("ORAMA_PHANTOM_AUTH_URL", custom)
-		defer os.Unsetenv("ORAMA_PHANTOM_AUTH_URL")
-
-		got := phantomAuthURL()
-		if got != custom {
-			t.Errorf("phantomAuthURL() = %q, want %q", got, custom)
-		}
-	})
-
-	t.Run("trailing slash stripped from env var", func(t *testing.T) {
-		custom := "https://custom-phantom.example.com/"
-		os.Setenv("ORAMA_PHANTOM_AUTH_URL", custom)
-		defer os.Unsetenv("ORAMA_PHANTOM_AUTH_URL")
-
-		got := phantomAuthURL()
-		want := "https://custom-phantom.example.com"
-		if got != want {
-			t.Errorf("phantomAuthURL() = %q, want %q (trailing slash should be stripped)", got, want)
-		}
-	})
-
-	t.Run("multiple trailing slashes stripped from env var", func(t *testing.T) {
-		custom := "https://custom-phantom.example.com///"
-		os.Setenv("ORAMA_PHANTOM_AUTH_URL", custom)
-		defer os.Unsetenv("ORAMA_PHANTOM_AUTH_URL")
-
-		got := phantomAuthURL()
-		want := "https://custom-phantom.example.com"
-		if got != want {
-			t.Errorf("phantomAuthURL() = %q, want %q (trailing slashes should be stripped)", got, want)
-		}
-	})
-}

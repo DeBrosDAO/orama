@@ -1,0 +1,67 @@
+syntax = "proto3";
+package orama.shielded.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/shielded/types";
+
+import "google/api/annotations.proto";
+import "gogoproto/gogo.proto";
+import "orama/shielded/v1/shielded.proto";
+
+// Query is the gRPC querier for x/shielded.
+service Query {
+  rpc Params(QueryParamsRequest) returns (QueryParamsResponse) {
+    option (google.api.http).get = "/orama/shielded/v1/params";
+  }
+  rpc Pools(QueryPoolsRequest) returns (QueryPoolsResponse) {
+    option (google.api.http).get = "/orama/shielded/v1/pools";
+  }
+  rpc TreeState(QueryTreeStateRequest) returns (QueryTreeStateResponse) {
+    option (google.api.http).get = "/orama/shielded/v1/tree-state";
+  }
+  rpc NullifierSpent(QueryNullifierSpentRequest) returns (QueryNullifierSpentResponse) {
+    option (google.api.http).get = "/orama/shielded/v1/nullifier-spent";
+  }
+  rpc Invariants(QueryInvariantsRequest) returns (QueryInvariantsResponse) {
+    option (google.api.http).get = "/orama/shielded/v1/invariants";
+  }
+}
+
+message QueryParamsRequest {}
+
+message QueryParamsResponse {
+  Params params = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryPoolsRequest {}
+
+message QueryPoolsResponse {
+  repeated PoolBalance pools = 1 [(gogoproto.nullable) = false];
+  repeated QueuedUnshield queue = 2 [(gogoproto.nullable) = false];
+}
+
+message QueryTreeStateRequest {}
+
+message QueryTreeStateResponse {
+  uint64 tree_size = 1;
+  bytes current_root = 2;
+  uint64 anchors = 3;
+  bytes nullifier_accumulator = 4;
+  uint64 nullifier_count = 5;
+}
+
+message QueryNullifierSpentRequest {
+  bytes nullifier = 1;
+}
+
+message QueryNullifierSpentResponse {
+  bool spent = 1;
+}
+
+message QueryInvariantsRequest {}
+
+message QueryInvariantsResponse {
+  bool balance_matches = 1;
+  bool pools_non_negative = 2;
+  bool accumulator_matches = 3;
+  string detail = 4;
+}

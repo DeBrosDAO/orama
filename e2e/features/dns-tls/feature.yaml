@@ -1,0 +1,58 @@
+# The cluster's own DNS and TLS as the internet meets them: every nameserver
+# asked directly for SOA, NS, glue, apex and wildcard records (TTLs, the
+# outward wildcard walk, case, UDP and TCP, no open recursion), namespace and
+# TURN host records, NODATA for a type a served name lacks, the negative cache
+# (authority SOA, never stale, gone in 30s) driven through real signed ACME
+# present/cleanup calls made on a node, every refusal of those endpoints (unsigned, foreign key, stale or replayed
+# stamp, a signed call sent twice, out-of-zone or malformed record), the base and wildcard certificates
+# on every node (staging on a provisioned fleet, production on stagenet), one
+# certificate for the whole cluster through the shared store, the store's
+# refusals and sealed values, the wildcard exported for TURN, TLS versions,
+# ALPN and SNI, plain HTTP
+# on :80, CoreDNS's account and empty /opt/orama, the delegation the CLI
+# prints, the TLS check and the custom-domain refusal. Serve-stale, the
+# Caddy-down withdrawal and the aux-units-down non-withdrawal are in
+# dns-tls-chaos, which runs alone.
+id: dns-tls
+title: DNS, nameservers and TLS at the edge
+area: network-edge
+subtasks: [2825]
+stage: 7
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  cli:
+    - orama node dns
+    - orama node dns delegation
+  routes:
+    - /v1/internal/acme/present
+    - /v1/internal/acme/cleanup
+    - /v1/internal/tls/check
+    - /v1/internal/tls-store
+  units:
+    - orama-namespace-caddy@.service
+    - orama-namespace-coredns@.service
+  claims:
+    - "website/src/docs/operator/nameserver.mdx#nameserver-slots: every glued slot is published as NS; the SOA names the lowest glued slot"
+    - "website/src/docs/operator/nameserver.mdx#nameserver-slots: a negative answer carries the zone's own SOA in its authority section"
+    - "website/src/docs/operator/nameserver.mdx#nameserver-slots: a name that exists (it owns a record of another type, or a wildcard covers it) without a record of the type asked is NOERROR with the SOA (NODATA), never NXDOMAIN"
+    - "website/src/docs/operator/nameserver.mdx#security-considerations: recursion answers loopback only; the node is not an open resolver"
+    - "website/src/docs/operator/nameserver.mdx#record-lifecycle-and-self-healing: ns-<ns>, its wildcard, turn.ns-<ns> and turn-<ns> name the nodes serving each role"
+    - "website/src/docs/operator/nameserver.mdx#seeing-which-address-holds-which-slot: orama node dns delegation prints the records the zone publishes"
+    - "website/src/docs/operator/nameserver.mdx#seeing-which-address-holds-which-slot: the delegation check says delegated or names each missing or misdirected NS and glue record"
+    - "docs/whitepaper/technical-reference/vol1/25-tls-and-certificates.md#dns-01-through-the-gateway: present/cleanup need a MAC over method, path and body under the ACME key; source address grants nothing"
+    - "docs/whitepaper/technical-reference/vol1/25-tls-and-certificates.md#dns-01-through-the-gateway: a signed present or cleanup is good for one call; a replay inside its window is refused (404)"
+    - "docs/whitepaper/technical-reference/vol1/05-privilege-and-filesystem-trust.md#per-service-accounts: a coordination v3 stamp is good only at the port it was made for, so one made for a sibling gateway process on the node is refused (404)"
+    - "docs/whitepaper/technical-reference/vol1/25-tls-and-certificates.md#dns-01-through-the-gateway: a signed call writes only an _acme-challenge record under the base domain with a 43-char DNS-01 value"
+    - "website/src/docs/contributor/architecture-reference.mdx#tlshttps: ACME DNS-01 certificates for the base and wildcard, TLS 1.2+, HTTP/1.1 only"
+    - "website/src/docs/contributor/architecture-reference.mdx#tlshttps: the TLS check allows only the base domain and its subdomains"
+    - "website/src/docs/contributor/architecture-reference.mdx#tlshttps: one certificate per cluster, kept in the shared store; every node serves the same one"
+    - "docs/whitepaper/technical-reference/vol1/05-privilege-and-filesystem-trust.md#per-service-accounts: the store answers only Caddy's stamp (no stamp, a foreign key or a replay is 404) and holds values sealed"
+    - "docs/whitepaper/technical-reference/vol1/05-privilege-and-filesystem-trust.md#per-service-accounts: the *.<base> pair is exported for TURN to data/tls, orama 0600, and is the one the nodes serve"
+    - "docs/whitepaper/technical-reference/vol1/05-privilege-and-filesystem-trust.md#per-service-accounts: CoreDNS runs as orama-coredns with /opt/orama an empty read-only tmpfs; Corefile root:orama-coredns 0640"
+    - "docs/whitepaper/technical-reference/vol1/20-pubsub.md#pubsub: Caddy's admin API is a 0600 unix socket in a 0700 runtime directory"
+    - "website/src/docs/contributor/architecture-reference.mdx#network-security-wireguard-mesh: port 53 is served and opened on nameservers only"
+    - "website/src/docs/operator/monitoring.mdx#public-status-page: a custom domain equal to (or under) the base domain is refused"

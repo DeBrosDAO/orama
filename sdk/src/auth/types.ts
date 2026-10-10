@@ -3,10 +3,27 @@ export interface AuthConfig {
   jwt?: string;
 }
 
+/**
+ * The answer from `GET /v1/auth/whoami`.
+ *
+ * `method` says which credential the gateway used to identify the caller, and
+ * `subject` is the wallet address or API key id behind it. Both were missing
+ * from this type while the gateway had been returning them all along.
+ */
 export interface WhoAmI {
-  address?: string;
-  namespace?: string;
   authenticated: boolean;
+  /** Which credential was used: a session token or an API key. */
+  method?: "jwt" | "api_key";
+  /** Wallet address (JWT) or key subject. */
+  subject?: string;
+  namespace?: string;
+  issuer?: string;
+  audience?: string;
+  issued_at?: number;
+  not_before?: number;
+  expires_at?: number;
+  /** @deprecated The gateway does not return this; use `subject`. */
+  address?: string;
 }
 
 export interface StorageAdapter {

@@ -1,0 +1,36 @@
+# Stage 8: `orama chain`, the read-only chain commands, against the run's
+# co-hosted chain. --rpc and --node reach a validator's loopback RPC and REST
+# API through an SSH tunnel (the chain listens on loopback only); the default
+# read path is the environment's gateway /v1/chain/ proxy. status and
+# validator list are checked against the run's chain id and validator set,
+# balance against the node's own bank query, earnings against the epochs'
+# payouts, node against a registered node's record, query --list against the
+# query services chain/proto declares, and every refusal (a malformed address,
+# a deal id that is not a number, an unknown query, a dead --rpc, a key not on
+# chain) for its exit code and message. The generic conformance checks run on
+# every `orama chain` command.
+id: chain-cli
+title: orama chain - status, balances, earnings, nodes, deals, queries
+area: cli
+subtasks: []
+stage: 8
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: true
+covers:
+  cli:
+    - orama chain
+    - orama chain balance
+    - orama chain deal
+    - orama chain earnings
+    - orama chain node
+    - orama chain query
+    - orama chain status
+    - orama chain validator
+  claims:
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-chain: every command only reads, except faucet (chain-faucet); --rpc reads a node's CometBFT RPC, --node its REST API, the gateway its /v1/chain/ proxy"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-chain-balance: the spendable bank balance; earnings are a separate account"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-chain-query: orama chain query --list prints every query the CLI knows"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-chain-deal: REFUSAL PATHS ONLY: a deal that does not exist is a failed read; the run chain funds no deal (trigger: a funding path exists; the faucet is one now, features/internal/chain/funds.go)"

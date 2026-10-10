@@ -1,0 +1,162 @@
+# Build and sign
+
+Orama nodes never compile anything. You build one **archive** on your own computer (or take a published release, below), and every node unpacks it. The archive is signed with your RootWallet key, and a node installs it only if the signer is in its trust list.
+
+This page covers the build, the signature, the trust anchor, how to rotate who is trusted, and the published-release path that needs no build and no signature of yours: a release signed by the DeBros release root.
+
+## Build
+
+Run it from the `core/` directory of a checkout of the Orama repository. The command looks upward from the current directory for a `go.mod` that has `cmd/orama` beside it.
+
+```bash
+cd orama/core
+orama maint build
+```
+
+The first thing it does is ask RootWallet for the active account (a locked or missing wallet fails in seconds, before anything compiles; the approval prompt at signing waits up to two and a half minutes). Then it cross-compiles:
+
+1. the Orama binaries (CLI, node, privileged helper, gateway, identity, SFU, TURN, SNI router, pubsub)
+2. the vault guardian (Zig)
+3. Olric
+4. IPFS Cluster
+5. CoreDNS with the RQLite plugin
+6. Caddy with the Orama DNS and certificate-storage modules, from the repository's `caddy/` module
+7. downloads the pinned IPFS Kubo and RQLite releases
+8. copies the systemd unit templates
+9. on amd64, the **global layer**: `oramad` (built with the Orchard verifier library) and the out-of-process verifier it pins, `orama-global`, and the pinned cosmovisor release, which `orama global install` puts on a node. The verifier's digest file must be the verifier's and `oramad` must pin it, or the build stops
+
+It then writes `manifest.json` (the SHA-256 of every file in the archive), signs it, and creates the archive. A build takes several minutes the first time.
+
+```text
+  Signed.
+
+Build complete in 6m12s
+Archive: /tmp/orama-0.3.0-linux-amd64.tar.gz
+```
+
+**Keep that path.** Every later command takes it as `--archive`. There is no default, because the newest archive in `/tmp` may be another checkout's build.
+
+### Flags
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--arch` | `amd64` | `amd64` or `arm64`. Must match the nodes |
+| `--output` | `/tmp/orama-<version>-linux-<arch>.tar.gz` | Where to write the archive |
+| `--signers` | none | Rotate the trusted signers (below) |
+| `--release-root` | none | Put a TUF release root, from a `root.json`, in the signed manifest. A node that installs the build adopts it (below) |
+| `--skip-global-layer` | false | Leave out the global layer (oramad, its verifier, orama-global, cosmovisor): a cluster-only archive. arm64 archives are always cluster-only, because the chain builds for amd64 only |
+| `--unsigned` | false | Make an archive without a wallet signature: the CI build that release signers sign. A node installs it only through its adopted release root; otherwise it is for local inspection only |
+| `--verbose` | false | Show the underlying build output |
+
+### Prerequisites
+
+Go 1.27.2 or newer, Zig 0.15.x (the vault builds with exactly the minor release named in `vault/build.zig.zon`; `ORAMA_ZIG` points at a specific binary), `git` (CoreDNS is fetched at its pinned commit), for the global layer `make`, `cargo`, `rsync` and `rustup` with the `x86_64-unknown-linux-musl` target, internet access, and the RootWallet desktop app unlocked. See [What you need](/docs/operator/getting-started#3-your-own-computer).
+
+Common build failures:
+
+| Message | Fix |
+|---|---|
+| `could not find project root (no go.mod with cmd/orama found)` | Run from inside `core/` of the checkout |
+| `zig not found in PATH` | Install Zig 0.15.x, or set `ORAMA_ZIG` |
+| `the global layer … needs cargo, rustup on PATH` or `rustup does not have that target` | Install rustup and run `rustup target add x86_64-unknown-linux-musl`, or pass `--skip-global-layer` |
+| `the built oramad does not pin the verifier's digest` | The chain build is inconsistent. Rebuild the chain (`make -C chain build-linux-amd64-full`) |
+| `the archive is signed with your RootWallet, and its agent did not answer` | Open the RootWallet desktop app and unlock it |
+
+### Reproducible builds
+
+Two builds of one commit give the same archive, byte for byte, so the people who sign a release can each rebuild it and compare hashes before they sign. Set `SOURCE_DATE_EPOCH` to the commit's time, `export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)`; without it the build date is the time of the build. The Go binaries are built with `-trimpath` and no build id; the third-party programs (Olric, IPFS Cluster, Caddy) are built from modules checked in to the repository, each with a pinned `go.sum`, and `go build -mod=readonly` refuses a module the `go.sum` does not list. CoreDNS is cloned at its tag and refused unless the checkout is the commit pinned in the source. Kubo and RQLite are downloaded and refused unless their SHA-256 equals the pinned digest. The environment cannot switch verification off: `GOFLAGS`, `GOSUMDB`, `GOPRIVATE` and similar variables are removed from every `go` command the build runs. The details are in [Deployment](/docs/contributor/deployment#reproducible-builds).
+
+## What gets signed
+
+RootWallet asks you to approve `orama` for archive signing the first time, separately from ordinary message signing. The approval window shows the build's version, commit, date and signer rotation. The message signed (EIP-191 `personal_sign`) is:
+
+```text
+Orama build archive v1
+version: <version>
+commit: <commit>
+arch: <arch>
+date: <build date, RFC 3339>
+signers: <the --signers rotation, or none>
+manifest sha256: <hex SHA-256 of manifest.json exactly as archived>
+```
+
+The fixed first line means a signature your wallet gave any other application can never pass as a build signature. The manifest lists every file the archive carries, so nothing in the archive is outside the signature. The build verifies the signature with the same code every node runs before it writes the archive.
+
+## The trust anchor
+
+Every node keeps the list of trusted addresses in `/etc/orama/archive-signers`: root-owned, mode 0644, in a root-only directory, one lowercase `0x` address per line. There is no unsigned mode, no source-build mode and no built-in signer. A cluster trusts its operator's wallet and nothing else.
+
+- On the **genesis** node the file is created from `--operator-wallet` (which `orama node setup` fills in with your active RootWallet account) before the archive is verified. So the first archive must be signed by that same account.
+- On a **joining** node the list comes from the cluster in the join response. If the cluster trusts more, or other, signers than you expect, the join is refused with a 409 and the invite is not used. Joining with `orama node setup --join-via` reads the expectation from that node.
+- `orama node setup` verifies the archive on your machine against the operator account **before** uploading anything, because a new machine has no verified binary of its own to check with.
+- A node can also trust a **release root**: the TUF key set of the DeBros release repository, adopted into `/etc/orama/release-root.json`. A network's manifest pins the root's SHA-256 and the CLI embeds the root, so setup hands it to the node (or it arrives in an archive built with `--release-root`, or with `sudo orama node trust add-root root.json` on one node). With a root, a node accepts an unsigned release whose TUF metadata verifies against it (`orama maint node stage-archive --release-only`) **with no signature of yours at all**, and records in `/etc/orama/release-staged.json` that it did. The root is also how the repository's keys change: it publishes numbered root files, each signed by the previous root's keys, and a node follows them to the newest. A release that names signers or a root of its own is never accepted this way. Your own wallet-signed builds stay the maintainers' and the custom-build path.
+
+Each node verifies an archive with its installed `orama` before anything under `/opt/orama` changes: the signature must recover to a trusted address and every file must match the manifest.
+
+## Rotating who is trusted
+
+To add or replace a signer, make a new build with `--signers`. Nodes that install it replace their list with the addresses you give.
+
+```bash
+orama maint build --signers 0xYourWallet,0xNewOperator
+```
+
+Rules:
+
+- The build must be signed by a signer the nodes trust **now**, and the new list must include that signer ("leaves out its own signer" is the error otherwise).
+- Retiring a key therefore takes two builds: the old key adds the new one, then the new key drops the old one.
+- A node refuses a rotation older than one it already took ("an old build is being replayed").
+- A node whose clock is behind the build refuses it; fix the clock and rebuild.
+
+Nodes installed before archives were signed have no anchor. Push once with `orama maint push --trust-signers <your address>`, which creates the anchor and never changes an existing one.
+
+## Who holds the release key
+
+Today **one release key holds every role** of the release root: root, targets, snapshot and timestamp, at threshold 1. It is the owner's RootWallet key, and the RootWallet approves each signature in its desktop app; that is the only custody the wallet offers now, and per-role keys are planned on the RootWallet side. What that means:
+
+- Whoever holds the key, or can make the RootWallet approve a signature, can publish a release that every node and every cluster's auto-update accepts. Nothing else stands between a compromised key and the fleet.
+- The same key is the only one that can sign the next root. A compromise is recovered by a new root, pinned by hand in every network manifest and shipped in a new CLI; there is no rotation that the old key does not sign.
+- `orama maint release renew-root` keeps the keys and extends the year. Changing the key needs a root signed by the old and by the new keys, which no command collects yet.
+
+`orama maint release init-root --keys <file>` is ready for the day the custody is split. The file names, per role, the keys (64 hex digits of an ed25519 public key, or `"wallet"` for your own release key) and the threshold:
+
+```json
+{
+  "root":    { "keys": ["wallet"] },
+  "targets": { "keys": ["<hex>", "<hex>"], "threshold": 2 }
+}
+```
+
+A role that is left out is your release key at threshold 1, so without `--keys` the root is the one above. The command signs the root once, with your key, so your key must be among the root keys and the root threshold must be 1; a root that needs more signatures has to be signed by the other holders.
+
+**How a rotation reaches a node.** A node that follows its release repository (`orama node autoupdate`) walks `2.root.json`, `3.root.json` and so on, accepting each only when the previous root's keys signed it. A release that `orama upgrade` stages on a node carries the root it was verified under: a node that has no root adopts it, a node that holds the same root does nothing, and a node whose root is the version before it takes the pushed root through `orama node trust add-root --rotate`, which checks the signatures against the root the node holds, never on the pusher's word. A node more than one version behind, or on a release that does not know `--rotate`, refuses the push and says so; run the push once per rotation, or let the node's auto-update catch up.
+
+## Install a published release
+
+The DeBros release repository (`https://releases.orama.network/`) publishes the releases of three channels: `nightly` (the stagenet), `main` (the future testnet) and `dev/<branch>`. Each release is signed by the project's TUF release root with the owner's RootWallet key; the archives are GitHub release assets that the repository redirects to, and every byte is checked against the signed length and hashes.
+
+You need no build and your wallet signs nothing. A network's manifest names the repository, the channel, the minimum version and the SHA-256 of the root it trusts; the root itself ships inside the CLI. To install, the CLI:
+
+1. checks that the embedded root has the pinned digest;
+2. asks for `2.root.json`, `3.root.json` and so on until the repository answers 404, accepting each only when the previous root's keys signed it, so a root rotation or renewal needs no new CLI;
+3. verifies the channel's metadata (every role at its threshold, an unexpired timestamp, a snapshot no older than the newest your machine has accepted, recorded in `~/.orama/release-seen.json`);
+4. downloads the newest archive for the node's architecture and checks its length and hashes;
+5. puts the root on the node and stages the archive with `orama maint node stage-archive --release-only`.
+
+The same path keeps a running cluster current (`orama node autoupdate`, which also follows root rotations: it asks the repository for the next root version and adopts it only when the root the node holds signed it). A timestamp that has expired is refused as a freeze, so a repository nobody has refreshed for a week (nightly) or a month (main) stops offering releases until its maintainer refreshes it.
+
+`orama node setup --release <version> --release-repo <url> --release-root <root.json>` is the older form of this: it verifies on your computer and then has **your** RootWallet sign the archive, so the cluster trusts your wallet for what it installs and also the root. Use it for a repository that is not a network's.
+
+## Errors a node can give
+
+| Message | Meaning and fix |
+|---|---|
+| `is unsigned` | Built with `--unsigned`, or `manifest.sig` is missing. Rebuild with `orama maint build`, unless the node accepts it as a release through its release root |
+| `signed by 0x…, which this node does not trust` | The signing account is not in `/etc/orama/archive-signers`. Build with a trusted account active, or rotate |
+| `does not match the signed manifest` / `not in its signed manifest` | The archive was changed after signing. Rebuild. If it happens only on fanned-out nodes, suspect the hub |
+| `no archive trust anchor` | The node predates signed archives. Push once with `--trust-signers` |
+| `a genesis install needs --operator-wallet` | Pass the wallet that signed the archive |
+| `the archive is built for linux/X and the node is linux/Y: build with --arch Y` | `orama node setup` prints this in its own check before uploading. A node's push, rotation and join print `… and this node is linux/Y` instead. Either way, build with `--arch` matching the node |
+| `no build archive at /opt/orama` | Nothing was pushed or set up there. Install and upgrade never compile on the node |
+
+More in [Troubleshooting](/docs/operator/troubleshooting#binary-signature-verification-fails).

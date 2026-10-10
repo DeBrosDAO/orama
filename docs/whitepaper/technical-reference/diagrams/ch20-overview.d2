@@ -1,0 +1,32 @@
+direction: right
+
+clients: "Clients" {
+  ws: "Subscriber (WebSocket)" {shape: person}
+  pub: "Publisher (HTTPS)" {shape: person}
+}
+
+node: "One node" {
+  nsgw: "Namespace gateway\n(per tenant)\nhandlers/pubsub + presence map"
+  fn: "Serverless engine\n(PubSubDispatcher, host functions)"
+  idxgw: "Index gateway\nPubsubMesh (every 15 s)"
+  sock: "unix socket\n/run/orama-pubsub/pubsub.sock\n0600, SO_PEERCRED uid check" {shape: queue}
+  svc: "orama-namespace-pubsub@index\npkg/pubsub: Manager, Handler, Mesh" {
+    mgr: "Manager\ntopic ns.topic -> handlers"
+    gs: "GossipSub host\nFloodPublish on, peer exchange off"
+    gate: "OverlayGater\noverlay TCP + allowlist"
+    mgr -> gs
+    gs -> gate
+  }
+  nsgw -> sock: "HTTP /publish /subscribe /topics" 
+  idxgw -> sock: "GET /mesh/self, POST /mesh/peers"
+  fn -> nsgw: "same process"
+  sock -> svc.mgr
+}
+
+reg: "Index RQLite\n_pubsub_mesh_peers" {shape: cylinder}
+other: "Pubsub services on the other nodes" 
+
+clients.pub -> node.nsgw: "POST /v1/pubsub/publish"
+clients.ws -> node.nsgw: "GET /v1/pubsub/ws"
+node.idxgw -> reg: "register self, read peers (SQL)"
+node.svc.gs -> other: "libp2p TCP + Noise over WireGuard 10.0.0.x"

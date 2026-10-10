@@ -1,0 +1,20 @@
+shape: sequence_diagram
+
+o: "owner's machine\norama namespace restore"
+g: "destination gateway\nbackup.Handler"
+r: "namespace RQLite"
+i: "IPFS Cluster"
+
+o -> g: "GET /v1/namespace/restore-key\n(orama namespace restore-key, a separate command)"
+g -> o: "X25519 public key =\nHKDF(root IKM, orama-restore-v1:ns)"
+o -> o: "Open ORBK with private key,\ncheck namespace, SHA-256, limits"
+o -> o: "re-seal each secret to the key\npassed as --dest-key (ORNR frame)"
+o -> g: "POST /v1/namespace/restore (<= frame limit)"
+g -> g: "owner, slot, parse frame, namespace match"
+g -> g: "plan: Batch probe, open secrets,\nimage check, quota check (nothing written)"
+g -> r: "POST /db/load (replaces every row)"
+g -> r: "scrub triggers, plaintext keys,\nforeign ownership; put quota row back"
+g -> r: "UPDATE secrets re-encrypted under\nthis cluster's root (atomic batches)"
+g -> g: "recheck quota on restored table"
+g -> i: "pin every CID (8 at a time, 10 min)"
+g -> o: "200 {rqlite_bytes, pins, secrets,\nsecrets_without_row}"

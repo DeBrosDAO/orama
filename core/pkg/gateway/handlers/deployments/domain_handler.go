@@ -8,17 +8,31 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/deployments"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
+
+// domainStatusSQL derives a domain's status. The table has no status column:
+// a domain is verified exactly when verified_at is set, which is also what the
+// gateway's host routing requires before it serves the domain.
+const domainStatusSQL = `CASE WHEN dd.verified_at IS NULL THEN 'pending' ELSE 'verified' END`
+
+// pendingDomainTTL is how long an unverified custom-domain row holds its name
+// against other namespaces' adds. After that an add replaces it.
+const pendingDomainTTL = 72 * time.Hour
 
 // DomainHandler handles custom domain management
 type DomainHandler struct {
 	service *DeploymentService
 	logger  *zap.Logger
+	// lookupTXT resolves a TXT record; nil is the system resolver. A test
+	// sets it to stand in for DNS.
+	lookupTXT func(ctx context.Context, name string) ([]string, error)
 }
 
 // NewDomainHandler creates a new domain handler
@@ -31,6 +45,9 @@ func NewDomainHandler(service *DeploymentService, logger *zap.Logger) *DomainHan
 
 // HandleAddDomain adds a custom domain to a deployment
 func (h *DomainHandler) HandleAddDomain(w http.ResponseWriter, r *http.Request) {
+	if !allowMethod(w, r, http.MethodPost) {
+		return
+	}
 	ctx := r.Context()
 	namespace := getNamespaceFromContext(ctx)
 	if namespace == "" {
@@ -68,7 +85,9 @@ func (h *DomainHandler) HandleAddDomain(w http.ResponseWriter, r *http.Request) 
 
 	// Check if domain is reserved (using configured base domain)
 	baseDomain := h.service.BaseDomain()
-	if strings.HasSuffix(domain, "."+baseDomain) {
+	// The apex serves the platform's own pages (the status page), and its
+	// subdomains are the platform's to hand out.
+	if domain == baseDomain || strings.HasSuffix(domain, "."+baseDomain) {
 		http.Error(w, fmt.Sprintf("Cannot use .%s domains as custom domains", baseDomain), http.StatusBadRequest)
 		return
 	}
@@ -93,32 +112,45 @@ func (h *DomainHandler) HandleAddDomain(w http.ResponseWriter, r *http.Request) 
 	// Generate verification token
 	token := generateVerificationToken()
 
-	// Check if domain already exists
-	var existingCount int
-	checkQuery := `SELECT COUNT(*) FROM deployment_domains WHERE domain = ?`
-	var counts []struct {
-		Count int `db:"count"`
-	}
-	err = h.service.db.Query(ctx, &counts, checkQuery, domain)
-	if err == nil && len(counts) > 0 {
-		existingCount = counts[0].Count
-	}
-
-	if existingCount > 0 {
-		http.Error(w, "Domain already in use", http.StatusConflict)
-		return
-	}
-
-	// Insert domain record
+	// One statement claims the domain, so two adds racing for it cannot both
+	// win and none meets the UNIQUE constraint as a 500. A verified row, or a
+	// pending row of this namespace that has not expired, blocks the add. A
+	// pending row of another namespace, or an expired one, proves nothing and
+	// is superseded in place: the last add holds the row and only its token
+	// verifies.
 	query := `
-		INSERT INTO deployment_domains (deployment_id, domain, verification_token, verification_status, created_at)
-		VALUES (?, ?, ?, 'pending', ?)
+		INSERT INTO deployment_domains (id, deployment_id, namespace, domain, is_custom, verification_token, created_at, updated_at)
+		VALUES (?, ?, ?, ?, TRUE, ?, ?, ?)
+		ON CONFLICT(domain) DO UPDATE SET
+			id = excluded.id,
+			deployment_id = excluded.deployment_id,
+			namespace = excluded.namespace,
+			is_custom = TRUE,
+			verification_token = excluded.verification_token,
+			routing_type = 'balanced',
+			node_id = NULL,
+			tls_cert_cid = NULL,
+			created_at = excluded.created_at,
+			updated_at = excluded.updated_at
+		WHERE deployment_domains.verified_at IS NULL
+		  AND (deployment_domains.namespace != excluded.namespace
+		       OR datetime(deployment_domains.created_at) < datetime(?))
 	`
 
-	_, err = h.service.db.Exec(ctx, query, deployment.ID, domain, token, time.Now())
+	now := time.Now()
+	res, err := h.service.db.Exec(ctx, query, uuid.New().String(), deployment.ID, namespace, domain, token, now, now, now.Add(-pendingDomainTTL))
 	if err != nil {
 		h.logger.Error("Failed to insert domain", zap.Error(err))
 		http.Error(w, "Failed to add domain", http.StatusInternalServerError)
+		return
+	}
+	if n, err := res.RowsAffected(); err != nil || n == 0 {
+		if err != nil {
+			h.logger.Error("Failed to read the domain insert's result", zap.Error(err))
+			http.Error(w, "Failed to add domain", http.StatusInternalServerError)
+			return
+		}
+		http.Error(w, "Domain already in use", http.StatusConflict)
 		return
 	}
 
@@ -150,6 +182,9 @@ func (h *DomainHandler) HandleAddDomain(w http.ResponseWriter, r *http.Request) 
 
 // HandleVerifyDomain verifies domain ownership via TXT record
 func (h *DomainHandler) HandleVerifyDomain(w http.ResponseWriter, r *http.Request) {
+	if !allowMethod(w, r, http.MethodPost) {
+		return
+	}
 	ctx := r.Context()
 	namespace := getNamespaceFromContext(ctx)
 	if namespace == "" {
@@ -183,7 +218,7 @@ func (h *DomainHandler) HandleVerifyDomain(w http.ResponseWriter, r *http.Reques
 
 	var rows []domainRow
 	query := `
-		SELECT dd.deployment_id, dd.verification_token, dd.verification_status
+		SELECT dd.deployment_id, dd.verification_token, ` + domainStatusSQL + ` AS verification_status
 		FROM deployment_domains dd
 		JOIN deployments d ON dd.deployment_id = d.id
 		WHERE dd.domain = ? AND d.namespace = ?
@@ -210,7 +245,7 @@ func (h *DomainHandler) HandleVerifyDomain(w http.ResponseWriter, r *http.Reques
 
 	// Verify TXT record
 	txtRecord := fmt.Sprintf("_orama-verify.%s", domain)
-	verified := h.verifyTXTRecord(txtRecord, domainRecord.VerificationToken)
+	verified := h.verifyTXTRecord(ctx, txtRecord, domainRecord.VerificationToken)
 
 	if !verified {
 		http.Error(w, "Verification failed: TXT record not found or doesn't match", http.StatusBadRequest)
@@ -220,19 +255,38 @@ func (h *DomainHandler) HandleVerifyDomain(w http.ResponseWriter, r *http.Reques
 	// Update status (scoped to deployment_id for defense-in-depth)
 	updateQuery := `
 		UPDATE deployment_domains
-		SET verification_status = 'verified', verified_at = ?
-		WHERE domain = ? AND deployment_id = ?
+		SET verified_at = ?, updated_at = ?
+		WHERE domain = ? AND deployment_id = ? AND verified_at IS NULL AND verification_token = ?
 	`
 
-	_, err = h.service.db.Exec(ctx, updateQuery, time.Now(), domain, domainRecord.DeploymentID)
+	// The claim can be superseded while the TXT lookup runs; only the claim
+	// whose token was checked is marked verified.
+	now := time.Now()
+	res, err := h.service.db.Exec(ctx, updateQuery, now, now, domain, domainRecord.DeploymentID, domainRecord.VerificationToken)
 	if err != nil {
 		h.logger.Error("Failed to update verification status", zap.Error(err))
 		http.Error(w, "Failed to update verification status", http.StatusInternalServerError)
 		return
 	}
+	if n, err := res.RowsAffected(); err != nil || n == 0 {
+		if err != nil {
+			h.logger.Error("Failed to read the verification update's result", zap.Error(err))
+			http.Error(w, "Failed to update verification status", http.StatusInternalServerError)
+			return
+		}
+		http.Error(w, "The domain's claim changed while it was being verified; add it again", http.StatusConflict)
+		return
+	}
 
-	// Create DNS record for the domain
-	go h.createDNSRecord(ctx, domain, domainRecord.DeploymentID)
+	// Write the A record before answering. A goroutine on the request
+	// context cancelled as soon as this handler returned, so "verified"
+	// often meant no DNS row.
+	if err := h.createDNSRecord(ctx, domain, domainRecord.DeploymentID); err != nil {
+		h.logger.Error("Failed to create DNS record for verified domain",
+			zap.String("domain", domain), zap.Error(err))
+		http.Error(w, "Failed to create DNS record", http.StatusInternalServerError)
+		return
+	}
 
 	h.logger.Info("Domain verified successfully",
 		zap.String("domain", domain),
@@ -251,6 +305,9 @@ func (h *DomainHandler) HandleVerifyDomain(w http.ResponseWriter, r *http.Reques
 
 // HandleListDomains lists all domains for a deployment
 func (h *DomainHandler) HandleListDomains(w http.ResponseWriter, r *http.Request) {
+	if !allowMethod(w, r, http.MethodGet) {
+		return
+	}
 	ctx := r.Context()
 	namespace := getNamespaceFromContext(ctx)
 	if namespace == "" {
@@ -259,36 +316,46 @@ func (h *DomainHandler) HandleListDomains(w http.ResponseWriter, r *http.Request
 	}
 	deploymentName := r.URL.Query().Get("deployment_name")
 
-	if deploymentName == "" {
-		http.Error(w, "deployment_name query parameter is required", http.StatusBadRequest)
-		return
-	}
-
-	// Get deployment
-	deployment, err := h.service.GetDeployment(ctx, namespace, deploymentName)
-	if err != nil {
-		http.Error(w, "Deployment not found", http.StatusNotFound)
-		return
-	}
-
-	// Query domains
+	// Query domains. Without a deployment_name this lists every domain in the
+	// namespace, which is what an operator asking "what domains do I have"
+	// wants; naming a deployment narrows it to that one. It used to reject the
+	// request, so answering that question meant listing the deployments first
+	// and calling this once per deployment.
 	type domainRow struct {
+		DeploymentName     string     `db:"name"`
 		Domain             string     `db:"domain"`
 		VerificationStatus string     `db:"verification_status"`
 		CreatedAt          time.Time  `db:"created_at"`
 		VerifiedAt         *time.Time `db:"verified_at"`
 	}
 
-	var rows []domainRow
 	query := `
-		SELECT domain, verification_status, created_at, verified_at
-		FROM deployment_domains
-		WHERE deployment_id = ?
-		ORDER BY created_at DESC
+		SELECT d.name, dd.domain, ` + domainStatusSQL + ` AS verification_status, dd.created_at, dd.verified_at
+		FROM deployment_domains dd
+		JOIN deployments d ON dd.deployment_id = d.id
+		WHERE d.namespace = ?
+		ORDER BY dd.created_at DESC
 	`
+	args := []interface{}{namespace}
 
-	err = h.service.db.Query(ctx, &rows, query, deployment.ID)
-	if err != nil {
+	if deploymentName != "" {
+		deployment, err := h.service.GetDeployment(ctx, namespace, deploymentName)
+		if err != nil {
+			http.Error(w, "Deployment not found", http.StatusNotFound)
+			return
+		}
+		query = `
+			SELECT d.name, dd.domain, ` + domainStatusSQL + ` AS verification_status, dd.created_at, dd.verified_at
+			FROM deployment_domains dd
+			JOIN deployments d ON dd.deployment_id = d.id
+			WHERE d.namespace = ? AND dd.deployment_id = ?
+			ORDER BY dd.created_at DESC
+		`
+		args = append(args, deployment.ID)
+	}
+
+	var rows []domainRow
+	if err := h.service.db.Query(ctx, &rows, query, args...); err != nil {
 		h.logger.Error("Failed to query domains", zap.Error(err))
 		http.Error(w, "Failed to query domains", http.StatusInternalServerError)
 		return
@@ -297,6 +364,7 @@ func (h *DomainHandler) HandleListDomains(w http.ResponseWriter, r *http.Request
 	domains := make([]map[string]interface{}, len(rows))
 	for i, row := range rows {
 		domains[i] = map[string]interface{}{
+			"deployment_name":     row.DeploymentName,
 			"domain":              row.Domain,
 			"verification_status": row.VerificationStatus,
 			"created_at":          row.CreatedAt,
@@ -318,6 +386,9 @@ func (h *DomainHandler) HandleListDomains(w http.ResponseWriter, r *http.Request
 
 // HandleRemoveDomain removes a custom domain
 func (h *DomainHandler) HandleRemoveDomain(w http.ResponseWriter, r *http.Request) {
+	if !allowMethod(w, r, http.MethodDelete, http.MethodPost) {
+		return
+	}
 	ctx := r.Context()
 	namespace := getNamespaceFromContext(ctx)
 	if namespace == "" {
@@ -384,6 +455,25 @@ func (h *DomainHandler) HandleRemoveDomain(w http.ResponseWriter, r *http.Reques
 	json.NewEncoder(w).Encode(resp)
 }
 
+// allowMethod rejects a request whose method is not one of allowed, and sets
+// Allow so a client is told what the endpoint takes.
+//
+// These endpoints accepted any method: `list` and `remove` read query
+// parameters, so a GET to `remove` deleted the domain, and the docs and the
+// website disagreed about which verb each one took because nothing enforced an
+// answer. Remove takes DELETE, and POST as well because that is what the
+// deployment guide has told people to send.
+func allowMethod(w http.ResponseWriter, r *http.Request, allowed ...string) bool {
+	for _, m := range allowed {
+		if r.Method == m {
+			return true
+		}
+	}
+	w.Header().Set("Allow", strings.Join(allowed, ", "))
+	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	return false
+}
+
 // Helper functions
 
 func generateVerificationToken() string {
@@ -392,23 +482,52 @@ func generateVerificationToken() string {
 	return "orama-verify-" + hex.EncodeToString(bytes)
 }
 
+// domainLabel is one DNS label: letters, digits and inner hyphens, 1 to 63.
+var domainLabel = regexp.MustCompile(`^(?i)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+
+// isValidDomain reports whether domain is a hostname a deployment can be
+// served at: at least two labels, each a DNS label, and a top-level label
+// that is not all digits (that would be an IP address). The name reaches the
+// proxy's configuration and DNS, so anything else is refused rather than
+// stored: "-bad-.com" used to be accepted, and so was any character inside a
+// label.
 func isValidDomain(domain string) bool {
-	// Basic domain validation
 	if len(domain) == 0 || len(domain) > 253 {
 		return false
 	}
-	if strings.Contains(domain, "..") || strings.HasPrefix(domain, ".") || strings.HasSuffix(domain, ".") {
+	labels := strings.Split(domain, ".")
+	if len(labels) < 2 {
 		return false
 	}
-	parts := strings.Split(domain, ".")
-	if len(parts) < 2 {
-		return false
+	for _, l := range labels {
+		if !domainLabel.MatchString(l) {
+			return false
+		}
+	}
+	return !allDigits(labels[len(labels)-1])
+}
+
+func allDigits(s string) bool {
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
 	}
 	return true
 }
 
-func (h *DomainHandler) verifyTXTRecord(record, expectedValue string) bool {
-	txtRecords, err := net.LookupTXT(record)
+// txtLookupTimeout bounds the DNS lookup a verify makes on a domain the
+// tenant chose; a slow authoritative server must not hold the request.
+const txtLookupTimeout = 5 * time.Second
+
+func (h *DomainHandler) verifyTXTRecord(ctx context.Context, record, expectedValue string) bool {
+	ctx, cancel := context.WithTimeout(ctx, txtLookupTimeout)
+	defer cancel()
+	lookup := h.lookupTXT
+	if lookup == nil {
+		lookup = net.DefaultResolver.LookupTXT
+	}
+	txtRecords, err := lookup(ctx, record)
 	if err != nil {
 		h.logger.Warn("Failed to lookup TXT record",
 			zap.String("record", record),
@@ -426,7 +545,7 @@ func (h *DomainHandler) verifyTXTRecord(record, expectedValue string) bool {
 	return false
 }
 
-func (h *DomainHandler) createDNSRecord(ctx context.Context, domain, deploymentID string) {
+func (h *DomainHandler) createDNSRecord(ctx context.Context, domain, deploymentID string) error {
 	// Get deployment node IP
 	type deploymentRow struct {
 		HomeNodeID string `db:"home_node_id"`
@@ -435,9 +554,11 @@ func (h *DomainHandler) createDNSRecord(ctx context.Context, domain, deploymentI
 	var rows []deploymentRow
 	query := `SELECT home_node_id FROM deployments WHERE id = ?`
 	err := h.service.db.Query(ctx, &rows, query, deploymentID)
-	if err != nil || len(rows) == 0 {
-		h.logger.Error("Failed to get deployment node", zap.Error(err))
-		return
+	if err != nil {
+		return fmt.Errorf("look up deployment %s: %w", deploymentID, err)
+	}
+	if len(rows) == 0 {
+		return fmt.Errorf("deployment %s has no home node", deploymentID)
 	}
 
 	homeNodeID := rows[0].HomeNodeID
@@ -450,9 +571,11 @@ func (h *DomainHandler) createDNSRecord(ctx context.Context, domain, deploymentI
 	var nodeRows []nodeRow
 	nodeQuery := `SELECT ip_address FROM dns_nodes WHERE id = ? AND status = 'active'`
 	err = h.service.db.Query(ctx, &nodeRows, nodeQuery, homeNodeID)
-	if err != nil || len(nodeRows) == 0 {
-		h.logger.Error("Failed to get node IP", zap.Error(err))
-		return
+	if err != nil {
+		return fmt.Errorf("look up node %s: %w", homeNodeID, err)
+	}
+	if len(nodeRows) == 0 {
+		return fmt.Errorf("node %s has no active public address", homeNodeID)
 	}
 
 	nodeIP := nodeRows[0].IPAddress
@@ -473,12 +596,12 @@ func (h *DomainHandler) createDNSRecord(ctx context.Context, domain, deploymentI
 
 	_, err = h.service.db.Exec(ctx, dnsQuery, fqdn, nodeIP, "", deploymentID, homeNodeID, now, now)
 	if err != nil {
-		h.logger.Error("Failed to create DNS record", zap.Error(err))
-		return
+		return fmt.Errorf("insert A record for %s: %w", domain, err)
 	}
 
 	h.logger.Info("DNS record created for custom domain",
 		zap.String("domain", domain),
 		zap.String("ip", nodeIP),
 	)
+	return nil
 }

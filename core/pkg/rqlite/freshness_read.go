@@ -202,21 +202,17 @@ func freshReadDetail(statusCode int, body []byte) string {
 // converted to time.Time to match gorqlite's Map() output.
 func rqliteResultToOpResult(r rqliteQueryResult) OpResult {
 	if r.Error != "" {
-		return OpResult{Kind: BatchOpQuery, Error: r.Error}
+		return failedStatement(BatchOpQuery, errors.New(r.Error))
 	}
 	var rows []map[string]interface{}
 	for _, vals := range r.Values {
 		if len(rows) >= MaxBatchQueryRowsPerOp {
-			return OpResult{
-				Kind: BatchOpQuery,
-				Rows: rows,
-				Error: fmt.Sprintf("rqlite.BatchQueryFresh: row cap exceeded (%d) — paginate via LIMIT/OFFSET",
-					MaxBatchQueryRowsPerOp),
-			}
+			return capExceededOp(rows, fmt.Sprintf("rqlite.BatchQueryFresh: row cap exceeded (%d) — paginate via LIMIT/OFFSET",
+				MaxBatchQueryRowsPerOp))
 		}
 		row, err := rowToMap(r.Columns, r.Types, vals)
 		if err != nil {
-			return OpResult{Kind: BatchOpQuery, Rows: rows, Error: "rqlite.BatchQueryFresh: row map: " + err.Error()}
+			return OpResult{Kind: BatchOpQuery, Rows: rows, Error: "rqlite.BatchQueryFresh: row map: " + err.Error(), Code: BatchCodeInternal}
 		}
 		rows = append(rows, row)
 	}

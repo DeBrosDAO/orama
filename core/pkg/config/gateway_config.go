@@ -12,14 +12,18 @@ type HTTPGatewayConfig struct {
 	SNI        SNIConfig              `yaml:"sni"`         // SNI-based TCP routing configuration
 
 	// Full gateway configuration (for API, auth, pubsub)
-	ClientNamespace   string        `yaml:"client_namespace"`     // Namespace for network client
-	RQLiteDSN         string        `yaml:"rqlite_dsn"`           // RQLite database DSN
+	ClientNamespace string `yaml:"client_namespace"` // Namespace for network client
+	// RQLiteDSN is accepted so DecodeStrict still reads node.yaml files
+	// rendered before it was dropped from the template. Nothing reads it: the
+	// index gateway's DSN is derived from discovery.http_adv_address and the
+	// database credentials (rqlite.IndexEndpoint, pkg/node/gateway.go).
+	RQLiteDSN         string        `yaml:"rqlite_dsn"`
 	OlricServers      []string      `yaml:"olric_servers"`        // List of Olric server addresses
 	OlricTimeout      time.Duration `yaml:"olric_timeout"`        // Timeout for Olric operations
 	IPFSClusterAPIURL string        `yaml:"ipfs_cluster_api_url"` // IPFS Cluster API URL
 	IPFSAPIURL        string        `yaml:"ipfs_api_url"`         // IPFS API URL
 	IPFSTimeout       time.Duration `yaml:"ipfs_timeout"`         // Timeout for IPFS operations
-	BaseDomain        string        `yaml:"base_domain"`          // Base domain for deployments (e.g., "dbrs.space"). Defaults to "dbrs.space"
+	BaseDomain        string        `yaml:"base_domain"`          // Cluster base domain (e.g. "orama-devnet.network"); no default — the gateway refuses to start without one
 
 	// SecretsEncryptionKey is the AES-256 key (hex, 64 chars) used to encrypt
 	// serverless function secrets at rest. Generated per-cluster and written
@@ -39,6 +43,12 @@ type HTTPGatewayConfig struct {
 	// (single-host delivery, the ~87% loss the fix exists to remove). MUST exist
 	// here or the node→gateway mapping cannot populate gateway.Config.NtfyBaseURL.
 	NtfyBaseURL string `yaml:"ntfy_base_url"`
+
+	// RelayAllowedSuffixes are the hosts the anonymous relay (/v1/proxy/relay)
+	// may reach: a host equal to or under one of them, port 443. Empty means
+	// this cluster's BaseDomain. Another cluster's base domain listed here makes
+	// this node a relay for that cluster's fetches (docs/whitepaper/technical-reference/vol1/12-gateway-architecture.md).
+	RelayAllowedSuffixes []string `yaml:"relay_allowed_suffixes"`
 
 	// WebRTC configuration (optional, enabled per-namespace)
 	WebRTC WebRTCConfig `yaml:"webrtc"`
@@ -66,10 +76,10 @@ type HTTPSConfig struct {
 	Email         string `yaml:"email"`           // Email for Let's Encrypt account
 }
 
-// SNIConfig contains SNI-based TCP routing configuration for port 7001
+// SNIConfig contains SNI-based TCP routing configuration.
 type SNIConfig struct {
 	Enabled    bool              `yaml:"enabled"`     // Enable SNI-based TCP routing
-	ListenAddr string            `yaml:"listen_addr"` // Address to listen on (e.g., ":7001")
+	ListenAddr string            `yaml:"listen_addr"` // Address to listen on (e.g., ":8443")
 	Routes     map[string]string `yaml:"routes"`      // SNI hostname -> backend address mapping
 	CertFile   string            `yaml:"cert_file"`   // Path to certificate file
 	KeyFile    string            `yaml:"key_file"`    // Path to key file

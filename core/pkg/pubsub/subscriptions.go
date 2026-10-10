@@ -7,12 +7,19 @@ import (
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 )
 
-// Subscribe subscribes to a topic with a handler.
-// Returns a HandlerID that can be used to unsubscribe this specific handler.
-// Multiple handlers can subscribe to the same topic.
+// Subscribe subscribes to a topic with a handler. Multiple handlers can
+// subscribe to the same topic; Unsubscribe is ref-counted per topic.
 func (m *Manager) Subscribe(ctx context.Context, topic string, handler MessageHandler) error {
+	_, err := m.SubscribeHandle(ctx, topic, handler)
+	return err
+}
+
+// SubscribeHandle subscribes handler to a topic and returns the function that
+// removes exactly that handler again. The underlying subscription ends when the
+// last handler is removed. The returned function is idempotent.
+func (m *Manager) SubscribeHandle(ctx context.Context, topic string, handler MessageHandler) (func() error, error) {
 	if m.pubsub == nil {
-		return fmt.Errorf("pubsub not initialized")
+		return nil, fmt.Errorf("pubsub not initialized")
 	}
 
 	// Determine namespace (allow per-call override via context)
@@ -24,16 +31,14 @@ func (m *Manager) Subscribe(ctx context.Context, topic string, handler MessageHa
 	}
 	namespacedTopic := fmt.Sprintf("%s.%s", ns, topic)
 
-	// Fast path: we already have a subscription for this topic
+	// Fast path: we already have a subscription for this topic. The manager
+	// lock is held while the handler is added so the last remover cannot end
+	// the subscription in between.
 	m.mu.RLock()
 	if existing := m.subscriptions[namespacedTopic]; existing != nil {
+		id := existing.add(handler)
 		m.mu.RUnlock()
-		handlerID := generateHandlerID()
-		existing.mu.Lock()
-		existing.handlers[handlerID] = handler
-		existing.refCount++
-		existing.mu.Unlock()
-		return nil
+		return m.remover(namespacedTopic, existing, id), nil
 	}
 	m.mu.RUnlock()
 
@@ -41,41 +46,36 @@ func (m *Manager) Subscribe(ctx context.Context, topic string, handler MessageHa
 	// to avoid re-entrant lock attempts
 	libp2pTopic, err := m.getOrCreateTopic(namespacedTopic)
 	if err != nil {
-		return fmt.Errorf("failed to get topic: %w", err)
+		return nil, fmt.Errorf("failed to get topic: %w", err)
 	}
 
 	// Subscribe to topic
 	sub, err := libp2pTopic.Subscribe()
 	if err != nil {
-		return fmt.Errorf("failed to subscribe to topic: %w", err)
+		return nil, fmt.Errorf("failed to subscribe to topic: %w", err)
 	}
 
 	// Create cancellable context for this subscription
 	subCtx, cancel := context.WithCancel(context.Background())
 
 	// Create topic subscription with initial handler
-	handlerID := generateHandlerID()
 	newSub := &topicSubscription{
 		sub:      sub,
 		cancel:   cancel,
-		handlers: map[HandlerID]MessageHandler{handlerID: handler},
-		refCount: 1,
+		handlers: make(map[HandlerID]MessageHandler),
 	}
+	handlerID := newSub.add(handler)
 
 	// Install the subscription (or merge if another goroutine beat us)
 	m.mu.Lock()
 	if existing := m.subscriptions[namespacedTopic]; existing != nil {
-		m.mu.Unlock()
 		// Another goroutine already created a subscription while we were working
 		// Clean up our resources and add to theirs
 		cancel()
 		sub.Cancel()
-		handlerID := generateHandlerID()
-		existing.mu.Lock()
-		existing.handlers[handlerID] = handler
-		existing.refCount++
-		existing.mu.Unlock()
-		return nil
+		id := existing.add(handler)
+		m.mu.Unlock()
+		return m.remover(namespacedTopic, existing, id), nil
 	}
 	m.subscriptions[namespacedTopic] = newSub
 	m.mu.Unlock()
@@ -124,7 +124,39 @@ func (m *Manager) Subscribe(ctx context.Context, topic string, handler MessageHa
 		}
 	}(newSub)
 
-	return nil
+	return m.remover(namespacedTopic, newSub, handlerID), nil
+}
+
+// add registers handler on the subscription and returns its id.
+func (ts *topicSubscription) add(handler MessageHandler) HandlerID {
+	id := generateHandlerID()
+	ts.mu.Lock()
+	ts.handlers[id] = handler
+	ts.refCount++
+	ts.mu.Unlock()
+	return id
+}
+
+// remover returns the function that removes handler id from ts and ends the
+// subscription when it was the last one.
+func (m *Manager) remover(namespacedTopic string, ts *topicSubscription, id HandlerID) func() error {
+	return func() error {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		ts.mu.Lock()
+		_, held := ts.handlers[id]
+		delete(ts.handlers, id)
+		if held {
+			ts.refCount--
+		}
+		last := ts.refCount <= 0
+		ts.mu.Unlock()
+		if held && last && m.subscriptions[namespacedTopic] == ts {
+			ts.cancel()
+			delete(m.subscriptions, namespacedTopic)
+		}
+		return nil
+	}
 }
 
 // Unsubscribe decrements the subscription refcount for a topic.

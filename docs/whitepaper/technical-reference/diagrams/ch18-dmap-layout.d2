@@ -1,0 +1,23 @@
+direction: right
+
+req: "tenant request\ndmap = sessions\nkey = u42"
+
+fold: "gateway folds the key\nfoldKey(dmap, key)\n= len(dmap) ':' dmap + key\n= 8:sessionsu42"
+
+olric: "namespace Olric (one cluster, 3 members)" {
+  cache: "DMap gateway_cache:ns\nall REST cache entries of the namespace\nLRU, 256 MiB in use per member" {shape: cylinder}
+  sl: "DMap :serverless_cache:ns\ncache_get / cache_set host functions\nLRU, 256 MiB per member" {shape: cylinder}
+  dd: "DMap pubsub_dispatch_dedup\nNX claims, 30 s TTL" {shape: cylinder}
+  pd: "DMap pubsub_publish_depth\ndepth records, 30 s TTL" {shape: cylinder}
+  hc: "DMap _health_check\nsupervisor probe, key deleted at once" {shape: cylinder}
+}
+
+req -> fold
+fold -> olric.cache: "Put / Get / Delete / Scan"
+fn: "serverless function\n(WASM host function)"
+fn -> olric.sl: "key as given, no folding"
+disp: "pub/sub trigger dispatcher"
+disp -> olric.dd
+disp -> olric.pd
+sup: "gateway Olric supervisor"
+sup -> olric.hc: "Put, Get, Delete every 10 s"

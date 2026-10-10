@@ -3,8 +3,10 @@ package serverless
 import (
 	"context"
 	cryptorand "crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,6 +16,9 @@ import (
 	"github.com/tetratelabs/wazero/sys"
 	"go.uber.org/zap"
 
+	"github.com/DeBrosOfficial/network/pkg/anonproxy"
+	"github.com/DeBrosOfficial/network/pkg/httputil"
+	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/serverless/cache"
 	"github.com/DeBrosOfficial/network/pkg/serverless/execution"
 )
@@ -55,13 +60,6 @@ func persistentFriendlyProcExit(ctx context.Context, mod api.Module, exitCode ui
 		_ = mod.CloseWithExitCode(ctx, exitCode)
 	}
 	panic(sys.NewExitError(exitCode))
-}
-
-// contextAwareHostServices is an internal interface for services that need to know about
-// the current invocation context.
-type contextAwareHostServices interface {
-	SetInvocationContext(invCtx *InvocationContext)
-	ClearContext()
 }
 
 // Ensure Engine implements FunctionExecutor interface.
@@ -172,8 +170,13 @@ func NewEngine(cfg *Config, registry FunctionRegistry, hostServices HostServices
 	cfg.ApplyDefaults()
 
 	// Create wazero runtime with compilation cache
+	maxPages := uint32(cfg.MaxMemoryLimitMB * 16) // 1 MB = 16 WASM pages
+	if maxPages == 0 {
+		maxPages = 256 * 16
+	}
 	runtimeConfig := wazero.NewRuntimeConfig().
-		WithCloseOnContextDone(true)
+		WithCloseOnContextDone(true).
+		WithMemoryLimitPages(maxPages)
 
 	runtime := wazero.NewRuntimeWithConfig(context.Background(), runtimeConfig)
 
@@ -342,11 +345,9 @@ func (e *Engine) Execute(ctx context.Context, fn *Function, input []byte, invCtx
 	// nil singleton ("no namespace in invocation context" error — the
 	// observable empty-envelope symptom AnChat reported).
 	//
-	// The singleton SetInvocationContext/ClearContext block below
-	// stays as defense-in-depth — host fns prefer ctx via
-	// currentInvocationContext (hostfunctions/invocation_context.go),
-	// so this is the live source; the singleton path serves any future
-	// caller that hasn't been migrated yet.
+	// This is the only source. There used to be a field on the shared
+	// HostFunctions as well, set before each execution and cleared after;
+	// the two invocations above are exactly what overwrote it.
 	execCtx = WithInvocationContext(execCtx, invCtx)
 
 	// Fresh per-invocation pubsub publish counter so the pubsub host
@@ -354,6 +355,9 @@ func (e *Engine) Execute(ctx context.Context, fn *Function, input []byte, invCtx
 	// shared gossipsub router (no WASM fuel metering exists; the rate limiter
 	// gates invocation frequency, not per-invocation host-call volume).
 	execCtx = WithPublishCounter(execCtx)
+	// Likewise for the webrtc_* host calls, each of which writes the namespace's
+	// database and calls every SFU.
+	execCtx = WithWebRTCCounter(execCtx)
 
 	// Raw-HTTP-response mode (bugboard #835). Only RawHTTPResponse functions
 	// get a collector attached — set_http_response is a validated no-op for
@@ -373,12 +377,6 @@ func (e *Engine) Execute(ctx context.Context, fn *Function, input []byte, invCtx
 	}
 	moduleLoadedAt = time.Now()
 
-	// Execute the module with context setters
-	var contextSetter, contextClearer func()
-	if hf, ok := e.hostServices.(contextAwareHostServices); ok {
-		contextSetter = func() { hf.SetInvocationContext(invCtx) }
-		contextClearer = func() { hf.ClearContext() }
-	}
 	// Attach a collector so ExecuteModule reports how long instantiate (TinyGo
 	// _start cold-start) took, letting the slow-invoke diagnostic split the
 	// execute phase into cold-start vs handler work (bugboard #27).
@@ -391,7 +389,9 @@ func (e *Engine) Execute(ctx context.Context, fn *Function, input []byte, invCtx
 	if moduleIsReactor(module) {
 		output, err = e.invokeReactor(execCtx, fn.WASMCID, fn.Name, input, instTiming)
 	} else {
-		output, err = e.executor.ExecuteModule(execCtx, module, fn.Name, input, contextSetter, contextClearer)
+		execCtx = execution.WithNamespace(execCtx, fn.Namespace)
+		execCtx = execution.WithMemoryLimitMB(execCtx, e.memoryLimitMB(fn))
+		output, err = e.executor.ExecuteModule(execCtx, module, fn.Name, input)
 	}
 	executeDoneAt = time.Now()
 	if err != nil {
@@ -545,6 +545,15 @@ func (e *Engine) GetCacheStats() (size int, capacity int) {
 // -----------------------------------------------------------------------------
 // Private methods
 // -----------------------------------------------------------------------------
+
+// memoryLimitMB returns the memory limit enforced on one invocation of fn: the
+// function's own limit, or the configured default when it has none stored.
+func (e *Engine) memoryLimitMB(fn *Function) int {
+	if fn.MemoryLimitMB > 0 {
+		return fn.MemoryLimitMB
+	}
+	return e.config.DefaultMemoryLimitMB
+}
 
 // checkMemoryLimits validates that a compiled module's memory declarations
 // don't exceed the configured maximum. Each WASM memory page is 64KB.
@@ -742,7 +751,7 @@ func (e *Engine) instantiateReactorInstance(ctx context.Context, wasmCID, name s
 		WithStdout(discardWriter{}).
 		WithStderr(discardWriter{}).
 		WithArgs(name).
-		WithSysWalltime().  // real clocks (bugboard #27)
+		WithSysWalltime(). // real clocks (bugboard #27)
 		WithSysNanotime().
 		WithRandSource(cryptorand.Reader) // real CSPRNG (bugboard #120)
 
@@ -820,7 +829,7 @@ type discardWriter struct{}
 func (discardWriter) Write(p []byte) (int, error) { return len(p), nil }
 
 func (e *Engine) getOrCompileModule(ctx context.Context, wasmCID string) (wazero.CompiledModule, error) {
-	return e.moduleCache.GetOrCompute(wasmCID, func() (wazero.CompiledModule, error) {
+	return e.moduleCache.GetOrCompute(ctx, wasmCID, func() (wazero.CompiledModule, error) {
 		// Fetch WASM bytes from registry
 		wasmBytes, err := e.registry.GetWASMBytes(ctx, wasmCID)
 		if err != nil {
@@ -884,16 +893,12 @@ func (e *Engine) logInvocation(ctx context.Context, fn *Function, invCtx *Invoca
 		record.ErrorMessage = err.Error()
 	}
 
-	// Collect logs: prefer the per-invocation LogBuffer (bugboard #108),
-	// fall back to the legacy singleton for callers that haven't been
-	// migrated yet. The singleton path was the source of the
-	// cross-contamination bug; once every Execute path passes a real
-	// buffer here, the GetLogs() singleton read is dead code that
-	// can be removed in a future cleanup.
+	// The invocation's own log buffer, and nothing else. There used to be a
+	// fallback to a slice shared by every invocation on the gateway, which is
+	// how one invocation's log lines ended up in another's record (bugboard
+	// #108). Every Execute path attaches a buffer.
 	if logBuf != nil {
 		record.Logs = logBuf.Snapshot()
-	} else if hf, ok := e.hostServices.(interface{ GetLogs() []LogEntry }); ok {
-		record.Logs = hf.GetLogs()
 	}
 
 	// Enqueue is non-blocking: a full queue drops the record (counted) rather
@@ -922,6 +927,11 @@ func (e *Engine) registerHostModule(ctx context.Context) error {
 		_, err := e.runtime.NewHostModuleBuilder(moduleName).
 			NewFunctionBuilder().WithFunc(e.hGetCallerWallet).Export("get_caller_wallet").
 			NewFunctionBuilder().WithFunc(e.hGetCallerJWTSubject).Export("get_caller_jwt_subject").
+			NewFunctionBuilder().WithFunc(e.hGetCallerDeviceID).Export("get_caller_device_id").
+			NewFunctionBuilder().WithFunc(e.hGetCallerCapability).Export("get_caller_capability").
+			NewFunctionBuilder().WithFunc(e.hCapabilityMint).Export("capability_mint").
+			NewFunctionBuilder().WithFunc(e.hCapabilityRevoke).Export("capability_revoke").
+			NewFunctionBuilder().WithFunc(e.hStorageFetchCapMint).Export("storage_fetch_cap_mint").
 			NewFunctionBuilder().WithFunc(e.hGetWSClientID).Export("get_ws_client_id").
 			NewFunctionBuilder().WithFunc(e.hGetCallerClaim).Export("get_caller_claim").
 			NewFunctionBuilder().WithFunc(e.hGetRequestID).Export("get_request_id").
@@ -936,16 +946,22 @@ func (e *Engine) registerHostModule(ctx context.Context) error {
 			NewFunctionBuilder().WithFunc(e.hExecAndPublish).Export("exec_and_publish").
 			NewFunctionBuilder().WithFunc(e.hCacheGet).Export("cache_get").
 			NewFunctionBuilder().WithFunc(e.hCacheSet).Export("cache_set").
+			NewFunctionBuilder().WithFunc(e.hCacheDelete).Export("cache_delete").
 			NewFunctionBuilder().WithFunc(e.hCacheIncr).Export("cache_incr").
 			NewFunctionBuilder().WithFunc(e.hCacheIncrBy).Export("cache_incr_by").
 			NewFunctionBuilder().WithFunc(e.hHTTPFetch).Export("http_fetch").
-			NewFunctionBuilder().WithFunc(e.hAnyoneFetch).Export("anyone_fetch").
+			NewFunctionBuilder().WithFunc(e.hAnonFetch).Export(AnonFetchExport).
+			NewFunctionBuilder().WithFunc(e.hAnonFetch).Export(AnyoneFetchDeprecatedExport).
 			NewFunctionBuilder().WithFunc(e.hSetHTTPResponse).Export("set_http_response").
 			NewFunctionBuilder().WithFunc(e.hPubSubPublish).Export("pubsub_publish").
 			NewFunctionBuilder().WithFunc(e.hPubSubPublishBatch).Export("pubsub_publish_batch").
 			NewFunctionBuilder().WithFunc(e.hPushSend).Export("push_send").
 			NewFunctionBuilder().WithFunc(e.hPushSendV2).Export("push_send_v2").
+			NewFunctionBuilder().WithFunc(e.hPushSendTopic).Export("push_send_topic").
 			NewFunctionBuilder().WithFunc(e.hTurnCredentials).Export("turn_credentials").
+			NewFunctionBuilder().WithFunc(e.hWebRTCAdmit).Export("webrtc_admit").
+			NewFunctionBuilder().WithFunc(e.hWebRTCKick).Export("webrtc_kick").
+			NewFunctionBuilder().WithFunc(e.hWebRTCMute).Export("webrtc_mute").
 			NewFunctionBuilder().WithFunc(e.hWSPubSubBridge).Export("ws_pubsub_bridge").
 			NewFunctionBuilder().WithFunc(e.hWSPubSubUnbridge).Export("ws_pubsub_unbridge").
 			NewFunctionBuilder().WithFunc(e.hWSSend).Export("ws_send").
@@ -991,6 +1007,13 @@ func (e *Engine) hGetWSClientID(ctx context.Context, mod api.Module) uint64 {
 func (e *Engine) hGetCallerJWTSubject(ctx context.Context, mod api.Module) uint64 {
 	sub := e.hostServices.GetCallerJWTSubject(ctx)
 	return e.executor.WriteToGuest(ctx, mod, []byte(sub))
+}
+
+// hGetCallerDeviceID returns the device the caller's session is bound to.
+// Empty string when it is bound to none.
+func (e *Engine) hGetCallerDeviceID(ctx context.Context, mod api.Module) uint64 {
+	did := e.hostServices.GetCallerDeviceID(ctx)
+	return e.executor.WriteToGuest(ctx, mod, []byte(did))
 }
 
 // hGetCallerClaim reads a claim name from guest memory, looks it up on the
@@ -1076,6 +1099,11 @@ func (e *Engine) hCacheGet(ctx context.Context, mod api.Module, keyPtr, keyLen u
 	}
 	val, err := e.hostServices.CacheGet(ctx, string(key))
 	if err != nil {
+		// A miss is the normal answer and returns empty. Anything else is a
+		// failure the guest cannot tell from a miss, so it is logged.
+		if !errors.Is(err, ErrCacheMiss) {
+			e.logger.Error("host function cache_get failed", zap.Error(err), zap.String("key", logSafeKey(key)))
+		}
 		return 0
 	}
 	return e.executor.WriteToGuest(ctx, mod, val)
@@ -1090,7 +1118,42 @@ func (e *Engine) hCacheSet(ctx context.Context, mod api.Module, keyPtr, keyLen, 
 	if !ok {
 		return
 	}
-	_ = e.hostServices.CacheSet(ctx, string(key), val, ttl)
+	// cache_set has no return value in the guest ABI, so a failure can only
+	// be surfaced in the gateway log.
+	if err := e.hostServices.CacheSet(ctx, string(key), val, ttl); err != nil {
+		fields := []zap.Field{zap.Error(err), zap.String("key", logSafeKey(key)), zap.Int64("ttl_seconds", ttl)}
+		if errors.Is(err, ErrInvalidCacheTTL) {
+			e.logger.Warn("host function cache_set refused its ttl", fields...)
+			return
+		}
+		e.logger.Error("host function cache_set failed", fields...)
+	}
+}
+
+// maxLoggedKeyBytes bounds a guest-chosen cache key in a log line. A key can
+// be as large as guest memory, and one failing call per log line would let a
+// guest flood the gateway log.
+const maxLoggedKeyBytes = 64
+
+func logSafeKey(key []byte) string {
+	if len(key) <= maxLoggedKeyBytes {
+		return string(key)
+	}
+	return fmt.Sprintf("%s…(%d bytes)", strings.ToValidUTF8(string(key[:maxLoggedKeyBytes]), ""), len(key))
+}
+
+// hCacheDelete returns 1 when the key is gone afterwards (deleted, or was
+// never there) and 0 when the delete could not be performed.
+func (e *Engine) hCacheDelete(ctx context.Context, mod api.Module, keyPtr, keyLen uint32) uint32 {
+	key, ok := e.executor.ReadFromGuest(mod, keyPtr, keyLen)
+	if !ok {
+		return 0
+	}
+	if err := e.hostServices.CacheDelete(ctx, string(key)); err != nil {
+		e.logger.Error("host function cache_delete failed", zap.Error(err), zap.String("key", logSafeKey(key)))
+		return 0
+	}
+	return 1
 }
 
 func (e *Engine) hCacheIncr(ctx context.Context, mod api.Module, keyPtr, keyLen uint32) int64 {
@@ -1100,7 +1163,7 @@ func (e *Engine) hCacheIncr(ctx context.Context, mod api.Module, keyPtr, keyLen 
 	}
 	val, err := e.hostServices.CacheIncr(ctx, string(key))
 	if err != nil {
-		e.logger.Error("host function cache_incr failed", zap.Error(err), zap.String("key", string(key)))
+		e.logger.Error("host function cache_incr failed", zap.Error(err), zap.String("key", logSafeKey(key)))
 		return 0
 	}
 	return val
@@ -1113,7 +1176,7 @@ func (e *Engine) hCacheIncrBy(ctx context.Context, mod api.Module, keyPtr, keyLe
 	}
 	val, err := e.hostServices.CacheIncrBy(ctx, string(key), delta)
 	if err != nil {
-		e.logger.Error("host function cache_incr_by failed", zap.Error(err), zap.String("key", string(key)), zap.Int64("delta", delta))
+		e.logger.Error("host function cache_incr_by failed", zap.Error(err), zap.String("key", logSafeKey(key)), zap.Int64("delta", delta))
 		return 0
 	}
 	return val
@@ -1144,7 +1207,9 @@ func (e *Engine) hHTTPFetch(ctx context.Context, mod api.Module, methodPtr, meth
 
 	resp, err := e.hostServices.HTTPFetch(ctx, string(method), string(u), headers, body)
 	if err != nil {
-		e.logger.Error("host function http_fetch failed", zap.Error(err), zap.String("url", string(u)))
+		// The client's error quotes the whole URL, and a credential may be in its query.
+		e.logger.Error("host function http_fetch failed",
+			zap.String("error", httputil.FailureReason(err)), zap.String("url", httputil.WithoutQuery(string(u))))
 		return 0
 	}
 	return e.executor.WriteToGuest(ctx, mod, resp)
@@ -1184,13 +1249,25 @@ func (e *Engine) hSetHTTPResponse(ctx context.Context, mod api.Module,
 	return 1
 }
 
-// hAnyoneFetch is the WASM-callable wrapper for AnyoneFetch — feat-11.
+// AnonFetchExport is the host export for outbound HTTP through the node's Tor
+// client.
+const AnonFetchExport = "anon_fetch"
+
+// AnyoneFetchDeprecatedExport is the name anon_fetch had while the anonymity
+// backend was the Anyone network. It is exported as an alias of the same
+// implementation — now routed through Tor — because deployed functions import
+// it (AnChat's rpc-solana and rpc-evm import orama.anyone_fetch), and a module
+// whose import is missing fails to instantiate. New code imports anon_fetch.
+const AnyoneFetchDeprecatedExport = "anyone_fetch"
+
+// hAnonFetch is the WASM-callable wrapper for AnonFetch — feat-11, exported
+// as both anon_fetch and the deprecated anyone_fetch.
 // Identical ABI to hHTTPFetch (method, url, headers JSON, body), routes
-// through the Anyone SOCKS5 proxy. Returns packed (ptr<<32 | len) to the
+// through the Tor SOCKS5 proxy. Returns packed (ptr<<32 | len) to the
 // JSON response envelope, or 0 on a setup error (the typed
 // proxy-unavailable / transport-error cases come back inside the
 // envelope with status 0, NOT as a 0 return).
-func (e *Engine) hAnyoneFetch(ctx context.Context, mod api.Module, methodPtr, methodLen, urlPtr, urlLen, headersPtr, headersLen, bodyPtr, bodyLen uint32) uint64 {
+func (e *Engine) hAnonFetch(ctx context.Context, mod api.Module, methodPtr, methodLen, urlPtr, urlLen, headersPtr, headersLen, bodyPtr, bodyLen uint32) uint64 {
 	method, ok := e.executor.ReadFromGuest(mod, methodPtr, methodLen)
 	if !ok {
 		return 0
@@ -1203,7 +1280,7 @@ func (e *Engine) hAnyoneFetch(ctx context.Context, mod api.Module, methodPtr, me
 	var headers map[string]string
 	if headersLen > 0 {
 		if err := e.executor.UnmarshalJSONFromGuest(mod, headersPtr, headersLen, &headers); err != nil {
-			e.logger.Error("failed to unmarshal anyone_fetch headers", zap.Error(err))
+			e.logger.Error("failed to unmarshal anon_fetch headers", zap.Error(err))
 			return 0
 		}
 	}
@@ -1213,9 +1290,12 @@ func (e *Engine) hAnyoneFetch(ctx context.Context, mod api.Module, methodPtr, me
 		return 0
 	}
 
-	resp, err := e.hostServices.AnyoneFetch(ctx, string(method), string(u), headers, body)
+	resp, err := e.hostServices.AnonFetch(ctx, string(method), string(u), headers, body)
 	if err != nil {
-		e.logger.Error("host function anyone_fetch failed", zap.Error(err), zap.String("url", string(u)))
+		// An anon_fetch caller chose Tor so the node could not say where the
+		// function went: neither the URL nor the error text, which names the
+		// destination, is logged.
+		e.logger.Error("host function anon_fetch failed", zap.String("error_class", anonproxy.ErrorClass(err)))
 		return 0
 	}
 	return e.executor.WriteToGuest(ctx, mod, resp)
@@ -1303,7 +1383,9 @@ func (e *Engine) hDBQueryV2(ctx context.Context, mod api.Module, queryPtr, query
 // hDBTransaction is the WASM-callable wrapper for DBTransaction.
 // Input: pointer/length of opsJSON ({"ops":[{kind,sql,args},...]}).
 // Returns a packed uint64 (ptr<<32 | len) pointing to JSON BatchResult in
-// guest memory, or 0 on setup error.
+// guest memory. A host-level failure carries `error` and `code` on that same
+// envelope (bugboard #175); 0 is reserved for the case where the envelope
+// itself could not be written into guest memory.
 //
 // Note the result JSON's `committed` field tells the caller whether the
 // writes landed — a return of non-zero does NOT imply commit.
@@ -1314,20 +1396,65 @@ func (e *Engine) hDBTransaction(ctx context.Context, mod api.Module, opsPtr, ops
 	}
 	out, err := e.hostServices.DBTransaction(ctx, opsJSON)
 	if err != nil {
+		// Return a structured rejection instead of 0 (bugboard #175).
+		//
+		// Returning 0 gave the guest an empty buffer with no reason, which
+		// surfaced to callers as "host returned empty envelope". A real
+		// namespace outage was diagnosed that way: a group write exceeding
+		// MaxBatchOps failed deterministically, and neither the function nor
+		// its operators could see why — the reason existed only in the
+		// gateway's own journal, which tenants cannot read.
 		e.logger.Warn("host function db_transaction failed", zap.Error(err))
-		return 0
+		return e.writeBatchRejection(ctx, mod, "db_transaction", err)
 	}
 	return e.executor.WriteToGuest(ctx, mod, out)
+}
+
+// batchRejectionPayload builds the JSON envelope a batched database host
+// function returns when it fails at the host level (bugboard #175).
+//
+// One shape serves all three (db_transaction, db_query_batch,
+// exec_and_publish): rqlite.BatchResult decodes cleanly into each of their
+// success structs, since encoding/json ignores fields a caller does not
+// declare. `committed` is false and `results` is an empty array rather than
+// null, so a guest that iterates results without a nil check still works.
+func batchRejectionPayload(cause error) ([]byte, error) {
+	return json.Marshal(rqlite.BatchResult{
+		Results:   []rqlite.OpResult{},
+		Committed: false,
+		Error:     cause.Error(),
+		Code:      rqlite.ClassifyBatchError(cause),
+	})
+}
+
+// writeBatchRejection writes that envelope into guest memory, so a WASM caller
+// reading the normal result sees committed=false plus a classified reason
+// instead of an empty buffer.
+//
+// Returning nothing was the whole of bugboard #175: "host returned empty
+// envelope" cannot be told apart from a deadline, an oversized payload, a
+// rejected Raft entry or a node that died mid-commit, and the reason existed
+// only in the gateway journal, which tenants cannot read. Falls back to 0 only
+// when the envelope itself cannot be written, which is genuinely no signal.
+func (e *Engine) writeBatchRejection(ctx context.Context, mod api.Module, hostFn string, cause error) uint64 {
+	payload, mErr := batchRejectionPayload(cause)
+	if mErr != nil {
+		e.logger.Error("failed to marshal host function rejection envelope",
+			zap.String("host_fn", hostFn), zap.Error(mErr))
+		return 0
+	}
+	return e.executor.WriteToGuest(ctx, mod, payload)
 }
 
 // hDBQueryBatch is the WASM-callable wrapper for DBQueryBatch.
 // Input: pointer/length of opsJSON ({"ops":[{"sql":"...","args":[...]}, ...]}).
 // Returns a packed uint64 (ptr<<32 | len) pointing to JSON result in guest
-// memory, or 0 on setup/transport error.
+// memory. A host-level failure returns an envelope carrying `error` and `code`
+// (bugboard #175), never an empty buffer; 0 is reserved for the case where the
+// envelope itself could not be written into guest memory.
 //
 // Per-query errors are surfaced inside the JSON result (one entry per op
-// has its own `error` field). A return of 0 means the whole call failed
-// before per-op results could be built.
+// has its own `error` field).
 func (e *Engine) hDBQueryBatch(ctx context.Context, mod api.Module, opsPtr, opsLen uint32) uint64 {
 	opsJSON, ok := e.executor.ReadFromGuest(mod, opsPtr, opsLen)
 	if !ok {
@@ -1335,8 +1462,9 @@ func (e *Engine) hDBQueryBatch(ctx context.Context, mod api.Module, opsPtr, opsL
 	}
 	out, err := e.hostServices.DBQueryBatch(ctx, opsJSON)
 	if err != nil {
+		// Structured rejection rather than an empty buffer (bugboard #175).
 		e.logger.Warn("host function db_query_batch failed", zap.Error(err))
-		return 0
+		return e.writeBatchRejection(ctx, mod, "db_query_batch", err)
 	}
 	return e.executor.WriteToGuest(ctx, mod, out)
 }
@@ -1349,8 +1477,10 @@ func (e *Engine) hDBQueryBatch(ctx context.Context, mod api.Module, opsPtr, opsL
 //	dataPtr/dataLen   — wake-up payload bytes; "{{seq}}" will be substituted
 //
 // Returns a packed uint64 (ptr<<32 | len) pointing to the JSON result in
-// guest memory, or 0 on setup error. The result JSON has fields
-// committed/seq/published/publish_error that the caller inspects.
+// guest memory. The result JSON has fields committed/seq/published/
+// publish_error that the caller inspects; a host-level failure carries `error`
+// and `code` instead (bugboard #175). 0 is reserved for the case where the
+// envelope itself could not be written into guest memory.
 func (e *Engine) hExecAndPublish(ctx context.Context, mod api.Module,
 	opsPtr, opsLen, topicPtr, topicLen, dataPtr, dataLen uint32) uint64 {
 
@@ -1368,10 +1498,11 @@ func (e *Engine) hExecAndPublish(ctx context.Context, mod api.Module,
 	}
 	out, err := e.hostServices.ExecAndPublish(ctx, opsJSON, string(topic), data)
 	if err != nil {
+		// Structured rejection rather than an empty buffer (bugboard #175).
 		e.logger.Warn("host function exec_and_publish failed",
 			zap.String("topic", string(topic)),
 			zap.Error(err))
-		return 0
+		return e.writeBatchRejection(ctx, mod, "exec_and_publish", err)
 	}
 	return e.executor.WriteToGuest(ctx, mod, out)
 }
@@ -1444,9 +1575,23 @@ func (e *Engine) hFunctionInvoke(ctx context.Context, mod api.Module,
 	}
 	out, err := e.hostServices.FunctionInvoke(ctx, string(name), payload)
 	if err != nil {
-		e.logger.Warn("function_invoke failed",
-			zap.String("name", string(name)),
-			zap.Error(err))
+		// The guest ABI can only signal "no result" (0), so an authorization
+		// refusal is indistinguishable from a transient failure to the guest
+		// (bugboard #159 ask 2 — still open, it needs an ABI/SDK change).
+		// Until then, at least make the two loudly distinguishable HOST-side:
+		// an unauthorized nested invoke is a permanent misconfiguration that
+		// will silently no-op forever, not something a retry fixes. AnChat's
+		// cron reconciler reported SUCCESS while settling nothing for weeks
+		// because this was one undifferentiated Warn.
+		if IsUnauthorized(err) {
+			e.logger.Error("function_invoke unauthorized",
+				zap.String("name", string(name)),
+				zap.Error(err))
+		} else {
+			e.logger.Warn("function_invoke failed",
+				zap.String("name", string(name)),
+				zap.Error(err))
+		}
 		return 0
 	}
 	return e.executor.WriteToGuest(ctx, mod, out)
@@ -1669,6 +1814,28 @@ func (e *Engine) hPushSendV2(ctx context.Context, mod api.Module,
 		e.logger.Warn("host function push_send_v2 failed",
 			zap.String("user_id", string(userID)),
 			zap.Error(err))
+		return 0
+	}
+	return e.executor.WriteToGuest(ctx, mod, out)
+}
+
+// hPushSendTopic is the WASM-callable wrapper for PushSendTopic (FEAT-265):
+// push to the device registered under a rotating topic id. Same result
+// convention as push_send_v2 — a packed uint64 (ptr<<32 | len) of the JSON
+// envelope, or 0 on a setup/validation error. The topic id is not logged.
+func (e *Engine) hPushSendTopic(ctx context.Context, mod api.Module,
+	topicIDPtr, topicIDLen, msgPtr, msgLen uint32) uint64 {
+	topicID, ok := e.executor.ReadFromGuest(mod, topicIDPtr, topicIDLen)
+	if !ok {
+		return 0
+	}
+	msgJSON, ok := e.executor.ReadFromGuest(mod, msgPtr, msgLen)
+	if !ok {
+		return 0
+	}
+	out, err := e.hostServices.PushSendTopic(ctx, string(topicID), msgJSON)
+	if err != nil {
+		e.logger.Warn("host function push_send_topic failed", zap.Error(err))
 		return 0
 	}
 	return e.executor.WriteToGuest(ctx, mod, out)
