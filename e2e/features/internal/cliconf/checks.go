@@ -59,7 +59,7 @@ func CheckUnknownFlag(t testing.TB, cli *oramacli.Runner, c Command) {
 // subcommand, so running them bare is not "print the help".
 var runnableGroups = map[string]bool{
 	"orama auth sessions": true, // lists the wallet's sessions (cmd/authcmd/auth.go)
-	"orama status":       true, // opens the live view (cmd/monitorcmd/monitor.go runLive)
+	"orama status":        true, // opens the live view (cmd/monitorcmd/monitor.go runLive)
 	// decides from --current and --candidate and refuses their absence with the
 	// usage code; 'run' is its subcommand (cmd/node/autoupdate.go)
 	"orama maint node autoupdate": true,

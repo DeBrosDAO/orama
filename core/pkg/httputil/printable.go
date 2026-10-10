@@ -29,8 +29,8 @@ func PrintableMax(s string, max int) string {
 	return string(runes)
 }
 
-// lineJoiner separates the lines of a multi-line text that OneLine puts on one line.
-const lineJoiner = " | "
+// LineJoiner separates the lines of a multi-line text that OneLine puts on one line.
+const LineJoiner = " | "
 
 // OneLine is Printable for text that may span several lines, such as the stderr of a
 // remote command or the log of a refused transaction. Printable removes the line breaks
@@ -45,7 +45,7 @@ func OneLine(s string) string {
 			kept = append(kept, line)
 		}
 	}
-	return strings.Join(kept, lineJoiner)
+	return strings.Join(kept, LineJoiner)
 }
 
 // isLineBreak reports whether r ends a line: LF, CR, VT, FF, NEL and the Unicode line and

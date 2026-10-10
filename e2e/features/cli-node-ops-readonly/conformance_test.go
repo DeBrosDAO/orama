@@ -19,5 +19,5 @@ func TestConformance_nodeAndMonitorCommands(t *testing.T) {
 	t.Parallel()
 	cli := harness.CLI(t)
 	cliconf.Conformance(t, cli, cli.NoWallet(t), cliconf.LoadReference(t),
-		"orama node", "orama status", "orama nodes", "orama status")
+		"orama node", "orama status", "orama nodes")
 }

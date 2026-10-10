@@ -106,5 +106,10 @@ func reasonFrom(line string) string {
 	if loc := sdkTrailer.FindStringIndex(line); loc != nil {
 		line = line[:loc[0]]
 	}
+	// httputil.OneLine joins a multi-line error with " | ": what follows the chain's
+	// reason is the node's, not the chain's.
+	if at := strings.Index(line, httputil.LineJoiner); at >= 0 {
+		line = line[:at]
+	}
 	return httputil.PrintableMax(line, maxDetail)
 }

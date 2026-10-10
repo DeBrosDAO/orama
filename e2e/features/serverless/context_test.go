@@ -156,3 +156,30 @@ func TestDirectInvoke_path(t *testing.T) {
 		t.Errorf("unknown function: want 404, got %d", r.Status)
 	}
 }
+
+// TestDirectInvoke_throughTheNamespaceGatewayOneCORSAnswer: a page under the base domain calls a
+// public function through its namespace gateway. The main gateway proxies to the namespace gateway,
+// and both apply CORS; the answer must carry one Access-Control-Allow-Origin (a browser refuses two,
+// which broke every such page until the proxy stopped adding the upstream's to its own), Vary: Origin
+// and one Strict-Transport-Security (website/src/docs/developer/functions.mdx#http-api-reference).
+func TestDirectInvoke_throughTheNamespaceGatewayOneCORSAnswer(t *testing.T) {
+	t.Parallel()
+	fx := setup(t)
+	deploy(t, fx, fnSpec{name: "e2e-cors", public: true})
+	origin := "https://app." + fx.f.State.BaseDomain
+	r := fx.c.MustSend(t, gw.Req{Method: http.MethodPost, Path: "/v1/invoke/" + fx.n.Name + "/e2e-cors",
+		Header: http.Header{"Content-Type": {"application/json"}, "Origin": {origin}},
+		Body:   []byte(`{"op":"echo","value":"cors"}`)})
+	if r.Status != http.StatusOK || !strings.Contains(string(r.Body), "cors") {
+		t.Fatalf("POST through the namespace gateway: %d %.200s", r.Status, r.Body)
+	}
+	if got := r.Header.Values("Access-Control-Allow-Origin"); len(got) != 1 || got[0] != origin {
+		t.Errorf("Access-Control-Allow-Origin = %q, want exactly [%q]", got, origin)
+	}
+	if !strings.Contains(strings.Join(r.Header.Values("Vary"), ","), "Origin") {
+		t.Errorf("Vary = %q, want it to include Origin", r.Header.Values("Vary"))
+	}
+	if got := r.Header.Values("Strict-Transport-Security"); len(got) != 1 {
+		t.Errorf("Strict-Transport-Security = %q, want one value", got)
+	}
+}

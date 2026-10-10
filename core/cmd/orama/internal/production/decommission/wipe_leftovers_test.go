@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/DeBrosOfficial/network/pkg/constants"
 )
 
 func bashPath(t *testing.T) string {
@@ -377,5 +379,25 @@ func TestWipeScript_theGlobalNamespaceIsTornDownBeforeItsUnitFileGoes(t *testing
 		if i := strings.Index(script, cmd); i < 0 || i > direct {
 			t.Errorf("%q must come before the namespace is deleted, as in the unit's ExecStop", cmd)
 		}
+	}
+}
+
+// The namespace unit turns IPv4 forwarding on and records the value it found. Its ExecStop
+// does not put it back, so a wipe that removed the namespace and its forward-drop rules
+// left the machine forwarding. The wipe restores the recorded value, before it removes the
+// state that holds it.
+func TestWipeScript_restoresIPv4ForwardingBeforeTheGlobalStateGoes(t *testing.T) {
+	script := removalPart(wipeScript(true))
+	restore := strings.Index(script, "sysctl -q -w net.ipv4.ip_forward=")
+	read := strings.Index(script, "cat "+filepath.Join(constants.GlobalStateRoot, constants.GlobalNetnsPriorForwardFile))
+	state := strings.Index(script, "rm -rf "+constants.GlobalStateRoot)
+	if restore < 0 || read < 0 || state < 0 {
+		t.Fatalf("missing step: restore %d, read %d, remove state %d", restore, read, state)
+	}
+	if !(read < restore && restore < state) {
+		t.Error("want the recorded value read and restored before the global state is removed")
+	}
+	if !strings.Contains(script, `case "$prior_forward" in 0|1)`) {
+		t.Error("only a 0 or 1 read from the file may reach sysctl")
 	}
 }

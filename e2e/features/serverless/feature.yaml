@@ -49,6 +49,7 @@ covers:
     - /v1/serverless/ws/connections
     - /v1/serverless/ws/connections/
   claims:
+    - "website/src/docs/developer/functions.mdx#http-api-reference: a page under the base domain calls a public function through its namespace gateway and the answer carries one Access-Control-Allow-Origin, the page's origin, Vary: Origin and the platform's Strict-Transport-Security"
     - "website/src/docs/developer/functions.mdx#functionyaml: memory 1-256 MB, timeout 1-300 s; a direct invoke past its timeout is 429 RATE_LIMITED"
     - "website/src/docs/developer/functions.mdx#functionyaml: a private function needs a signed-in wallet or the invoke grant; a storage-only key is refused"
     - "website/src/docs/developer/functions.mdx#versioning: name@N invokes version N"

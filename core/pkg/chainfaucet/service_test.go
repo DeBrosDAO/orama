@@ -456,3 +456,17 @@ func TestDrip_theSDKsSourceLocationAndGasAreNotPartOfTheReason(t *testing.T) {
 		t.Errorf("message = %q, want %q", r.Message, want)
 	}
 }
+
+// A node's error joined from several lines carries the chain's reason first; the lines after it
+// are the node's and are not shown to an anonymous caller.
+func TestDrip_linesJoinedAfterTheReasonAreNotPartOfIt(t *testing.T) {
+	chain := &fakeChain{t: t, simErr: errors.New("faucet recipient is still within its cooldown\ngoroutine 7 [running]:\nmain.go:12")}
+	svc, _ := newTestService(t, chain, fakeIDs{id: testChainID})
+
+	_, err := svc.Drip(context.Background(), recipientN(t, 2), norama(9))
+
+	r := requireRefusal(t, err, KindCooldown)
+	if want := "faucet recipient is still within its cooldown"; r.Message != want {
+		t.Errorf("message = %q, want %q", r.Message, want)
+	}
+}

@@ -915,6 +915,8 @@ the namespace named by `?namespace=`, otherwise the credential's; an anonymous
 call that names neither is refused with 400. A public function is invocable
 without a credential, but the request has to say whose it is.
 
+A page served from a name under the cluster's base domain may call a function from the browser, through the main gateway or the namespace gateway (`https://ns-<namespace>.<base domain>`): the answer carries one `Access-Control-Allow-Origin`, the page's origin, and `Vary: Origin`. The CORS policy, `Strict-Transport-Security` and `X-Content-Type-Options` are the platform's: a function's own values for them are not passed on.
+
 ### Invoke rate limits
 
 Each gateway holds token buckets for invokes, checked in this order, and the

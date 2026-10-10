@@ -70,6 +70,11 @@ systemctl stop "orama-namespace-*@*.service" 2>/dev/null || true
 nft delete table ip %[17]s 2>/dev/null || true
 ip link del %[18]s 2>/dev/null || true
 ip netns del %[19]s 2>/dev/null || true
+# The namespace turned IPv4 forwarding on and recorded the value it found; with
+# the rules that confined forwarding gone, put that value back (it is read from
+# the state removed below, so before it goes).
+prior_forward="$(cat %[20]s 2>/dev/null || true)"
+case "$prior_forward" in 0|1) sysctl -q -w net.ipv4.ip_forward="$prior_forward" ;; esac
 
 # The privileged helper: stop its socket so nothing can reach root through it
 # while the rest is torn down. Its unit files and binary go below.
@@ -226,6 +231,7 @@ fi
 		constants.WireGuardSubnet,
 		strings.Join(globalPaths(), " "),
 		globalnetns.HostTable, globalnetns.HostIface, globalnetns.Name,
+		filepath.Join(constants.GlobalStateRoot, constants.GlobalNetnsPriorForwardFile),
 	)
 }
 

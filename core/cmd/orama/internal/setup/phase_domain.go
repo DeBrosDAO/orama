@@ -64,6 +64,7 @@ func (r *runner) waitDomain(ctx context.Context) error {
 	err := r.d.Domain.Wait(ctx, r.via, r.opts.Domain, r.d.Timing.DNSPoll, r.d.Timing.DNSDeadline)
 	if err != nil {
 		r.emit("", StepDNS, StateFailed, err.Error())
+		r.announceDomain(ctx)
 		return fmt.Errorf("%s is not delegated yet: %w\n  everything else is installed; create the records above, then run `%s`, which resumes at this step",
 			r.opts.Domain, err, r.resumeCommand())
 	}

@@ -216,3 +216,46 @@ func TestCopyProxiedHeaders_theUpstreamsHeaderReplacesTheProxysOwn(t *testing.T)
 		t.Error("the tenant-origin marker reached the client")
 	}
 }
+
+// A tenant's function or app is upstream of the proxy: it may not drop the platform's transport
+// security or MIME sniffing protection, nor widen the CORS policy, on its host.
+func TestCopyProxiedHeaders_theGatewaysOwnHeadersStayTheGateways(t *testing.T) {
+	rec := httptest.NewRecorder()
+	rec.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+	rec.Header().Set("X-Content-Type-Options", "nosniff")
+	rec.Header().Set("Access-Control-Allow-Origin", "https://demo.example.org")
+	resp := &http.Response{Header: http.Header{}}
+	resp.Header.Set("Strict-Transport-Security", "max-age=0")
+	resp.Header.Set("X-Content-Type-Options", "")
+	resp.Header.Set("Access-Control-Allow-Origin", "*")
+	resp.Header.Set("Access-Control-Allow-Credentials", "true")
+	resp.Header.Set("X-Frame-Options", "SAMEORIGIN")
+
+	copyProxiedHeaders(rec, resp)
+
+	for key, want := range map[string]string{
+		"Strict-Transport-Security":        "max-age=31536000; includeSubDomains",
+		"X-Content-Type-Options":           "nosniff",
+		"Access-Control-Allow-Origin":      "https://demo.example.org",
+		"Access-Control-Allow-Credentials": "",
+		"X-Frame-Options":                  "SAMEORIGIN",
+	} {
+		if got := rec.Header().Get(key); got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
+	}
+}
+
+// The CORS answer varies by Origin; an upstream Vary adds to that rather than replacing it.
+func TestCopyProxiedHeaders_varyIsMerged(t *testing.T) {
+	rec := httptest.NewRecorder()
+	rec.Header().Set("Vary", "Origin")
+	resp := &http.Response{Header: http.Header{}}
+	resp.Header.Add("Vary", "Accept-Encoding, origin")
+
+	copyProxiedHeaders(rec, resp)
+
+	if got := rec.Header().Get("Vary"); got != "Origin, Accept-Encoding" {
+		t.Errorf("Vary = %q, want %q", got, "Origin, Accept-Encoding")
+	}
+}

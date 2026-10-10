@@ -96,18 +96,64 @@ func (g *Gateway) retainBreakers(namespace string, targets []namespaceGatewayTar
 // tenant-origin marker, which is for the gateway that forwarded the request and
 // not for its client.
 //
-// Each header the namespace gateway sent replaces the one this gateway's own
-// middleware already set: the response is the namespace gateway's. Added to it
-// instead, the CORS headers both gateways set came out twice, and a browser
-// refuses a response whose Access-Control-Allow-Origin holds two values, so
-// every page calling a namespace's functions failed (the stagenet demo, 2026-10-10).
-// A header with several values upstream, such as Set-Cookie, keeps all of them.
+// Each header the upstream sent replaces the one this gateway's own middleware
+// already set, except the ones this gateway owns. Added instead, the CORS headers
+// both gateways set came out twice, and a browser refuses a response whose
+// Access-Control-Allow-Origin holds two values, so every page calling a
+// namespace's functions failed (the stagenet demo, 2026-10-10). A header with
+// several values upstream, such as Set-Cookie, keeps all of them.
+//
+// The upstream is tenant-influenced (a function in raw-HTTP mode, a deployed
+// app), so it may not override what the platform guarantees for every host:
+// transport security, MIME sniffing and the CORS policy stay this gateway's
+// (gatewayOwnedHeaders). Vary is merged, not replaced: the CORS answer varies by
+// Origin, and an upstream Vary that dropped it would let a cache serve one
+// origin's answer to another.
 func copyProxiedHeaders(w http.ResponseWriter, resp *http.Response) {
 	for key, values := range resp.Header {
-		if strings.EqualFold(key, httputil.HeaderTenantOrigin) {
+		canonical := http.CanonicalHeaderKey(key)
+		switch {
+		case strings.EqualFold(key, httputil.HeaderTenantOrigin):
 			continue
+		case gatewayOwnedHeaders[canonical]:
+			continue
+		case canonical == "Vary":
+			mergeVary(w.Header(), values)
+		default:
+			w.Header()[canonical] = append([]string(nil), values...)
 		}
-		w.Header()[key] = append([]string(nil), values...)
+	}
+}
+
+// gatewayOwnedHeaders are the response headers the platform sets on every host and
+// a proxied upstream may not replace.
+var gatewayOwnedHeaders = map[string]bool{
+	"Strict-Transport-Security":        true,
+	"X-Content-Type-Options":           true,
+	"Access-Control-Allow-Origin":      true,
+	"Access-Control-Allow-Methods":     true,
+	"Access-Control-Allow-Headers":     true,
+	"Access-Control-Allow-Credentials": true,
+	"Access-Control-Expose-Headers":    true,
+	"Access-Control-Max-Age":           true,
+}
+
+// mergeVary adds the upstream's Vary fields to the ones h already has, each once.
+func mergeVary(h http.Header, upstream []string) {
+	seen := map[string]bool{}
+	var fields []string
+	for _, line := range append(h.Values("Vary"), upstream...) {
+		for _, f := range strings.Split(line, ",") {
+			f = strings.TrimSpace(f)
+			if f == "" || seen[strings.ToLower(f)] {
+				continue
+			}
+			seen[strings.ToLower(f)] = true
+			fields = append(fields, f)
+		}
+	}
+	if len(fields) > 0 {
+		h.Set("Vary", strings.Join(fields, ", "))
 	}
 }
 

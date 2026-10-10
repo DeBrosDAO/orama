@@ -117,12 +117,12 @@ func RestrictCorefileToCoreDNS() error {
 	return restrictToGroup(CorefilePath, group)
 }
 
-// generateCorefile creates the CoreDNS configuration (RQLite only). The
-// plugin reaches the index rqlited where it binds, with its credentials.
 // coreDNSRecordRefresh is how often the rqlite plugin reloads the zone's records
 // from the node's rqlite replica: how stale a nameserver's answer can be.
 const coreDNSRecordRefresh = 5 * time.Second
 
+// generateCorefile creates the CoreDNS configuration (RQLite only). The
+// plugin reaches the index rqlited where it binds, with its credentials.
 func (ci *CoreDNSInstaller) generateCorefile(domain string, rq rqlite.Endpoint) string {
 	authBlock := fmt.Sprintf("        username %s\n        password %s\n", rq.Username, rq.Password)
 
