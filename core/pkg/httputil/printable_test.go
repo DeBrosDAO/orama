@@ -32,3 +32,25 @@ func TestPrintableMax(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+func TestOneLine(t *testing.T) {
+	for name, tc := range map[string]struct{ in, want string }{
+		"one line is unchanged":         {"plain text 123", "plain text 123"},
+		"empty":                         {"", ""},
+		"only line breaks":              {"\n\r\n  \n", ""},
+		"lines are kept apart":          {"first\nsecond\r\nthird", "first | second | third"},
+		"blank lines and edges dropped": {"\n\n  a  \n\n\n b \n", "a | b"},
+		"tabs are spaces":               {"a\tb", "a b"},
+		"unicode separators end lines":  {"a b c\u0085d", "a | b | c | d"},
+		"escape sequences are removed":  {"ok\x1b[2J\nforged\a", "ok[2J | forged"},
+		"format characters are removed": {"gnp‮.exe\nzero​width", "gnp.exe | zerowidth"},
+		"a line of only controls drops": {"a\n\x1b\x07\nb", "a | b"},
+		"invalid utf-8 is removed":      {"bad \xff\xfe utf8", "bad  utf8"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := OneLine(tc.in); got != tc.want {
+				t.Errorf("OneLine(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}

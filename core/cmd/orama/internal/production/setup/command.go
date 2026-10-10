@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/build"
+	"github.com/DeBrosOfficial/network/pkg/httputil"
 	"github.com/DeBrosOfficial/network/pkg/invite"
 	"net"
 	"os"
@@ -318,16 +319,16 @@ func checkNodeAccess(opts Options, node inspector.Node) error {
 		if !opts.UsePassword && opts.BootstrapKey == "" {
 			return fmt.Errorf("the RootWallet key for %s@%s does not open the VPS (%s); "+
 				"install it once with --password (password login, read from your RootWallet vault) or --bootstrap-key <private key that opens the VPS today>",
-				opts.User, opts.IP, strings.TrimSpace(res.Stderr))
+				opts.User, opts.IP, httputil.OneLine(res.Stderr))
 		}
-		return fmt.Errorf("SSH with the RootWallet key failed right after installing it: %s", strings.TrimSpace(res.Stderr))
+		return fmt.Errorf("SSH with the RootWallet key failed right after installing it: %s", httputil.OneLine(res.Stderr))
 	}
 	if opts.User == "root" {
 		return nil
 	}
 	if res := inspector.RunSSH(context.Background(), node, "sudo -n true"); !res.OK() {
 		return fmt.Errorf("user %s on %s needs passwordless sudo: the install runs sudo non-interactively (%s)",
-			opts.User, opts.IP, strings.TrimSpace(res.Stderr))
+			opts.User, opts.IP, httputil.OneLine(res.Stderr))
 	}
 	return nil
 }
@@ -365,10 +366,10 @@ func installPublicKeyWithKey(ip, user, keyPath, pubKey, knownHostsPath string) e
 	out, err := runCommandWithEnvStdin(sshBin, nil, strings.TrimSpace(pubKey)+"\n",
 		installKeyWithKeyArgs(ip, user, keyPath, knownHostsPath)...)
 	if err != nil {
-		return fmt.Errorf("installing the SSH key with --bootstrap-key failed: %w (%s)", err, strings.TrimSpace(out))
+		return fmt.Errorf("installing the SSH key with --bootstrap-key failed: %w (%s)", err, httputil.OneLine(out))
 	}
 	if !strings.Contains(out, "key installed") {
-		return fmt.Errorf("the VPS did not confirm the key was installed: %s", strings.TrimSpace(out))
+		return fmt.Errorf("the VPS did not confirm the key was installed: %s", httputil.OneLine(out))
 	}
 	return nil
 }
@@ -466,10 +467,10 @@ func installPublicKey(ip, user, password, pubKey, knownHostsPath string) error {
 		args...,
 	)
 	if err != nil {
-		return fmt.Errorf("installing the SSH key over password authentication failed: %w (%s)", err, strings.TrimSpace(out))
+		return fmt.Errorf("installing the SSH key over password authentication failed: %w (%s)", err, httputil.OneLine(out))
 	}
 	if !strings.Contains(out, "key installed") {
-		return fmt.Errorf("the VPS did not confirm the key was installed: %s", strings.TrimSpace(out))
+		return fmt.Errorf("the VPS did not confirm the key was installed: %s", httputil.OneLine(out))
 	}
 	return nil
 }
@@ -693,7 +694,7 @@ func runOnJoinVia(joinVia, cmd string) (string, error) {
 	defer cleanup()
 	res := inspector.RunSSH(context.Background(), via[0], cmd)
 	if !res.OK() {
-		return "", fmt.Errorf("%s", strings.TrimSpace(res.Stderr+" "+res.Stdout))
+		return "", fmt.Errorf("%s", httputil.OneLine(res.Stderr+"\n"+res.Stdout))
 	}
 	return res.Stdout, nil
 }
@@ -915,7 +916,14 @@ func stageArchiveCommand(dir, cliSum string, trusted []string) string {
 		"else " + stage + " --trust-signers " + strings.Join(trusted, ",") + "; fi'"
 }
 
-func findBinary(name string) (string, error) {
+// Seams the tests replace: where a helper binary is found and how it is run.
+var (
+	findBinary             = lookupBinary
+	runCommand             = execCommand
+	runCommandWithEnvStdin = execCommandWithEnvStdin
+)
+
+func lookupBinary(name string) (string, error) {
 	paths := []string{
 		"/opt/homebrew/bin/" + name,
 		"/usr/local/bin/" + name,
@@ -929,7 +937,7 @@ func findBinary(name string) (string, error) {
 	return "", fmt.Errorf("%s not found", name)
 }
 
-func runCommand(bin string, args ...string) (string, error) {
+func execCommand(bin string, args ...string) (string, error) {
 	cmd := &exec.Cmd{
 		Path: bin,
 		Args: append([]string{bin}, args...),

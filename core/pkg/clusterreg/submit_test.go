@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -110,5 +111,31 @@ func TestParseUint_refusesWhatWrapsAround(t *testing.T) {
 		} else if strings.ContainsRune(err.Error(), 0x1b) {
 			t.Errorf("the error carries an escape: %q", err.Error())
 		}
+	}
+}
+
+func TestBroadcast_aMultiLineRefusalIsOnOneLine(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"tx_response":{"code":5,"raw_log":"insufficient fee\nbase fee 7\ngot 1"}}`))
+	}))
+	defer srv.Close()
+	_, err := Broadcast(context.Background(), srv.URL, []byte{1})
+	if err == nil || strings.Contains(err.Error(), "\n") || !strings.Contains(err.Error(), "insufficient fee | base fee 7 | got 1") {
+		t.Fatalf("err = %q", err)
+	}
+}
+
+func TestStatusError_aMultiLineMessageIsOnOneLine(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"message":"rpc error:\n  code = Unknown\ndesc = boom\u001b[2J"}`, http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	_, err := FetchAccount(context.Background(), srv.URL, vectorAddress)
+	var status *StatusError
+	if !errors.As(err, &status) {
+		t.Fatalf("err = %v", err)
+	}
+	if want := "rpc error: | code = Unknown | desc = boom[2J"; status.Message != want {
+		t.Fatalf("message = %q, want %q", status.Message, want)
 	}
 }

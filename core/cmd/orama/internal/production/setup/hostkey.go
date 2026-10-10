@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/DeBrosOfficial/network/pkg/httputil"
 )
 
 // Enrollment is the one connection that bootstraps every later trust
@@ -39,7 +41,7 @@ func scanHostKey(ip string) (*hostKey, error) {
 
 	out, err := runCommand(keyscan, "-T", "10", "-t", "ed25519,ecdsa,rsa", ip)
 	if err != nil {
-		return nil, fmt.Errorf("ssh-keyscan %s failed: %w (%s)", ip, err, strings.TrimSpace(out))
+		return nil, fmt.Errorf("ssh-keyscan %s failed: %w (%s)", ip, err, httputil.OneLine(out))
 	}
 
 	var lines []string
@@ -93,7 +95,7 @@ func fingerprintLines(lines []string) ([]string, error) {
 
 	out, err := runCommand(keygen, "-l", "-f", tmp.Name())
 	if err != nil {
-		return nil, fmt.Errorf("fingerprint host key: %w (%s)", err, strings.TrimSpace(out))
+		return nil, fmt.Errorf("fingerprint host key: %w (%s)", err, httputil.OneLine(out))
 	}
 
 	var fps []string
@@ -108,7 +110,7 @@ func fingerprintLines(lines []string) ([]string, error) {
 	}
 	// fingerprints[i] must describe lines[i]: trusting a key is done by line.
 	if len(fps) != len(lines) {
-		return nil, fmt.Errorf("ssh-keygen fingerprinted %d of %d host keys: %s", len(fps), len(lines), strings.TrimSpace(out))
+		return nil, fmt.Errorf("ssh-keygen fingerprinted %d of %d host keys: %s", len(fps), len(lines), httputil.OneLine(out))
 	}
 	return fps, nil
 }
@@ -241,13 +243,13 @@ func confirmHostKey(hk *hostKey, ip, expected string, in io.Reader, out io.Write
 	}
 }
 
-// runCommandWithEnvStdin runs bin with extra environment entries and the given
-// stdin.
+// runCommandWithEnvStdin is a seam the tests replace: execCommandWithEnvStdin runs bin with
+// extra environment entries and the given stdin.
 //
 // Both exist to keep secrets out of argv: a password on the command line is
 // readable by any local process through ps, and data piped on stdin needs no
 // shell quoting, so it cannot break out of the remote command.
-func runCommandWithEnvStdin(bin string, env []string, stdin string, args ...string) (string, error) {
+func execCommandWithEnvStdin(bin string, env []string, stdin string, args ...string) (string, error) {
 	cmd := exec.Command(bin, args...)
 	cmd.Env = append(os.Environ(), env...)
 	cmd.Stdin = strings.NewReader(stdin)

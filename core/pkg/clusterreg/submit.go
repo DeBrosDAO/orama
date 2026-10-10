@@ -90,7 +90,7 @@ func Broadcast(ctx context.Context, base string, tx []byte) (string, error) {
 		return "", fmt.Errorf("broadcast response is not JSON")
 	}
 	if resp.TxResponse.Code != 0 || resp.TxResponse.TxHash == "" {
-		log := []rune(printable(resp.TxResponse.RawLog))
+		log := []rune(oneLine(resp.TxResponse.RawLog))
 		if len(log) > 200 {
 			log = log[:200]
 		}
@@ -191,7 +191,7 @@ func errorMessage(body []byte) string {
 	if json.Unmarshal(body, &doc) == nil && doc.Message != "" {
 		text = doc.Message
 	}
-	runes := []rune(printable(text))
+	runes := []rune(oneLine(text))
 	if len(runes) > maxErrorMessage {
 		runes = runes[:maxErrorMessage]
 	}

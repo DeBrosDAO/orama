@@ -30,6 +30,10 @@ var txHashPattern = regexp.MustCompile(`^[0-9A-Fa-f]{64}$`)
 // printable is httputil.Printable: text the chain sent is printed to the operator's terminal.
 func printable(s string) string { return httputil.Printable(s) }
 
+// oneLine is httputil.OneLine: a node's error text or a transaction's log can span lines, and the
+// lines are kept apart on one.
+func oneLine(s string) string { return httputil.OneLine(s) }
+
 // ErrNotIncluded is returned when a broadcast transaction is not in a block by the deadline.
 var ErrNotIncluded = errors.New("the transaction is not in a block")
 
@@ -104,7 +108,7 @@ func txResult(ctx context.Context, url, hash string) (int64, bool, error) {
 		return 0, false, fmt.Errorf("transaction result has no block height (%q)", resp.TxResponse.Height)
 	}
 	if resp.TxResponse.Code != 0 {
-		log := []rune(printable(resp.TxResponse.RawLog))
+		log := []rune(oneLine(resp.TxResponse.RawLog))
 		if len(log) > maxResultLog {
 			log = log[:maxResultLog]
 		}

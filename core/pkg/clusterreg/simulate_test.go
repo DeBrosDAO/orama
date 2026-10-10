@@ -91,7 +91,7 @@ func TestErrorMessage_cutsAndCleans(t *testing.T) {
 	if got := errorMessage([]byte(long)); len([]rune(got)) != maxErrorMessage {
 		t.Errorf("a long body kept %d characters", len([]rune(got)))
 	}
-	if got := errorMessage([]byte("plain\ntext")); got != "plaintext" {
+	if got := errorMessage([]byte("plain\ntext")); got != "plain | text" {
 		t.Errorf("errorMessage = %q", got)
 	}
 }

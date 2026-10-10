@@ -28,3 +28,32 @@ func PrintableMax(s string, max int) string {
 	}
 	return string(runes)
 }
+
+// lineJoiner separates the lines of a multi-line text that OneLine puts on one line.
+const lineJoiner = " | "
+
+// OneLine is Printable for text that may span several lines, such as the stderr of a
+// remote command or the log of a refused transaction. Printable removes the line breaks
+// and so runs the last word of one line into the first of the next; OneLine keeps the
+// lines apart, trimmed and joined with " | ", so the text cannot start a line of its
+// own in an error and still reads as it was written.
+func OneLine(s string) string {
+	lines := strings.FieldsFunc(s, isLineBreak)
+	kept := lines[:0]
+	for _, line := range lines {
+		if line = strings.TrimSpace(Printable(strings.ReplaceAll(line, "\t", " "))); line != "" {
+			kept = append(kept, line)
+		}
+	}
+	return strings.Join(kept, lineJoiner)
+}
+
+// isLineBreak reports whether r ends a line: LF, CR, VT, FF, NEL and the Unicode line and
+// paragraph separators.
+func isLineBreak(r rune) bool {
+	switch r {
+	case '\n', '\r', '\v', '\f', '\u0085', ' ', ' ':
+		return true
+	}
+	return false
+}
