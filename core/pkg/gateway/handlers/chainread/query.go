@@ -73,6 +73,8 @@ var publicQuery = names(
 	"orama.nodes.v1.Query/Params", "orama.nodes.v1.Query/Operator", "orama.nodes.v1.Query/Node",
 	"orama.nodes.v1.Query/Cluster",
 	"orama.nodes.v1.Query/NodeUnbondings", // capped at MaxUnbondingsPerQuery by x/nodes
+	"orama.nodes.v1.Query/NodeByName", "orama.nodes.v1.Query/NameOfNode",
+	"orama.nodes.v1.Query/NodeNames", // paged by key, at most MaxNodeNamesPerPage names a page, by x/nodes
 	"orama.power.v1.Query/Params", "orama.power.v1.Query/BootstrapCommittee", "orama.power.v1.Query/Lambda",
 	"orama.power.v1.Query/ValidatorPower",
 	"orama.relay.v1.Query/Params", "orama.relay.v1.Query/Reporters", "orama.relay.v1.Query/Relay",

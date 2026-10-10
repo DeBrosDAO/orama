@@ -364,3 +364,15 @@ func TestInvariants_aNameDepositMissingFromTheModuleAccountBreaksTheBalance(t *t
 	require.NoError(t, err)
 	require.False(t, got.BalanceMatches, "the ledger counts the name deposit, so a short module account is a broken invariant")
 }
+
+func TestNodeNames_aPageIsBoundedAndPagesByKey(t *testing.T) {
+	f := newTestFixture(t)
+	q := keeper.NewQueryServerImpl(f.Keeper)
+
+	_, err := q.NodeNames(f.Ctx, &types.QueryNodeNamesRequest{Pagination: &query.PageRequest{Offset: 5}})
+	require.Error(t, err, "an offset skips keys one by one, so the query refuses it")
+
+	res, err := q.NodeNames(f.Ctx, &types.QueryNodeNamesRequest{Pagination: &query.PageRequest{Limit: 10 * keeper.MaxNodeNamesPerPage, CountTotal: true}})
+	require.NoError(t, err)
+	require.Zero(t, res.Pagination.Total, "a total would walk every name, so it is not computed")
+}

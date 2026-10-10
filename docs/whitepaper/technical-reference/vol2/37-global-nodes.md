@@ -516,6 +516,7 @@ Bring-up follows from that. The first start of the provider creates `hot-key`, l
 
 ## Known gaps
 
+- Identification names have no release cooldown and no per-operator limit beyond the deposit: a released name is free at once, and an operator with many nodes can hold many names. A name resolves to nothing while its node has no literal-IP endpoint, and the service that serves the records is outside the chain (`chain/x/nodes/keeper/names.go`).
 - `MsgRegisterOperator` and `MsgUpdateNode` have no `orama` command. A new operator needs the Go client in `chain/client/node` or the stagenet helper, and an ASN, endpoints or hot key cannot be changed from the CLI (`core/cmd/orama/internal/cmd/globalcmd/register.go`).
 - The roles `VALIDATOR`, `EXIT` and `DIRAUTH` have no consumer on chain: no module reads them, so bonding them has no effect beyond making the node `active`. A `VALIDATOR` role bond does not feed `x/power` (`chain/x/nodes/keeper/lifecycle.go:IsRoleActive`).
 - `Unjail`, `Tombstone` and `CreditRoleBond` have no caller in the application. `x/storage` jails a node and nothing can un-jail it; the operator can only retire it. The comment on `CreditRoleBond` says `x/power`'s force-bond path uses it, but that path does not (`chain/x/nodes/keeper/lifecycle.go:CreditRoleBond`).

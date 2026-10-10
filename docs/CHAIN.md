@@ -2451,7 +2451,7 @@ every embedded one. Every module's `Invariants` query walks the module's whole s
 are `orama.houses.v1.Query/Tiers` (reads every operator and its service days) and
 `orama.shielded.v1.Query/Pools` (every pool). The served queries are point lookups, constant
 computations, or walks the module caps on the server: `Challenges` requires a `node_id` and reads that
-node's key range, and `Snapshots` and `NodeUnbondings` return at most 1000 entries. A test fails for an
+node's key range, `Snapshots` and `NodeUnbondings` return at most 1000 entries, and `NodeNames` pages by key (at most 1000 names a page, no offset, no total count). A test fails for an
 embedded Query method on neither list, so a new module query is not public until someone decides it
 should be. `orama chain query --rpc` and the node's own gRPC serve all of them.
 
