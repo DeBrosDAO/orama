@@ -286,7 +286,7 @@ func (r *runner) machineRequest(ip string) MachineRequest {
 		hostKey = r.opts.HostKeys[""]
 	}
 	return MachineRequest{
-		IP: ip, User: r.opts.User, HostKey: hostKey, BootstrapKey: r.opts.BootstrapKey,
+		IP: ip, User: r.opts.UserFor(ip), HostKey: hostKey, BootstrapKey: r.opts.BootstrapKey,
 		Password: r.opts.Password, UsePassword: r.opts.UsePassword, Env: r.plan.Env,
 	}
 }

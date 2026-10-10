@@ -128,7 +128,7 @@ func (r *runner) installGlobal(ctx context.Context, n *nodeRun, trust *statesync
 	ip := n.plan.IP
 	r.emit(ip, StepGlobal, StateRunning, strings.Join(n.plan.ServiceNames(), ","))
 	in := GlobalInstall{
-		Node: n.plan, IP: ip, User: r.opts.User, ChainID: r.net.Manifest.ChainID, Genesis: r.genesis,
+		Node: n.plan, IP: ip, User: r.opts.UserFor(ip), ChainID: r.net.Manifest.ChainID, Genesis: r.genesis,
 		Trust: trust, Contact: r.contact(),
 	}
 	if n.plan.HasService(install.GlobalServiceRelay) {

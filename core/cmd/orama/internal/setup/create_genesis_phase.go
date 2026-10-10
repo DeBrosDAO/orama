@@ -47,7 +47,7 @@ func (r *runner) initChain(ctx context.Context, n *nodeRun) error {
 	var err error
 	if r.create.homes[n].Genesis {
 		r.emit(ip, StepGlobal, StateRunning, "finishing an install an earlier run left half done; the keys are kept")
-		err = b.WireChain(ctx, WireInput{Node: n.plan, IP: ip, User: r.opts.User, Contact: r.contact()})
+		err = b.WireChain(ctx, WireInput{Node: n.plan, IP: ip, User: r.opts.UserFor(ip), Contact: r.contact()})
 	} else {
 		r.emit(ip, StepGlobal, StateRunning, "making the chain home and the node's keys")
 		err = r.initFreshChain(ctx, n)
@@ -62,7 +62,7 @@ func (r *runner) initChain(ctx context.Context, n *nodeRun) error {
 }
 
 func (r *runner) initFreshChain(ctx context.Context, n *nodeRun) error {
-	in := InitChainInput{Node: n.plan, IP: n.plan.IP, User: r.opts.User, ChainID: r.net.Manifest.ChainID, Contact: r.contact()}
+	in := InitChainInput{Node: n.plan, IP: n.plan.IP, User: r.opts.UserFor(n.plan.IP), ChainID: r.net.Manifest.ChainID, Contact: r.contact()}
 	if n.plan.HasService(install.GlobalServiceRelay) {
 		tor, err := readTorNetwork(r.opts.TorNetwork)
 		if err != nil {

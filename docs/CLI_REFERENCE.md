@@ -4936,7 +4936,7 @@ machine until every machine passes.
 | `--exit` | `false` | Make the relay an exit relay: other people's traffic leaves from your IP address. Needs the network's Tor network file and --yes |
 | `--force-new-genesis` | `false` | With --create-network: build a new genesis although the machines carry one. Refused once a chain has run |
 | `--host-key` | — | Expected SSH host-key fingerprint, SHA256:..., for a single machine or <ip>=SHA256:... for each (repeatable) |
-| `--ip` | — | Public IPv4 address of a machine (repeatable; the addresses can also be given as arguments) |
+| `--ip` | — | Public IPv4 address of a machine, or <user>@<address> to log in to that machine as <user> instead of --user (repeatable; the addresses can also be given as arguments) |
 | `--min-version` | — | With --create-network: the oldest orama version that may join, X.Y.Z (default: this CLI's version) |
 | `--name` | — | Node name, the node's id on the chain; several machines are named <name>, <name>-2, ... (required unless --cluster-only) |
 | `--network` | — | Network to join: a name from `orama network list` (default: the active network, or the only one) |

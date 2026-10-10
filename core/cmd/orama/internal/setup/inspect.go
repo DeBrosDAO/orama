@@ -54,7 +54,7 @@ func Inspect(ctx context.Context, opts Options, enroll Enroller) ([]Inspection, 
 
 func inspectOne(ctx context.Context, opts Options, enroll Enroller, ip string, profile install.Profile) Inspection {
 	res := Inspection{IP: ip}
-	req := MachineRequest{IP: ip, User: opts.User, HostKey: opts.HostKeys[ip], BootstrapKey: opts.BootstrapKey, Password: opts.Password, UsePassword: opts.UsePassword}
+	req := MachineRequest{IP: ip, User: opts.UserFor(ip), HostKey: opts.HostKeys[ip], BootstrapKey: opts.BootstrapKey, Password: opts.Password, UsePassword: opts.UsePassword}
 	if req.HostKey == "" {
 		req.HostKey = opts.HostKeys[""]
 	}

@@ -40,7 +40,11 @@ func (o Options) CommandLine() string {
 	flag("env", o.Env)
 	flag("name", o.Name)
 	for _, ip := range o.IPs {
-		flag("ip", ip)
+		if user, ok := o.Users[ip]; ok {
+			flag("ip", user+"@"+ip)
+		} else {
+			flag("ip", ip)
+		}
 	}
 	for _, ip := range sortedKeys(o.HostKeys) {
 		if ip == "" {

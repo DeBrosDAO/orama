@@ -72,7 +72,7 @@ func (r *runner) wireChain(ctx context.Context, n *nodeRun) error {
 		return err
 	}
 	r.emit(ip, StepSync, StateRunning, "wiring the chain to the other seats")
-	if err := r.create.boots[n].WireChain(ctx, WireInput{Node: n.plan, IP: ip, User: r.opts.User, Peers: peers, Contact: r.contact()}); err != nil {
+	if err := r.create.boots[n].WireChain(ctx, WireInput{Node: n.plan, IP: ip, User: r.opts.UserFor(ip), Peers: peers, Contact: r.contact()}); err != nil {
 		r.emit(ip, StepSync, StateFailed, err.Error())
 		return fmt.Errorf("machine %s: %w", ip, err)
 	}

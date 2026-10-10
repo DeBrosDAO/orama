@@ -78,7 +78,7 @@ func (r *runner) clusterPhase(ctx context.Context) error {
 		if r.via == nil {
 			r.via = n.m
 		}
-		done = append(done, RecordedNode{Host: n.plan.IP, User: r.opts.User, Role: r.clusterRole()})
+		done = append(done, RecordedNode{Host: n.plan.IP, User: r.opts.UserFor(n.plan.IP), Role: r.clusterRole()})
 		if err := r.recordCluster(done); err != nil {
 			return err
 		}
@@ -146,7 +146,7 @@ func (r *runner) installCluster(ctx context.Context, n *nodeRun) error {
 	}
 	r.emit(ip, StepCluster, StateRunning, string(n.plan.Cluster))
 	in := ClusterInstall{
-		Create: n.plan.Cluster == ClusterCreate, Name: n.plan.Name, IP: ip, User: r.opts.User, Env: r.plan.Env,
+		Create: n.plan.Cluster == ClusterCreate, Name: n.plan.Name, IP: ip, User: r.opts.UserFor(ip), Env: r.plan.Env,
 		Domain: r.opts.Domain, ACMECA: r.opts.ACMECA, Wallet: r.evm, NodeNamesZone: r.nodeNamesZone(),
 	}
 	if !in.Create {

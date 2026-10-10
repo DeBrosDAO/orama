@@ -91,7 +91,11 @@ type Options struct {
 	// User is the SSH login; UsePassword and BootstrapKey say how the first
 	// connection is made (see production/setup.EnrollRequest). Password is typed
 	// into the wizard for this run and never stored.
-	User         string
+	User string
+	// Users are the logins given for single machines as --ip <user>@<address>; a machine without
+	// one uses User. Providers differ (one image logs in as root, another as ubuntu), and the
+	// machines of one network are often rented from several.
+	Users        map[string]string
 	UsePassword  bool
 	Password     string
 	BootstrapKey string
@@ -137,11 +141,20 @@ func (o *Options) Normalize() error {
 	if o.User == "" {
 		o.User = DefaultSSHUser
 	}
-	ips, err := normalizeIPs(o.IPs)
+	ips, users, err := splitLogins(o.IPs)
 	if err != nil {
 		return err
 	}
+	if ips, err = normalizeIPs(ips); err != nil {
+		return err
+	}
 	o.IPs = ips
+	for ip, user := range users {
+		if o.Users == nil {
+			o.Users = map[string]string{}
+		}
+		o.Users[net.ParseIP(ip).To4().String()] = user
+	}
 	if !sshUserRE.MatchString(o.User) {
 		return clierr.Usage("--user %q is not a login name", o.User)
 	}
@@ -171,11 +184,53 @@ func (o *Options) Normalize() error {
 	return nil
 }
 
+// UserFor is the SSH login of the machine at ip: its own from --ip <user>@<address>, else --user.
+func (o *Options) UserFor(ip string) string {
+	if user, ok := o.Users[ip]; ok {
+		return user
+	}
+	return o.User
+}
+
+// splitLogins takes the <user>@ off each --ip that carries one and returns the bare addresses and
+// the logins by address. A login that is not a login name is refused.
+func splitLogins(in []string) ([]string, map[string]string, error) {
+	out := make([]string, 0, len(in))
+	users := map[string]string{}
+	for _, raw := range in {
+		raw = strings.TrimSpace(raw)
+		user, ip, found := strings.Cut(raw, "@")
+		if !found {
+			out = append(out, raw)
+			continue
+		}
+		if !sshUserRE.MatchString(user) {
+			return nil, nil, clierr.Usage("--ip %q: %q is not a login name", raw, user)
+		}
+		users[ip] = user
+		out = append(out, ip)
+	}
+	return out, users, nil
+}
+
 // ParseIPList splits a pasted list of addresses (spaces, commas, semicolons or
-// lines) and checks each one is a public IPv4 address.
+// lines), each an IPv4 address or <user>@<address>, and checks each address is a public
+// IPv4 address. The entries keep their login, for Normalize.
 func ParseIPList(list string) ([]string, error) {
 	fields := strings.FieldsFunc(list, func(r rune) bool { return r == ',' || r == ';' || unicode.IsSpace(r) })
-	return normalizeIPs(fields)
+	ips, users, err := splitLogins(fields)
+	if err != nil {
+		return nil, err
+	}
+	if ips, err = normalizeIPs(ips); err != nil {
+		return nil, err
+	}
+	for i, ip := range ips {
+		if user := users[ip]; user != "" {
+			ips[i] = user + "@" + ip
+		}
+	}
+	return ips, nil
 }
 
 func normalizeIPs(in []string) ([]string, error) {
