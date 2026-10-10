@@ -16,7 +16,7 @@ var monitorCmd = &cobra.Command{
 	Use:   "monitor",
 	Short: "Write this relay's or directory authority's monitor.json for the node report (run by orama-global-tor-monitor.timer)",
 	Long: `Write <home>/monitor.json with whether the consensus the relay or directory authority
-holds lists it: {"in_consensus": true|false}. 'orama monitor node' shows it on the Global
+holds lists it: {"in_consensus": true|false}. 'orama status node' shows it on the Global
 line and the node report raises a warning when the node is not listed. The field is left
 out (the file is "{}") while the node has no consensus yet or the one it holds has
 expired, so an unknown state is never reported as a no. It reads only the role's own

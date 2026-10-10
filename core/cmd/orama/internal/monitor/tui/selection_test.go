@@ -19,7 +19,7 @@ func stream(m model, snap *cluster.ClusterSnapshot) model {
 
 // The selection follows the host, not the row, when a snapshot reorders nodes.
 func TestApplySnapshot_selectionFollowsTheHost(t *testing.T) {
-	m := press(press(withSnapshot(testModel()), runes("2")), tea.KeyMsg{Type: tea.KeyDown})
+	m := press(press(withSnapshot(testModel()), runes("3")), tea.KeyMsg{Type: tea.KeyDown})
 	reordered := testSnapshot()
 	reordered.Nodes[0], reordered.Nodes[1] = reordered.Nodes[1], reordered.Nodes[0]
 	m = stream(m, reordered)
@@ -31,7 +31,7 @@ func TestApplySnapshot_selectionFollowsTheHost(t *testing.T) {
 // A node that leaves the snapshot while its detail is open, or a snapshot with
 // no nodes at all, must not crash the view.
 func TestNodeDetailContent_nodeLeavesTheSnapshot(t *testing.T) {
-	m := press(press(press(withSnapshot(testModel()), runes("2")), tea.KeyMsg{Type: tea.KeyDown}), tea.KeyMsg{Type: tea.KeyEnter})
+	m := press(press(press(withSnapshot(testModel()), runes("3")), tea.KeyMsg{Type: tea.KeyDown}), tea.KeyMsg{Type: tea.KeyEnter})
 	shorter := testSnapshot()
 	shorter.Nodes = shorter.Nodes[:1]
 	m = stream(m, shorter)

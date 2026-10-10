@@ -75,7 +75,7 @@ Test names are `Test{Function}_{scenario}`.
 
 ## Lifecycle harness
 
-`make -C core test-lifecycle` drives a real three-node cluster through the `orama` CLI: reboot, kill a voter, join, decommission, rolling upgrade, DNS with the index RQLite down. It reads `orama monitor report --json` as its only view of the cluster, so the report's schema is a test contract.
+`make -C core test-lifecycle` drives a real three-node cluster through the `orama` CLI: reboot, kill a voter, join, decommission, rolling upgrade, DNS with the index RQLite down. It reads `orama status report --json` as its only view of the cluster, so the report's schema is a test contract.
 
 ## Sandbox clusters
 

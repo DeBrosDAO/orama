@@ -17,7 +17,7 @@ import (
 // Handle collects this node's health data and writes it as JSON.
 //
 // compact selects one line rather than indented output. The output is JSON
-// either way: `orama monitor --ssh` parses it over SSH, and a person reading it
+// either way: `orama status --ssh` parses it over SSH, and a person reading it
 // on the node wants it indented. The parameter used to be called jsonFlag,
 // which made the command's flag read as "output JSON" when it only chose the
 // formatting — and since it defaulted to true, setting it changed nothing.

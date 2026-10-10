@@ -570,7 +570,7 @@ orama maint global tor monitor [flags]
 ```
 
 Write &lt;home>/monitor.json with whether the consensus the relay or directory authority
-holds lists it: &#123;"in_consensus": true|false&#125;. 'orama monitor node' shows it on the Global
+holds lists it: &#123;"in_consensus": true|false&#125;. 'orama status node' shows it on the Global
 line and the node report raises a warning when the node is not listed. The field is left
 out (the file is "&#123;&#125;") while the node has no consensus yet or the one it holds has
 expired, so an unknown state is never reported as a no. It reads only the role's own

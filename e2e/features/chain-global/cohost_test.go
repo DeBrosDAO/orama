@@ -223,6 +223,6 @@ func TestCoHost_unitsAndMonitorView(t *testing.T) {
 			t.Errorf("%s: monitor chain section %+v", n.Host, ch)
 		}
 	}
-	res := infra.Run(t, harness.CLI(t), "monitor", "chain", "--env", c.F.State.Env)
+	res := infra.Run(t, harness.CLI(t), "status", "chain", "--env", c.F.State.Env)
 	infra.ExpectExit(t, res, infra.ExitOK, c.ID)
 }

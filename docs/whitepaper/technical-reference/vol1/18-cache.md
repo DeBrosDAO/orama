@@ -414,7 +414,7 @@ systemctl cat orama-namespace-olric@index
 # the config a ring runs (index host file; tenant file under data/namespaces/<ns>/configs/)
 cat /opt/orama/.orama/configs/olric/config.yaml
 # members and coordinator, from the report the node writes
-orama monitor report --env <env> --node <ip>
+orama status report --env <env> --node <ip>
 # journal of one namespace's Olric
 orama node logs orama-namespace-olric@<namespace>
 # fleet checks: service active, memberlist port, restarts, suspicions, flapping, memory, member consistency

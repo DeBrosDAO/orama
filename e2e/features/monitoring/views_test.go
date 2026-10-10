@@ -39,7 +39,7 @@ func TestMonitor_everyViewAsTableAndJSON(t *testing.T) {
 			t.Errorf("orama monitor %s --json printed null", view)
 		}
 	}
-	infra.ExpectExit(t, infra.Run(t, cli, "monitor", "--help"), infra.ExitOK, "live", "report", "traffic")
+	infra.ExpectExit(t, infra.Run(t, cli, "status", "--help"), infra.ExitOK, "live", "report", "traffic")
 }
 
 // TestMonitor_clusterAndNodeListEveryNode: cluster and node list every core

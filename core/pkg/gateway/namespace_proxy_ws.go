@@ -64,6 +64,6 @@ func (g *Gateway) proxyNamespaceWebSocket(w http.ResponseWriter, r *http.Request
 	}
 	httputil.WriteRPCError(w, http.StatusServiceUnavailable,
 		httputil.ErrCodeNamespaceGatewayUnavailable,
-		"no gateway of this namespace accepted the WebSocket connection; retry shortly, and check `orama monitor report` for unhealthy nodes",
+		"no gateway of this namespace accepted the WebSocket connection; retry shortly, and check `orama status report` for unhealthy nodes",
 		httputil.WithRetryable())
 }

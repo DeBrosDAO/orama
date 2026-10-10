@@ -26,10 +26,10 @@ const (
 	verdictBad = "✗"
 )
 
-// monitorArgs is `orama monitor <view> --env <env>` plus extra.
+// monitorArgs is `orama status <view> --env <env>` plus extra.
 func monitorArgs(t *testing.T, view string, extra ...string) []string {
 	t.Helper()
-	args := []string{"monitor"}
+	args := []string{"status"}
 	if view != "" {
 		args = append(args, view)
 	}
@@ -41,7 +41,7 @@ func monitorJSON(t *testing.T, view string, v any, extra ...string) {
 	t.Helper()
 	res := harness.CLI(t).MustOK(t, monitorArgs(t, view, append([]string{"--json"}, extra...)...)...)
 	if err := oramacli.DecodeJSON(res, v); err != nil {
-		t.Fatalf("orama monitor %s --json: %v\n%s", view, err, res.Stdout)
+		t.Fatalf("orama status %s --json: %v\n%s", view, err, res.Stdout)
 	}
 }
 

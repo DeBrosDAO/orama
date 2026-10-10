@@ -1,5 +1,5 @@
 // Package display renders a cluster snapshot as the one-shot output of the
-// `orama monitor` subcommands: tables for people, JSON for scripts. Every
+// `orama status` subcommands: tables for people, JSON for scripts. Every
 // table starts with the same verdict line the live view shows.
 package display
 

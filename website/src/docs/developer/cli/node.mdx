@@ -83,10 +83,10 @@ adopted a release root (orama node trust add-root).
 It fetches the channel's metadata and verifies it against the adopted root:
 every role at its threshold, an unexpired timestamp, a snapshot no older than the
 newest this node has accepted, and the channel's own keys for the channel's own
-paths. What does not verify is refused, reported in 'orama monitor', and never
+paths. What does not verify is refused, reported in 'orama status', and never
 installed.
 
-With notify (the default) a newer release is reported in 'orama monitor' and
+With notify (the default) a newer release is reported in 'orama status' and
 nothing is installed. With auto the node installs it only when
 
 ```
@@ -632,7 +632,7 @@ orama node report [flags]
 ```
 
 Collect all system and service data from this node and output
-as a single JSON blob. Designed to be called by 'orama monitor' over SSH.
+as a single JSON blob. Designed to be called by 'orama status' over SSH.
 Requires root privileges for full data collection.
 
 | Flag | Default | Description |

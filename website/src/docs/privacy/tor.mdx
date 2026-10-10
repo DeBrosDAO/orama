@@ -55,7 +55,7 @@ A WebAssembly function calls the `anon_fetch` host function to make an outbound 
 
 ### Health
 
-`GET /v1/health` reports `checks.anon_proxy` as `ok` or `unavailable`. A Tor outage is deliberately not an error: the node keeps serving and stays in DNS. `orama maint inspect --subsystem tor` and `orama monitor` show Tor state.
+`GET /v1/health` reports `checks.anon_proxy` as `ok` or `unavailable`. A Tor outage is deliberately not an error: the node keeps serving and stays in DNS. `orama maint inspect --subsystem tor` and `orama status` show Tor state.
 
 ## Submitting chain transactions over Tor
 
@@ -90,7 +90,7 @@ A host is an authority or a relay, never both. Each role runs under an account o
 
 **One network file.** `tor-network.json` is the only format and one parser reads it, for the install, `orama maint vpn up`, `orama maint vpn check` and every `--onion-network` submission. It carries the network's name, `private`, the authorities (at least three, on public IPv4 literals, with their identities), the voting schedule, `bootstrap`, `allow_exit`, and `validator_onions`. The file is public. The authorities' keys are made once, on an air-gapped machine, by `orama maint global tor ceremony`; the authority identity key stays offline. After a validator's onion service starts, its address is added with `orama maint global tor onions add --network-file tor-network.json <addr.onion>`.
 
-**Relay health.** `orama-global-tor-monitor.timer` runs `orama maint global tor monitor` every five minutes as the relay's own account and writes `monitor.json` with `in_consensus`. `orama monitor node` shows whether the relay is in the relay set, and the health check `global.relay.consensus` warns when it is not.
+**Relay health.** `orama-global-tor-monitor.timer` runs `orama maint global tor monitor` every five minutes as the relay's own account and writes `monitor.json` with `in_consensus`. `orama status node` shows whether the relay is in the relay set, and the health check `global.relay.consensus` warns when it is not.
 
 **The client.** `orama maint vpn up --network tor-network.json` starts a Tor client on the network and offers a loopback SOCKS5 proxy (default `127.0.0.1:9150`). It is a proxy, not a system-wide tunnel: only applications pointed at it use the network. When Tor stops, the port closes and nothing is routed around the network. `orama maint vpn check` joins the network and reads the all-zero account through each validator's onion service; it passes when at least one answers and fails when Tor cannot bootstrap, none answers or there is nothing to try. See [VPN](/docs/privacy/vpn).
 
@@ -109,6 +109,6 @@ The full reference, including the ceremony, exits and the abuse-complaint proced
 
 ## Operating it
 
-- Check: `sudo orama node status`, `orama monitor service`, `orama maint inspect --subsystem tor`.
+- Check: `sudo orama node status`, `orama status service`, `orama maint inspect --subsystem tor`.
 - Logs: `sudo orama node logs orama-namespace-tor@index -f`.
 - If `/v1/proxy/anon` answers 503, Tor is down or not installed on that gateway's node. Restart with `sudo orama node restart`.

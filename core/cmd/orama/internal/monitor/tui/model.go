@@ -1,4 +1,4 @@
-// Package tui is the live `orama monitor` view: a full-screen terminal UI fed
+// Package tui is the live `orama status` view: a full-screen terminal UI fed
 // by a monitor.Source, with a tab per aspect of the cluster.
 package tui
 
@@ -13,6 +13,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/monitor"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/monitor/view"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/operatorview"
 	"github.com/DeBrosOfficial/network/pkg/telemetry/cluster"
 )
 
@@ -28,6 +29,11 @@ const (
 	chromeLines = 4
 	// refreshTimeout bounds a manual refresh.
 	refreshTimeout = 90 * time.Second
+	// operatorInterval is how often the Operator tab rereads the account: earnings change once an
+	// epoch, so the cluster stream's pace would only load the chain.
+	operatorInterval = 30 * time.Second
+	// operatorTimeout bounds one read of the account.
+	operatorTimeout = 20 * time.Second
 )
 
 // Config is what the live view shows and how often.
@@ -35,6 +41,9 @@ type Config struct {
 	Source   monitor.Source
 	Env      string
 	Interval time.Duration
+	// Operator reads the operator's own account on the chain for the Operator tab; nil when no
+	// operator address is known, and the tab says how to name one.
+	Operator func(context.Context) operatorview.Summary
 }
 
 // model is the live view's state. bubbletea copies it on every update, so
@@ -68,6 +77,9 @@ type model struct {
 	nodeDetail   bool
 	alertFilter  view.SeverityFilter
 	showHelp     bool
+
+	// operator is the last reading of the operator's account, nil before the first.
+	operator *operatorview.Summary
 }
 
 // Run shows the live view until the operator quits.
@@ -95,7 +107,27 @@ func newModel(cfg Config, theme view.Theme, now func() time.Time) model {
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(waitForUpdate(m.updates), tick())
+	return tea.Batch(waitForUpdate(m.updates), tick(), m.operatorCmd(0))
+}
+
+// operatorMsg is one reading of the operator's account.
+type operatorMsg operatorview.Summary
+
+// operatorCmd reads the operator's account after delay; nil when no operator is configured.
+func (m model) operatorCmd(delay time.Duration) tea.Cmd {
+	read := m.cfg.Operator
+	if read == nil {
+		return nil
+	}
+	fetch := func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), operatorTimeout)
+		defer cancel()
+		return operatorMsg(read(ctx))
+	}
+	if delay == 0 {
+		return fetch
+	}
+	return tea.Tick(delay, func(time.Time) tea.Msg { return fetch() })
 }
 
 // updateMsg carries one event from the source. ok is false once the source

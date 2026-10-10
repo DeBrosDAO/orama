@@ -40,7 +40,7 @@ type cachedHealthResult struct {
 const healthCacheTTL = 5 * time.Second
 
 // The health and status endpoints are open: DNS membership, load balancers
-// and `orama monitor` read them with no credential. What an open endpoint
+// and `orama status` read them with no credential. What an open endpoint
 // shows is status — healthy, degraded, starting — and nothing an attacker
 // would want mapped: /v1/health used to list every namespace hosted on the
 // node with its internal ports, and /v1/status every peer's id and addresses.
@@ -278,7 +278,7 @@ const anonProxyCheckName = "anon_proxy"
 // anonProxyCheck reports the Tor SOCKS port. An unreachable port is
 // "unavailable", not "error": /v1/health decides DNS membership, and a node
 // whose Tor client is down still serves everything but the anonymity proxy.
-// orama monitor and the inspector alert on a stopped Tor client instead.
+// orama status and the inspector alert on a stopped Tor client instead.
 func anonProxyCheck(running func() bool) checkResult {
 	start := time.Now()
 	if !running() {

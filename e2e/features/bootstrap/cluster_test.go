@@ -84,7 +84,7 @@ func TestBootstrap_verdictOperational(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
 	infra.WaitConverged(t, len(f.State.Nodes), infra.ConvergeBudget, "the fresh cluster to converge")
-	res := harness.CLI(t).MustOK(t, "monitor", "report", "--env", f.State.Env, "--json")
+	res := harness.CLI(t).MustOK(t, "status", "report", "--env", f.State.Env, "--json")
 	var v verdictView
 	if err := json.Unmarshal([]byte(res.Stdout), &v); err != nil {
 		t.Fatalf("monitor report is not JSON: %v", err)
@@ -134,18 +134,25 @@ type statusEntry struct {
 	Host, Role, Status, Error string
 }
 
-// TestBootstrap_statusEveryNodeHealthy: `orama status` gives the same
-// verdict as the monitor, from the same snapshot (docs/CLI_REFERENCE.md
-// "orama status"): every core node healthy, with a role.
+// TestBootstrap_statusEveryNodeHealthy: `orama status --json` gives the same
+// verdict as its one-shot views, from the same snapshot: "healthy" is true,
+// and every core node is healthy, with a role.
 func TestBootstrap_statusEveryNodeHealthy(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
 	infra.WaitConverged(t, len(f.State.Nodes), infra.ConvergeBudget, "the fresh cluster to converge")
 	res := harness.CLI(t).MustOK(t, "status", "--env", f.State.Env, "--json")
-	var rows []statusEntry
-	if err := oramacli.DecodeJSON(res, &rows); err != nil {
+	var doc struct {
+		Healthy bool          `json:"healthy"`
+		Nodes   []statusEntry `json:"nodes"`
+	}
+	if err := oramacli.DecodeJSON(res, &doc); err != nil {
 		t.Fatal(err)
 	}
+	if !doc.Healthy {
+		t.Errorf("orama status --json says healthy=false for a converged cluster: %s", res.Stdout)
+	}
+	rows := doc.Nodes
 	if len(rows) != len(f.State.Nodes) {
 		t.Fatalf("orama status lists %d nodes, want %d: %s", len(rows), len(f.State.Nodes), res.Stdout)
 	}
@@ -168,7 +175,7 @@ func TestBootstrap_statusEveryNodeHealthy(t *testing.T) {
 func TestBootstrap_monitorClusterRows(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
-	res := harness.CLI(t).MustOK(t, "monitor", "cluster", "--env", f.State.Env, "--json")
+	res := harness.CLI(t).MustOK(t, "status", "cluster", "--env", f.State.Env, "--json")
 	var rows []struct {
 		Host   string `json:"host"`
 		RQLite string `json:"rqlite_state"`

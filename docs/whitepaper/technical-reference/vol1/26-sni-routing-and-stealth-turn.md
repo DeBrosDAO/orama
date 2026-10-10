@@ -230,7 +230,7 @@ The router holds no durable state. A restart rebuilds the table from the config 
 | 10,000 connections open | new connections closed immediately | `max concurrent connections reached, dropping` |
 | 32 connections from one address | the 33rd closed | `max connections per IP reached, dropping` |
 | Stalled peer | closed after 60 s without a read or write | none |
-| Router crash-loop | after 2 failed edge ticks the node withdraws its DNS records | the node disappears from round-robin; `orama monitor` shows the unit down |
+| Router crash-loop | after 2 failed edge ticks the node withdraws its DNS records | the node disappears from round-robin; `orama status` shows the unit down |
 | Router enabled on a node whose Caddy was not regenerated | both try to bind 443; the later one fails | whichever starts second crash-loops |
 | Clock skew | not used; the router has no timestamps beyond local deadlines | none |
 | Disk full | the router writes only to the journal; start fails if the config cannot be read | journal errors |

@@ -6,6 +6,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/monitor"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/monitor/view"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/operatorview"
 	"github.com/DeBrosOfficial/network/pkg/telemetry/cluster"
 )
 
@@ -35,6 +36,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		m.render()
 		return m, tick()
+	case operatorMsg:
+		summary := operatorview.Summary(msg)
+		m.operator = &summary
+		m.render()
+		return m, m.operatorCmd(operatorInterval)
 	}
 	return m, nil
 }

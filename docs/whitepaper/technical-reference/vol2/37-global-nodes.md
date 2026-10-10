@@ -552,5 +552,5 @@ Bring-up follows from that. The first start of the provider creates `hot-key`, l
 **Read-only on the chain:**
 
 - `orama chain node <node-id>` prints the `x/nodes` record. `orama chain query orama.nodes.v1.Query/Params` prints the parameters. `orama chain query orama.nodes.v1.Query/Invariants` prints the three invariants and their detail.
-- `orama monitor chain` shows the node's view of the chain (height, sync, validators) and `orama node report` the chain, Kubo and relay sections.
+- `orama status chain` shows the node's view of the chain (height, sync, validators) and `orama node report` the chain, Kubo and relay sections.
 - REST on the node: `/orama/nodes/v1/node/<id>` and `/orama/nodes/v1/node-unbondings/<id>` on port 31003.

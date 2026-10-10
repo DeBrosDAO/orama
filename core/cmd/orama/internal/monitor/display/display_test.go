@@ -53,7 +53,7 @@ func TestClusterTable_listsComponentsNodesAndHints(t *testing.T) {
 	}
 	out := buf.String()
 	for _, want := range []string{"API Gateway", "3.3.3.3 unreachable: SSH failed", "Top alerts",
-		"→ orama monitor node --env devnet --node 3.3.3.3 --ssh"} {
+		"→ orama status node --env devnet --node 3.3.3.3 --ssh"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("cluster table is missing %q:\n%s", want, out)
 		}
@@ -67,7 +67,7 @@ func TestAlertLines_limitAndDuplicates(t *testing.T) {
 		{Severity: cluster.AlertInfo, Subsystem: "system", Node: "1.1.1.1", Message: "zombies"},
 	}
 	out := AlertLines(view.NewTheme(false), view.PrepareAlerts(alerts, view.FilterAll), "devnet", 1)
-	if !strings.Contains(out, "cert (×2)") || !strings.Contains(out, "… 1 more: orama monitor alerts --env devnet") {
+	if !strings.Contains(out, "cert (×2)") || !strings.Contains(out, "… 1 more: orama status alerts --env devnet") {
 		t.Fatalf("got:\n%s", out)
 	}
 	if strings.Contains(out, "zombies") {

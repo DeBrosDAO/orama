@@ -26,7 +26,7 @@ var keys = keyMap{
 	Quit:     key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
 	NextTab:  key.NewBinding(key.WithKeys("tab", "l"), key.WithHelp("tab", "next tab")),
 	PrevTab:  key.NewBinding(key.WithKeys("shift+tab", "h"), key.WithHelp("shift+tab", "previous tab")),
-	JumpTab:  key.NewBinding(key.WithKeys("1", "2", "3", "4", "5", "6", "7", "8", "9"), key.WithHelp("1-9", "jump to tab")),
+	JumpTab:  key.NewBinding(key.WithKeys("1", "2", "3", "4", "5", "6", "7", "8", "9", "0"), key.WithHelp("1-9,0", "jump to tab")),
 	Up:       key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up / select")),
 	Down:     key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down / select")),
 	Enter:    key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open node detail (Nodes)")),

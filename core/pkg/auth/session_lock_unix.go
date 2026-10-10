@@ -19,7 +19,7 @@ const credentialLockPerm = 0o600
 
 // lockCredentialFile takes the exclusive lock every process shares around
 // reading, renewing and writing back a stored session, and waits for a holder
-// to finish. sessionMu cannot do this: it is per process, and `orama monitor`
+// to finish. sessionMu cannot do this: it is per process, and `orama status`
 // in one terminal and any other command in another are two processes renewing
 // the same refresh token. A holder keeps it for one refresh at most, which
 // sessionHTTPTimeout bounds; the kernel drops it if the holder dies.

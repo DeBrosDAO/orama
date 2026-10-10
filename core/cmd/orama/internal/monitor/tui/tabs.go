@@ -13,6 +13,7 @@ type tab int
 
 const (
 	tabOverview tab = iota
+	tabOperator
 	tabNodes
 	tabServices
 	tabTraffic
@@ -24,20 +25,34 @@ const (
 	tabCount
 )
 
-var tabNames = [tabCount]string{"Overview", "Nodes", "Services", "Traffic", "Chain", "Mesh", "DNS", "Namespaces", "Alerts"}
+var tabNames = [tabCount]string{"Overview", "Operator", "Nodes", "Services", "Traffic", "Chain", "Mesh", "DNS", "Namespaces", "Alerts"}
 
 // next is the tab delta steps away, wrapping at either end.
 func (t tab) next(delta int) tab {
 	return tab((int(t) + delta%int(tabCount) + int(tabCount)) % int(tabCount))
 }
 
-// tabForKey is the tab a digit key jumps to: "1" is the first tab.
+// tabForKey is the tab a digit key jumps to: "1" is the first tab and "0" the tenth.
 func tabForKey(k string) (tab, bool) {
-	if len(k) != 1 || k[0] < '1' || k[0] > '9' {
+	if len(k) != 1 || k[0] < '0' || k[0] > '9' {
 		return 0, false
 	}
 	t := tab(k[0] - '1')
+	if k[0] == '0' {
+		t = tenthTab
+	}
 	return t, t < tabCount
+}
+
+// tenthTab is the tab the "0" key jumps to.
+const tenthTab tab = 9
+
+// tabDigit is the key that jumps to tab i.
+func tabDigit(i int) string {
+	if tab(i) == tenthTab {
+		return "0"
+	}
+	return string(rune('1' + i))
 }
 
 // renderTabBar numbers each tab so the digit that jumps to it is visible. When
@@ -53,7 +68,7 @@ func renderTabBar(t view.Theme, active tab, width int) string {
 func tabBar(t view.Theme, active tab, compact bool) string {
 	parts := make([]string, 0, tabCount)
 	for i, name := range tabNames {
-		digit := string(rune('1' + i))
+		digit := tabDigit(i)
 		switch {
 		case tab(i) == active:
 			parts = append(parts, t.TabActive.Render(digit+" "+name))

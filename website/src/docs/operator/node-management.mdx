@@ -43,7 +43,7 @@ orama status --json            # for automation
 orama status --ssh             # break-glass: read every node over SSH when no gateway answers
 ```
 
-A node is healthy when its gateway answers and its RQLite has settled into `Leader` or `Follower`. The data comes from the gateway's operator telemetry API, so it needs a sign-in as an operator. For the numbers behind the verdict use `orama monitor cluster --env mycluster`; for one machine you are logged into, `sudo orama node status`. See [Monitoring](/docs/operator/monitoring).
+A node is healthy when its gateway answers and its RQLite has settled into `Leader` or `Follower`. The data comes from the gateway's operator telemetry API, so it needs a sign-in as an operator. For the numbers behind the verdict use `orama status cluster --env mycluster`; for one machine you are logged into, `sudo orama node status`. See [Monitoring](/docs/operator/monitoring).
 
 ## Push and roll out new versions
 
@@ -86,7 +86,7 @@ These run on a node over SSH, with `sudo`. Use them instead of raw `systemctl`: 
 | `sudo orama node restart` | Restart all services in order (same quorum check) |
 | `sudo orama node doctor` | Diagnose common problems: services, ports, connectivity, Raft state |
 | `sudo orama node logs <service> [-f] [-n 50] [--since -30min]` | Service logs. Aliases: `caddy`, `cluster`, `coredns`, `gateway`, `ipfs`, `ipfs-cluster`, `node`, `olric`, `rqlite`, `turn`; or a full unit name such as `orama-namespace-olric@myapp` |
-| `sudo orama node report` | All health data as JSON, the collector `orama monitor` reads |
+| `sudo orama node report` | All health data as JSON, the collector `orama status` reads |
 | `sudo orama maint node schema status` / `apply` | Gateway schema migrations against the local RQLite |
 | `sudo orama node invite [--expiry 24h] [--raw]` | Mint an invite for a joining node |
 | `sudo orama maint node autoupdate run` | Run this node's auto-update agent once (its timer runs it every 15 minutes). See [Upgrades](/docs/operator/upgrades#automatic-updates) |

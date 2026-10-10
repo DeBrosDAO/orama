@@ -54,7 +54,7 @@ Two identities exist: a wallet (a person) and a key (a program). Nothing else au
 
 - Services run as an unprivileged `orama` user under systemd sandboxing; CoreDNS and the SFU have accounts of their own so `ProtectProc=invisible` hides them from each other; the Tor client runs as `debian-tor`, denied every private address range so it can never reach the mesh. `/opt/orama/bin` is `root:orama` mode 0750: the daemons can execute binaries but not replace them.
 - Root actions go through one privileged helper (`orama-privhelper`), which is socket-activated and exposes a fixed allow-list of operations.
-- **Memory hygiene.** Secret-bearing units have `MemorySwapMax=0`; install turns swap off, disables suid core dumps, discards core dumps (`kernel.core_pattern` to `/bin/false`), stops and masks apport, and sets `kernel.yama.ptrace_scope=1` so a process attaches only to its own descendants. `orama monitor` raises a warning if any of this drifts. `mlock` is deliberately not used: it does not survive `execve`, so it would buy nothing against a RAM snapshot.
+- **Memory hygiene.** Secret-bearing units have `MemorySwapMax=0`; install turns swap off, disables suid core dumps, discards core dumps (`kernel.core_pattern` to `/bin/false`), stops and masks apport, and sets `kernel.yama.ptrace_scope=1` so a process attaches only to its own descendants. `orama status` raises a warning if any of this drifts. `mlock` is deliberately not used: it does not survive `execve`, so it would buy nothing against a RAM snapshot.
 
 ## Secrets at rest
 

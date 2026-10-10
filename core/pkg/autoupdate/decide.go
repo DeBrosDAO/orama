@@ -4,7 +4,7 @@
 // reads the cluster's policy (updatepolicy), fetches the channel's metadata
 // from the cluster's release repository and verifies it against the release
 // root the cluster adopted (releaseverify), and asks Decide what to do with
-// the newest release: nothing, tell `orama monitor` (notify, the default), or
+// the newest release: nothing, tell `orama status` (notify, the default), or
 // install it (auto).
 //
 // Install is one node at a time. A node installs only when it holds the

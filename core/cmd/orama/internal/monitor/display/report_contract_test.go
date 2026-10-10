@@ -62,7 +62,7 @@ func fullReportThroughHarness(t *testing.T, snap *cluster.ClusterSnapshot) *life
 	return r
 }
 
-// The lifecycle harness reads `orama monitor report --json` and nothing else.
+// The lifecycle harness reads `orama status report --json` and nothing else.
 // This runs the real report through the harness's decoder, so renaming a field
 // either side reads (bug 2701) fails here instead of in a live scenario.
 func TestFullReport_contractWithTheLifecycleHarness(t *testing.T) {

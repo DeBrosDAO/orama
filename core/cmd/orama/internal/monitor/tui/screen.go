@@ -51,7 +51,7 @@ func (m model) verdictLine() string {
 }
 
 func (m model) footer() string {
-	hint := "tab/1-9 switch · ↑↓ move · r refresh · ? help · q quit"
+	hint := "tab/1-0 switch · ↑↓ move · r refresh · ? help · q quit"
 	switch {
 	case m.tab == tabNodes && m.nodeDetail:
 		hint = "esc back · " + hint

@@ -347,4 +347,4 @@ curl --unix-socket /run/orama-pubsub/pubsub.sock http://pubsub/mesh/self
 SELECT node_id, peer_id, multiaddr, last_seen FROM _pubsub_mesh_peers ORDER BY peer_id;
 ```
 
-`orama monitor report --env <env>` includes the state of `orama-namespace-pubsub@index` on every node. A gateway that cannot reach its service logs `pubsub mesh: reconcile failed, will retry`; a stream that ended logs `subscribe stream ended; its handlers no longer receive`.
+`orama status report --env <env>` includes the state of `orama-namespace-pubsub@index` on every node. A gateway that cannot reach its service logs `pubsub mesh: reconcile failed, will retry`; a stream that ended logs `subscribe stream ended; its handlers no longer receive`.

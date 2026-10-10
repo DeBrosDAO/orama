@@ -2,7 +2,7 @@
 
 # Other commands
 
-status, nodes, ssh and version, and the maintainer commands under orama maint: build, push, rollout, inspect, invite and vpn. Every command and flag below comes from the `orama` command tree, so it matches the binary.
+nodes, ssh and version, and the maintainer commands under orama maint: build, push, rollout, inspect, invite and vpn. Every command and flag below comes from the `orama` command tree, so it matches the binary.
 
 Global conventions are on the [CLI overview](/docs/developer/cli-overview).
 
@@ -331,27 +331,6 @@ orama ssh 203.0.113.4 'sudo systemctl status orama-node'
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--env` | — | Environment to search (default: active) |
-
-## orama status
-
-Show health status of your nodes
-
-```
-orama status [flags]
-```
-
-Check the health of all your nodes in an environment.
-
-A node is healthy when its gateway answers and its RQLite has settled into
-Leader or Follower. The data comes from the gateway's operator telemetry API;
---ssh reads every node over SSH instead, for when no gateway answers. For the
-numbers behind the verdict use 'orama monitor cluster'; for the state of a
-single machine you are logged into, 'orama node status'.
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--env` | — | Environment (default: active) |
-| `--ssh` | `false` | Collect over SSH from every node instead of the gateway API (break-glass) |
 
 ## orama version
 

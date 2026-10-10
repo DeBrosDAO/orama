@@ -1834,7 +1834,7 @@ func (g *Gateway) proxyToNamespaceGateway(w http.ResponseWriter, r *http.Request
 		httputil.WriteRPCError(w, http.StatusServiceUnavailable,
 			httputil.ErrCodeServiceUnavailable,
 			"namespace gateway unavailable: all upstream circuits are open. "+
-				"Wait a few seconds and retry, or check `orama monitor report` for unhealthy nodes.",
+				"Wait a few seconds and retry, or check `orama status report` for unhealthy nodes.",
 			httputil.WithRetryable())
 		return
 	}

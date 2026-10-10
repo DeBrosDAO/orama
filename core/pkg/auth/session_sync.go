@@ -11,7 +11,7 @@ import (
 //
 // A refresh token rotates on use: the gateway retires the one presented, and
 // presenting it again is refused as a replay. Every command loads the
-// credential file before it asks for a bearer, and `orama monitor` loads it on
+// credential file before it asks for a bearer, and `orama status` loads it on
 // every renewal for hours, so two renewals racing — two goroutines, or a
 // monitor in one terminal and a command in another — both present the token
 // they loaded. The first rotates it; the second is refused and, before this,

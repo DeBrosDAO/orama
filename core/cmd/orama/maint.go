@@ -7,7 +7,6 @@ import (
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/clustercmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/globalcmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/maintcmd"
-	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/monitorcmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/node"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/nodescmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmdmeta"
@@ -36,7 +35,7 @@ func mountReleaseCommands(*cobra.Command) {}
 // when the command that replaces it lands and the group is removed.
 func hideReplacedGroups() {
 	for _, group := range []*cobra.Command{
-		node.Cmd, globalcmd.Cmd, clustercmd.Cmd, chaincmd.Cmd, monitorcmd.Cmd, nodescmd.Cmd,
+		node.Cmd, globalcmd.Cmd, clustercmd.Cmd, chaincmd.Cmd, nodescmd.Cmd,
 	} {
 		group.Hidden = true
 		cmdmeta.MarkListed(group)

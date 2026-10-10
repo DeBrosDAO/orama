@@ -52,7 +52,7 @@ orama maint node enroll \
 
 The CLI sends the console code, invite and public IP to the gateway, which proves it holds the code, assigns a WireGuard address and pushes the cluster configuration encrypted under it. A wrong code fails at the node and configures nothing. The node configures WireGuard, LUKS-encrypts its data partition, and splits the LUKS key by Shamir's scheme across peer vault guardians. Port 9999 closes permanently. Each node mints its own agent token during enrollment; the gateway presents it on every later command and the agent's command receiver binds only the node's overlay address. A node enrolled before agent tokens existed keeps running but accepts no commands until re-enrolled.
 
-4. **Verify:** `orama monitor report --env <env>`.
+4. **Verify:** `orama status report --env <env>`.
 
 Port 9999 must be open in your provider's external firewall (Hetzner firewall, AWS security groups). The agent installs no firewall rule of its own, so nothing on the node opens it for you.
 

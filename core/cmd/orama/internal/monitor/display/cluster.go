@@ -10,7 +10,7 @@ import (
 )
 
 // TopAlertsInOverview is how many alerts the cluster overview lists before
-// pointing at `orama monitor alerts`.
+// pointing at `orama status alerts`.
 const TopAlertsInOverview = 5
 
 // ClusterTable prints the cluster overview: the verdict, each component's

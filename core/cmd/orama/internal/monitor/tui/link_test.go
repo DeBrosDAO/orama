@@ -68,12 +68,12 @@ func TestTabNext_wraps(t *testing.T) {
 }
 
 func TestTabForKey_digitsOnly(t *testing.T) {
-	for k, want := range map[string]tab{"1": tabOverview, "5": tabChain, "9": tabAlerts} {
+	for k, want := range map[string]tab{"1": tabOverview, "2": tabOperator, "6": tabChain, "9": tabNamespaces, "0": tabAlerts} {
 		if got, ok := tabForKey(k); !ok || got != want {
 			t.Errorf("%s: got %v, %v", k, got, ok)
 		}
 	}
-	for _, k := range []string{"0", "a", "10", ""} {
+	for _, k := range []string{"a", "10", ""} {
 		if _, ok := tabForKey(k); ok {
 			t.Errorf("%q jumped to a tab", k)
 		}
@@ -83,11 +83,11 @@ func TestTabForKey_digitsOnly(t *testing.T) {
 func TestRenderTabBar_compactsWhenNarrow(t *testing.T) {
 	th := view.NewTheme(false)
 	wide := renderTabBar(th, tabTraffic, 0)
-	if !strings.Contains(wide, "1 Overview") || !strings.Contains(wide, "9 Alerts") {
+	if !strings.Contains(wide, "1 Overview") || !strings.Contains(wide, "0 Alerts") {
 		t.Fatalf("wide bar: %q", wide)
 	}
 	narrow := renderTabBar(th, tabTraffic, 60)
-	if lipgloss.Width(narrow) > 60 || !strings.Contains(narrow, "4 Traffic") || strings.Contains(narrow, "Overview") {
+	if lipgloss.Width(narrow) > 60 || !strings.Contains(narrow, "5 Traffic") || strings.Contains(narrow, "Overview") {
 		t.Fatalf("narrow bar (%d cells): %q", lipgloss.Width(narrow), narrow)
 	}
 }

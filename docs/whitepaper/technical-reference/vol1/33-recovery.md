@@ -112,7 +112,7 @@ Keeping `raft.db` is deliberate. It is both the log and raft's stable store, whi
 
 **Phase 5, start the followers one at a time.** Each is started and polled every 10 s for up to 180 s for `Follower` before the next begins, so the kept node serves one full snapshot install at a time. With no raft state and a membership record naming the kept node, `indexJoinTargets` returns that node as the join address; the follower joins it as a new member and pulls the snapshot.
 
-**Phase 6, verify.** Poll every node for 180 s until a leader is seen and every node reports `Leader` or `Follower`. The result is printed, not returned: an unsettled cluster prints a warning and the command still exits 0 (see [Known gaps](#known-gaps)). The next step is `orama monitor report --env <env> --ssh`, which reads the nodes directly because the gateways may not serve telemetry yet.
+**Phase 6, verify.** Poll every node for 180 s until a leader is seen and every node reports `Leader` or `Follower`. The result is printed, not returned: an unsettled cluster prints a warning and the command still exits 0 (see [Known gaps](#known-gaps)). The next step is `orama status report --env <env> --ssh`, which reads the nodes directly because the gateways may not serve telemetry yet.
 
 #### Cluster shrink
 
@@ -271,7 +271,7 @@ The recovery commands keep no state of their own. Interruption is handled by the
 
 **Node loss.** The automatic loops handle one voter. Two voters of three, or three of five, is `recover-raft`. A machine deleted by its provider is `remove --offline`, which needs the remaining cluster to keep quorum.
 
-**Evidence and watching.** After any of these, `orama monitor report --env <env>` for the cluster and `--node <ip>` for one node are the checks the rolling-upgrade protocol requires between steps ([observability](32-observability.md)). The commands' own verification is weaker than that, as the gaps below describe.
+**Evidence and watching.** After any of these, `orama status report --env <env>` for the cluster and `--node <ip>` for one node are the checks the rolling-upgrade protocol requires between steps ([observability](32-observability.md)). The commands' own verification is weaker than that, as the gaps below describe.
 
 ## Failure modes
 
@@ -391,7 +391,7 @@ Read-only checks on a live cluster:
 ```bash
 orama maint node migrate-raft-id --env <env> --dry-run    # which nodes are on address ids
 orama node remove --env <env> --node <ip> --dry-run  # quorum cost for every raft cluster, and the statements
-orama monitor report --env <env> --ssh               # raft state of every node, read directly
+orama status report --env <env> --ssh               # raft state of every node, read directly
 ```
 
 On a node, the markers and the recovery file:

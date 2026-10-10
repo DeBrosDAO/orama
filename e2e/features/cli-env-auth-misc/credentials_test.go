@@ -32,7 +32,7 @@ func credentialCommands(env string) [][]string {
 		{"domain", "list"},
 		{"maint", "cluster", "settings", "show"},
 		{"operator", "list"},
-		{"monitor", "alerts", "--env", env},
+		{"status", "alerts", "--env", env},
 	}
 }
 
@@ -72,7 +72,7 @@ func tokenCommands(env string) [][]string {
 		{"members", "list"},
 		{"audit"},
 		{"auth", "sessions"},
-		{"monitor", "alerts", "--env", env},
+		{"status", "alerts", "--env", env},
 	}
 }
 
@@ -126,7 +126,7 @@ func TestCredentials_operatorSessionWorks(t *testing.T) {
 		{"auth", "whoami"},
 		{"maint", "cluster", "settings", "show"},
 		{"operator", "list"},
-		{"monitor", "alerts", "--env", f.State.Env},
+		{"status", "alerts", "--env", f.State.Env},
 	} {
 		cli.MustOK(t, args...)
 	}

@@ -22,7 +22,6 @@ import (
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/functioncmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/globalcmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/memberscmd"
-	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/monitorcmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/namespacecmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/networkcmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/node"
@@ -109,7 +108,6 @@ and no Orama MCP.`,
 	rootCmd.AddCommand(chaincmd.Cmd)
 
 	// Monitor command
-	rootCmd.AddCommand(monitorcmd.Cmd)
 
 	// Serverless function commands
 	rootCmd.AddCommand(functioncmd.Cmd)

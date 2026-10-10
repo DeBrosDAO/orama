@@ -93,7 +93,7 @@ dig @ns1.cluster.example.com test.cluster.example.com        # your nameserver d
 dig @ns1.cluster.example.com myapp.node-abc123.cluster.example.com   # wildcard
 ```
 
-For global propagation use dnschecker.org or whatsmydns.net. Inside the CLI, `orama monitor dns --env mycluster` shows CoreDNS, Caddy, certificate expiry and resolution tests.
+For global propagation use dnschecker.org or whatsmydns.net. Inside the CLI, `orama status dns --env mycluster` shows CoreDNS, Caddy, certificate expiry and resolution tests.
 
 ## How the records stay correct
 

@@ -23,7 +23,7 @@ requires:
   chain: false
 covers:
   cli:
-    - orama monitor report
+    - orama status report
     - orama deploy static
   routes:
     - /v1/health

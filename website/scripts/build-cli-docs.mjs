@@ -31,12 +31,12 @@ const PAGES = [
   { slug: "function", title: "orama function", blurb: "Build, deploy and run serverless functions.", commands: ["function"] },
   { slug: "global", title: "orama global", blurb: "Install and operate a global node, and build its chain messages.", commands: ["global", "maint global"] },
   { slug: "members", title: "orama members and audit", blurb: "Who may work in a namespace, and the namespace's audit trail.", commands: ["members", "audit"] },
-  { slug: "monitor", title: "orama monitor", blurb: "Watch cluster health from your own machine.", commands: ["monitor"] },
+  { slug: "status", title: "orama status", blurb: "Your nodes, the cluster, the chain and your account, live or one view at a time.", commands: ["status"] },
   { slug: "namespace", title: "orama namespace", blurb: "Create namespaces, mint API keys, back up and restore.", commands: ["namespace"] },
   { slug: "node", title: "orama node", blurb: "Install, run, upgrade and remove nodes.", commands: ["node", "maint node"] },
   { slug: "sandbox", title: "orama maint sandbox", blurb: "Throwaway Hetzner clusters for testing.", commands: ["maint sandbox"] },
   { slug: "storage", title: "orama storage", blurb: "Storage deals on the Orama chain.", commands: ["storage"] },
-  { slug: "other", title: "Other commands", blurb: "status, nodes, ssh and version, and the maintainer commands under orama maint: build, push, rollout, inspect, invite and vpn.", commands: [] },
+  { slug: "other", title: "Other commands", blurb: "nodes, ssh and version, and the maintainer commands under orama maint: build, push, rollout, inspect, invite and vpn.", commands: [] },
 ];
 
 /** Example addresses in command help that are real hosts become documentation-range ones. */

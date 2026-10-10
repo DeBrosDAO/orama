@@ -28,7 +28,7 @@ sequenceDiagram
 3. **The index gateway** runs the middleware chain below. For a namespace host it validates the credential against the registry and forwards the request to one of that namespace's gateways: this node's member when there is one, else the member the credential hashes to, then the others. A member whose circuit breaker is open is skipped, and one that refuses the connection is passed over for the next while none of the body has been read; a member that was reached and failed is not retried elsewhere.
 4. **The namespace gateway** verifies the hop's MAC and checks the credential's grant for this domain, action and resource, then calls its own backend.
 
-There is one circuit breaker per namespace gateway, so one tenant's failing gateway never refuses another tenant's requests on the same node. A breaker opens after 5 consecutive failures of the gateway itself (a refused or timed-out connection, or a 502, 503 or 504 it answered; never a 4xx or a function's own response), admits one probe every 30 seconds and closes on the first success. Open breakers are logged, and `orama monitor` reports them.
+There is one circuit breaker per namespace gateway, so one tenant's failing gateway never refuses another tenant's requests on the same node. A breaker opens after 5 consecutive failures of the gateway itself (a refused or timed-out connection, or a 502, 503 or 504 it answered; never a 4xx or a function's own response), admits one probe every 30 seconds and closes on the first success. Open breakers are logged, and `orama status` reports them.
 
 ## The middleware stack
 

@@ -113,7 +113,7 @@ export const DEVELOPER_DOCS: DocLink[] = [
   { title: "orama function", slug: "developer/cli/function", icon: Terminal, description: "Serverless functions", group: "CLI commands" },
   { title: "orama global", slug: "developer/cli/global", icon: Terminal, description: "Global nodes and chain messages", group: "CLI commands" },
   { title: "orama members, audit", slug: "developer/cli/members", icon: Terminal, description: "Namespace members and audit", group: "CLI commands" },
-  { title: "orama monitor", slug: "developer/cli/monitor", icon: Terminal, description: "Cluster health", group: "CLI commands" },
+  { title: "orama status", slug: "developer/cli/status", icon: Terminal, description: "Nodes, cluster, chain and account", group: "CLI commands" },
   { title: "orama namespace", slug: "developer/cli/namespace", icon: Terminal, description: "Namespaces, keys, backups", group: "CLI commands" },
   { title: "orama node", slug: "developer/cli/node", icon: Terminal, description: "Nodes", group: "CLI commands" },
   { title: "orama maint sandbox", slug: "developer/cli/sandbox", icon: Terminal, description: "Test clusters", group: "CLI commands" },

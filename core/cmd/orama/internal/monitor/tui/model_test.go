@@ -11,6 +11,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/monitor"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/monitor/view"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/operatorview"
 	"github.com/DeBrosOfficial/network/pkg/telemetry/cluster"
 	"github.com/DeBrosOfficial/network/pkg/telemetry/report"
 )
@@ -122,7 +123,7 @@ func TestUpdate_sourceStoppedIsAFailure(t *testing.T) {
 
 func TestHandleKey_tabs(t *testing.T) {
 	m := withSnapshot(testModel())
-	if m = press(m, runes("4")); m.tab != tabTraffic {
+	if m = press(m, runes("5")); m.tab != tabTraffic {
 		t.Fatalf("4 went to %v", m.tab)
 	}
 	if m = press(m, tea.KeyMsg{Type: tea.KeyTab}); m.tab != tabChain {
@@ -155,7 +156,7 @@ func TestHandleKey_helpAndQuit(t *testing.T) {
 }
 
 func TestHandleTabKey_nodeSelectionAndDetail(t *testing.T) {
-	m := press(withSnapshot(testModel()), runes("2"))
+	m := press(withSnapshot(testModel()), runes("3"))
 	down := tea.KeyMsg{Type: tea.KeyDown}
 	for range 5 {
 		m = press(m, down)
@@ -175,7 +176,7 @@ func TestHandleTabKey_nodeSelectionAndDetail(t *testing.T) {
 }
 
 func TestHandleTabKey_enterWithoutDataOpensNothing(t *testing.T) {
-	m := press(press(testModel(), runes("2")), tea.KeyMsg{Type: tea.KeyEnter})
+	m := press(press(testModel(), runes("3")), tea.KeyMsg{Type: tea.KeyEnter})
 	if m.nodeDetail {
 		t.Fatal("a node detail opened with no snapshot")
 	}
@@ -186,7 +187,7 @@ func TestHandleTabKey_alertFiltersOnlyOnTheAlertsTab(t *testing.T) {
 	if m.alertFilter != view.FilterAll {
 		t.Fatal("c changed the alert filter outside the Alerts tab")
 	}
-	m = press(press(m, runes("9")), runes("w"))
+	m = press(press(m, runes("0")), runes("w"))
 	if m.alertFilter != view.FilterWarning || !strings.Contains(m.footer(), "filter: warning") {
 		t.Fatalf("w: filter %q", m.alertFilter)
 	}
@@ -206,5 +207,37 @@ func TestTabContent_everyTabWithAndWithoutData(t *testing.T) {
 		if out := full.tabContent(80); out == "" {
 			t.Errorf("%s rendered nothing", tabNames[tb])
 		}
+	}
+}
+
+// The Operator tab says how to name an account when there is none, waits for the first reading, then
+// shows the account; a reading schedules the next one.
+func TestOperatorTab_hintReadingThenAccount(t *testing.T) {
+	m := withSnapshot(testModel())
+	m.tab = tabOperator
+	if out := m.tabContent(80); !strings.Contains(out, "--operator") {
+		t.Fatalf("no operator configured: %q", out)
+	}
+	if m.operatorCmd(0) != nil {
+		t.Fatal("a model with no operator reads an account")
+	}
+
+	m.cfg.Operator = func(context.Context) operatorview.Summary {
+		return operatorview.Summary{Address: "orama1abc", Earnings: "12", Spendable: "3", Bonded: "1000"}
+	}
+	if out := m.tabContent(80); !strings.Contains(out, "Reading") {
+		t.Fatalf("before the first reading: %q", out)
+	}
+	msg := m.operatorCmd(0)()
+	next, cmd := m.Update(msg)
+	m = next.(model)
+	out := m.tabContent(80)
+	for _, want := range []string{"orama1abc", "12 norama", "3 norama", "1000 norama"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("Operator tab misses %q: %q", want, out)
+		}
+	}
+	if cmd == nil {
+		t.Error("a reading did not schedule the next one")
 	}
 }

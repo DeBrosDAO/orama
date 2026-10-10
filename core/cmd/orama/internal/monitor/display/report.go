@@ -37,7 +37,7 @@ const clusterAlertNode = "cluster"
 // unitFailed is systemd's ActiveState for a failed unit.
 const unitFailed = "failed"
 
-// fullReport is the JSON `orama monitor report` writes. e2e/lifecycle decodes
+// fullReport is the JSON `orama status report` writes. e2e/lifecycle decodes
 // it as its only view of a cluster, so it is a contract: fields may be added,
 // never renamed or removed (report_contract_test.go holds it).
 type fullReport struct {
