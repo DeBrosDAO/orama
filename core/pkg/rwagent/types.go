@@ -49,6 +49,15 @@ type WalletAddressData struct {
 	Chain   string `json:"chain"`
 }
 
+// ReleaseKeyData from GET /v1/orama/release/key: the wallet's release public
+// key, which signs TUF release metadata and nothing else.
+type ReleaseKeyData struct {
+	Purpose   string `json:"purpose"`
+	KeyType   string `json:"keyType"`
+	PublicKey string `json:"publicKey"`
+	Path      string `json:"path"`
+}
+
 // WalletSignData from POST /v1/wallet/sign.
 type WalletSignData struct {
 	Signature string `json:"signature"`

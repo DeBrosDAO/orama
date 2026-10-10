@@ -143,7 +143,7 @@ func (a *Agent) refuseUnverified(s Settings, cause error) (Outcome, error) {
 func isVerification(err error) bool {
 	for _, target := range []error{
 		releaseverify.ErrRollback, releaseverify.ErrFreeze, releaseverify.ErrThreshold,
-		releaseverify.ErrTargetHash, releaseverify.ErrTargetPath,
+		releaseverify.ErrTargetHash,
 	} {
 		if errors.Is(err, target) {
 			return true

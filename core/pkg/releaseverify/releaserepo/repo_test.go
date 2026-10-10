@@ -7,7 +7,7 @@ import (
 )
 
 func TestKeys_saveAndLoadRoundTripAndNeverOverwrite(t *testing.T) {
-	keys, err := GenerateKeys("stable")
+	keys, err := GenerateKeys()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -19,8 +19,8 @@ func TestKeys_saveAndLoadRoundTripAndNeverOverwrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(loaded) != 5 {
-		t.Fatalf("loaded %d keys, want the four top-level roles and stable", len(loaded))
+	if len(loaded) != 4 {
+		t.Fatalf("loaded %d keys, want the four top-level roles", len(loaded))
 	}
 	for role, key := range keys {
 		if !key.Equal(loaded[role]) {
@@ -46,27 +46,30 @@ func TestBuild_needsARootExpiryAndAKeyForEveryRole(t *testing.T) {
 	if _, err := Build(keys, Spec{Version: 1}); err == nil {
 		t.Error("a spec with no root expiry was built")
 	}
-	_, err = Build(keys, Spec{Version: 1, RootValidUntil: time.Now().Add(time.Hour), Delegated: []string{"stable"}})
-	if err == nil {
-		t.Error("a delegated role with no key was built")
+	delete(keys, "snapshot")
+	if _, err := Build(keys, Spec{Version: 1, RootValidUntil: time.Now().Add(time.Hour)}); err == nil {
+		t.Error("a repository with no snapshot key was built")
 	}
 }
 
-func TestBuild_listsEveryRoleFileInTheSnapshot(t *testing.T) {
-	keys, err := GenerateKeys("stable", "nightly")
+func TestBuild_listsTheTargetsFileInTheSnapshot(t *testing.T) {
+	keys, err := GenerateKeys()
 	if err != nil {
 		t.Fatal(err)
 	}
 	files, err := Build(keys, Spec{
-		Version: 3, RootValidUntil: time.Now().Add(time.Hour), Delegated: []string{"stable", "nightly"},
-		ChannelTargets: map[string]map[string][]byte{"stable": {"stable/x": []byte("x")}},
+		Version: 3, RootValidUntil: time.Now().Add(time.Hour),
+		Targets: map[string][]byte{"nightly/x": []byte("x")},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{TimestampFile, SnapshotFile, TargetsFile, "stable.json", "nightly.json"} {
+	for _, name := range []string{TimestampFile, SnapshotFile, TargetsFile} {
 		if len(files[name]) == 0 {
 			t.Errorf("%s was not built", name)
 		}
+	}
+	if len(files) != 3 {
+		t.Errorf("built %d files, want the three top-level metadata files", len(files))
 	}
 }

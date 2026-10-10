@@ -12,7 +12,7 @@ import (
 
 func TestValidateRoot_aWellFormedRootNamesItself(t *testing.T) {
 	r := newChannelRepo(t)
-	digest, err := ValidateRoot(r.root, delegationNow)
+	digest, err := ValidateRoot(r.root, testNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,25 +23,25 @@ func TestValidateRoot_aWellFormedRootNamesItself(t *testing.T) {
 
 func TestValidateRoot_refusals(t *testing.T) {
 	r := newChannelRepo(t)
-	if _, err := ValidateRoot(r.root, delegationNow.Add(72*time.Hour)); err == nil || !strings.Contains(err.Error(), "expired") {
+	if _, err := ValidateRoot(r.root, testNow.Add(72*time.Hour)); err == nil || !strings.Contains(err.Error(), "expired") {
 		t.Errorf("an expired root: %v", err)
 	}
-	if _, err := ValidateRoot([]byte(`{"signed":{}}`), delegationNow); err == nil {
+	if _, err := ValidateRoot([]byte(`{"signed":{}}`), testNow); err == nil {
 		t.Error("a root that is not one was accepted")
 	}
-	if _, err := ValidateRoot(nil, delegationNow); err == nil {
+	if _, err := ValidateRoot(nil, testNow); err == nil {
 		t.Error("an empty root was accepted")
 	}
 	other, err := releaserepo.GenerateKeys()
 	if err != nil {
 		t.Fatal(err)
 	}
-	foreign, err := releaserepo.NewRoot(other, delegationNow.Add(time.Hour))
+	foreign, err := releaserepo.NewRoot(other, testNow.Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
 	tampered := []byte(strings.Replace(string(foreign), `"version":1`, `"version":2`, 1))
-	if _, err := ValidateRoot(tampered, delegationNow); err == nil {
+	if _, err := ValidateRoot(tampered, testNow); err == nil {
 		t.Error("a root whose content changed after it was signed was accepted")
 	}
 }
@@ -49,7 +49,7 @@ func TestValidateRoot_refusals(t *testing.T) {
 func TestAdoptRoot_writesOnceAndReportsChange(t *testing.T) {
 	r := newChannelRepo(t)
 	path := filepath.Join(t.TempDir(), "release-root.json")
-	changed, err := AdoptRoot(path, r.root, delegationNow)
+	changed, err := AdoptRoot(path, r.root, testNow)
 	if err != nil || !changed {
 		t.Fatalf("first adoption: changed=%v err=%v", changed, err)
 	}
@@ -57,7 +57,7 @@ func TestAdoptRoot_writesOnceAndReportsChange(t *testing.T) {
 	if err != nil || info.Mode().Perm() != rootFilePerm {
 		t.Fatalf("root file: %v, %v", info, err)
 	}
-	changed, err = AdoptRoot(path, r.root, delegationNow)
+	changed, err = AdoptRoot(path, r.root, testNow)
 	if err != nil || changed {
 		t.Fatalf("the same root again: changed=%v err=%v", changed, err)
 	}
@@ -70,10 +70,10 @@ func TestAdoptRoot_writesOnceAndReportsChange(t *testing.T) {
 func TestAdoptRoot_aBadRootLeavesTheAdoptedOneAlone(t *testing.T) {
 	r := newChannelRepo(t)
 	path := filepath.Join(t.TempDir(), "release-root.json")
-	if _, err := AdoptRoot(path, r.root, delegationNow); err != nil {
+	if _, err := AdoptRoot(path, r.root, testNow); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := AdoptRoot(path, []byte("garbage"), delegationNow); err == nil {
+	if _, err := AdoptRoot(path, []byte("garbage"), testNow); err == nil {
 		t.Fatal("garbage was adopted")
 	}
 	if got, _ := ReadRoot(path); string(got) != string(r.root) {
@@ -146,11 +146,30 @@ func TestArchiveTarget_roundTripAndRefusals(t *testing.T) {
 	if err != nil || ref != (ArchiveRef{Channel: "stable", Version: "0.3.1", Arch: "arm64"}) {
 		t.Fatalf("%q -> %+v, %v", name, ref, err)
 	}
+	dev := ArchiveTarget("dev/my-branch", "0.3.1", "amd64")
+	if ref, err := ParseArchiveTarget(dev); err != nil || ref.Channel != "dev/my-branch" {
+		t.Fatalf("%q -> %+v, %v", dev, ref, err)
+	}
 	for _, bad := range []string{
 		"orama-0.3.1-linux-amd64.tar.gz", "stable/orama-0.3.1-linux-riscv64.tar.gz", "stable/../orama-1-linux-amd64.tar.gz",
-		"stable/orama--linux-amd64.tar.gz", "Stable/orama-1.0-linux-amd64.tar.gz", "stable/x/orama-1.0-linux-amd64.tar.gz",
+		"stable/orama--linux-amd64.tar.gz", "Stable/orama-1.0-linux-amd64.tar.gz", "stable/x/y/orama-1.0-linux-amd64.tar.gz", "dev/Branch/orama-1.0-linux-amd64.tar.gz",
 	} {
 		if _, err := ParseArchiveTarget(bad); err == nil {
+			t.Errorf("%q was accepted", bad)
+		}
+	}
+}
+
+func TestValidChannel(t *testing.T) {
+	for _, ok := range []string{"nightly", "main", "dev/my-branch", "dev/a", "a-b", strings.Repeat("a", 32), "dev/" + strings.Repeat("b", 32)} {
+		if err := ValidChannel(ok); err != nil {
+			t.Errorf("%q: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{
+		"", "Nightly", "dev/", "/dev", "dev//x", "dev/x/y", "a.b", "dev/feat_x", "../x", "x/..", strings.Repeat("a", 33), "dev/" + strings.Repeat("b", 33), "a b",
+	} {
+		if err := ValidChannel(bad); err == nil {
 			t.Errorf("%q was accepted", bad)
 		}
 	}

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -127,9 +128,16 @@ func TestInstallGlobal_stagesTheStagedOramadAsTheGenesisBinary(t *testing.T) {
 	if err := InstallGlobal(f.options(GlobalServiceChain), f.host); err != nil {
 		t.Fatal(err)
 	}
-	sum := sha256.Sum256([]byte("binary oramad"))
-	want := []stageCall{{filepath.Join(f.staged, "oramad"), hex.EncodeToString(sum[:])}}
-	if !slices.Equal(f.stages, want) {
+	oramad, err := os.ReadFile(filepath.Join(f.staged, "oramad"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(oramad)
+	want := []stageCall{{
+		src: filepath.Join(f.staged, "oramad"), sum: hex.EncodeToString(sum[:]),
+		companions: []StagedFile{{Name: "orama-orchard-verifier", Src: filepath.Join(f.staged, "orama-orchard-verifier"), Sum: f.verifierSum}},
+	}}
+	if !reflect.DeepEqual(f.stages, want) {
 		t.Fatalf("stage calls = %v, want %v", f.stages, want)
 	}
 }

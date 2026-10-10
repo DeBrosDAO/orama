@@ -18,6 +18,7 @@ const defaultSSHPort = 22
 var installFlags struct {
 	services         []string
 	stagedDir        string
+	manifest         string
 	publicStorageGB  uint64
 	peers            string
 	initChain        bool
@@ -54,7 +55,11 @@ For each service it creates the service's system account, copies its binaries
 validator check-sign-floor' before every start; ipfs, Kubo v0.43.1, for ipfs;
 orama-global for the others) from --staged-dir into /usr/lib/orama-global/bin
 (root-owned, 0755; a symlink in the staged directory is refused, and as root the
-directory must be root's and not writable by others), writes and enables its
+directory must be root's and not writable by others). A release archive's bin/
+directory (/opt/orama/bin once the release is extracted) is the staged directory,
+and the release's manifest (--manifest, /opt/orama/manifest.json) must list every
+file the install reads with the digest it has; a file that is not the release's is
+refused before anything on the host changes. It writes and enables its
 orama-global-* unit, and opens its public port in ufw (31000 tcp+udp for the
 chain, 31010 tcp+udp for the public Kubo swarm, 31013 tcp for the provider)
 with the comment orama-global. It does not start anything: 'orama global start'
@@ -64,8 +69,10 @@ The chain unit runs oramad under cosmovisor v1.7.3. Stage the official
 cosmovisor-v1.7.3-linux-<amd64|arm64>.tar.gz beside the other binaries: its
 SHA-256 must equal the pin built into this CLI, and only its cosmovisor file is
 installed. oramad itself is placed in the chain home's cosmovisor layout as the
-genesis binary, so the chain home must already have a genesis (--init-chain, or
-an existing home). A binary already staged there with different bytes is
+genesis binary, together with the release's shielded verifier (orama-orchard-verifier,
+which the release ships beside oramad and whose digest oramad pins): the chain unit
+passes oramad the one in the layout's current/bin, so an upgrade brings its own.
+The chain home must already have a genesis (--init-chain, or an existing home). A binary already staged there with different bytes is
 refused: change the chain binary with 'orama maint global stage-oramad --upgrade'.
 
 The ipfs service is a public Kubo of its own: no swarm.key, its own repo in
@@ -138,7 +145,8 @@ refuses the install, and the set is kept by later installs.`,
 func init() {
 	f := installCmd.Flags()
 	f.StringSliceVar(&installFlags.services, "services", nil, "Services: chain[,ipfs,provider,archiver,indexer,repair,dirauth,relay,exit,onion,reporter] [required]")
-	f.StringVar(&installFlags.stagedDir, "staged-dir", "", "Directory holding the release's oramad, orama, orama-global, ipfs and the cosmovisor tarball [required]")
+	f.StringVar(&installFlags.stagedDir, "staged-dir", "", "Directory holding the release's oramad, orama-orchard-verifier (and its .sha256), orama, orama-global, ipfs and the cosmovisor tarball: the release's bin/ [required]")
+	f.StringVar(&installFlags.manifest, "manifest", install.DefaultStagedManifest, "The release's manifest.json, which must list every file the install reads with its digest")
 	f.Uint64Var(&installFlags.publicStorageGB, "public-storage-gb", 0, "Capacity in GB you will declare for the provider; sizes the public Kubo (required with ipfs)")
 	f.StringVar(&installFlags.peers, "persistent-peers", "", "Chain peers, id@host:port,... (written into the chain unit)")
 	f.BoolVar(&installFlags.initChain, "init-chain", false, "Create the chain home with oramad init and install --genesis")
@@ -154,7 +162,7 @@ func init() {
 	f.UintVar(&installFlags.torBandwidthMbit, "tor-bandwidth-mbit", 0, "dirauth, relay: limit on what the relay carries for others, in Mbit/s each way (0 = unlimited)")
 	f.StringSliceVar(&installFlags.torFamily, "tor-family", nil, "dirauth, relay: the RSA fingerprints of the operator's other relays")
 	f.StringVar(&installFlags.torReporterOp, "tor-reporter-operator", "", "reporter: the operator account address (orama1...) the reporter runs for; its relays are left out of a report")
-	f.StringVar(&installFlags.torAuthorityKeys, "tor-authority-keys", "", "dirauth: the authority's key bundle from 'orama maint global tor ceremony' (deploy/<nickname>)")
+	f.StringVar(&installFlags.torAuthorityKeys, "tor-authority-keys", "", "dirauth: the authority's key bundle from 'orama global tor ceremony' (deploy/<nickname>)")
 	f.BoolVar(&installFlags.colocated, "colocated", false, "Run the services in their own network namespace on a machine that also runs a cluster node")
 	Cmd.AddCommand(installCmd)
 }
@@ -165,7 +173,7 @@ func runInstall(cmd *cobra.Command, _ []string) error {
 		return clierr.Usage("%v", err)
 	}
 	opts := install.GlobalInstallOptions{
-		Services: services, StagedDir: installFlags.stagedDir, PersistentPeers: installFlags.peers,
+		Services: services, StagedDir: installFlags.stagedDir, Manifest: installFlags.manifest, PersistentPeers: installFlags.peers,
 		EnableFirewall: installFlags.enableFirewall, SSHPort: installFlags.sshPort, Colocated: installFlags.colocated,
 		PublicStorageBytes: installFlags.publicStorageGB * bytesPerGB,
 		ChainClientUsers:   installFlags.chainClientUsers,

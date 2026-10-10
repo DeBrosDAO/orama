@@ -39,7 +39,7 @@ func ReadArchiveManifest(path string) ([]byte, error) {
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
-			return nil, fmt.Errorf("%s has no %s — not an orama build archive", path, ManifestName)
+			return nil, fmt.Errorf("%s has no %s — not an orama maint build archive", path, ManifestName)
 		}
 		if err != nil {
 			return nil, fmt.Errorf("read archive %s: %w", path, err)

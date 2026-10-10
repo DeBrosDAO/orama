@@ -56,7 +56,7 @@ func (ps *ProductionSetup) EnsurePrivHelper() (err error) {
 func (ps *ProductionSetup) ensurePrivHelper() error {
 	src := filepath.Join(ps.oramaHome, "bin", privHelperBinary)
 	if _, err := os.Stat(src); err != nil {
-		return fmt.Errorf("%s is missing from the release (%w); rebuild the archive with this version of `orama build`", src, err)
+		return fmt.Errorf("%s is missing from the release (%w); rebuild the archive with this version of `orama maint build`", src, err)
 	}
 	if err := copyBinary(src, privHelperDest); err != nil {
 		return fmt.Errorf("install %s: %w", privHelperDest, err)

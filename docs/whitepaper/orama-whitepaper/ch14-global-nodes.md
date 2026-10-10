@@ -22,13 +22,13 @@ None of these units is `PartOf` the node supervisor, so restarting `orama-node` 
 
 Ordering is done by the CLI, not by systemd, which uses `Wants=` rather than `Requires=`. `orama global start` runs the sign-floor check, starts the chain, polls its RPC for at most five minutes, and only then starts the rest.
 
-`orama global install` validates everything that can refuse before the first change: option shapes, firewall state, the cosmovisor tarball against its pinned SHA-256, and a staged `oramad` against the genesis binary already installed. It starts nothing. It does not verify `oramad` against any signature; whoever stages it is the root of trust.
+`orama global install` validates everything that can refuse before the first change: option shapes, firewall state, the cosmovisor tarball against its pinned SHA-256, every staged binary and the shielded verifier against the release manifest, `oramad` against the verifier it pins, and a staged `oramad` against the genesis binary already installed. It starts nothing. The verifier is placed in the cosmovisor layout beside `oramad`, so each version of the chain runs the verifier it was built with.
 
 ## Upgrading the chain
 
 The chain home belongs to the `orama-chain` account, but root puts binaries in it, and that account could plant a symlink where root is about to write. `core/pkg/cosmovisor/` therefore never resolves a path. It walks to the chain home one component at a time with `O_NOFOLLOW`, copies the binary into a private directory, runs the verifier on the open descriptor, and links it into place with `linkat`, which fails if the name exists. The bytes checked are the bytes installed, and nothing is replaced.
 
-Cosmovisor runs with downloads disabled: a governance plan is data, a binary is code that signs. A plan reaching its height without a staged binary leaves the chain halted. The operator stages each upgrade with `orama maint global stage-oramad`, verified against the TUF release root.
+Cosmovisor runs with downloads disabled: a governance plan is data, a binary is code that signs. A plan reaching its height without a staged binary leaves the chain halted. The operator stages each upgrade, with its verifier, using `orama maint global stage-oramad`, verified against the TUF release root.
 
 ## The sign floor and moving a key
 

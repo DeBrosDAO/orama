@@ -152,7 +152,7 @@ func TestStorageRepair_absentDealRestoresNothing(t *testing.T) {
 // TestGlobalStageOramad_unverifiedBinaryRefused: stage-oramad places a binary
 // only after it verifies against the adopted release root through TUF
 // metadata; a binary with no metadata is refused and nothing is linked into
-// the cosmovisor layout (docs/CLI_REFERENCE.md#orama-maint-global-stage-oramad).
+// the cosmovisor layout (docs/CLI_REFERENCE.md#orama-global-stage-oramad).
 // It stages into a root-owned scratch home, never the chain's own.
 func TestGlobalStageOramad_unverifiedBinaryRefused(t *testing.T) {
 	t.Parallel()
@@ -164,7 +164,7 @@ func TestGlobalStageOramad_unverifiedBinaryRefused(t *testing.T) {
 	meta := home + "/metadata"
 	f.MustExec(t, n, "mkdir -m 0700 "+fleet.ShellQuote(meta))
 	out := onNode(t, f, n, "maint", "global", "stage-oramad", "--binary", "/bin/true", "--release-metadata", meta,
-		"--release-target", "oramad", "--upgrade", "e2e-bogus", "--home", home)
+		"--release-target", "oramad", "--verifier", "/bin/true", "--verifier-target", "orama-orchard-verifier", "--upgrade", "e2e-bogus", "--home", home)
 	// Refused by release verification (releaseverify.CheckFile): the node has
 	// no adopted root, or the empty metadata dir lacks the TUF files.
 	expectNodeFailure(t, f, out, "no release root adopted", "read release metadata")
@@ -183,8 +183,10 @@ func TestGlobalStageOramad_unverifiedBinaryRefused(t *testing.T) {
 func TestGlobalStageOramad_argumentChecks(t *testing.T) {
 	t.Parallel()
 	cli := cliNoWallet(t)
-	full := []string{"maint", "global", "stage-oramad", "--binary", "/bin/true", "--release-metadata", t.TempDir(), "--release-target", "oramad"}
-	infra.ExpectExit(t, run(t, cli, full[:4]...), exitUsage, "required")
+	full := []string{"maint", "global", "stage-oramad", "--binary", "/bin/true", "--release-metadata", t.TempDir(), "--release-target", "oramad",
+		"--verifier", "/bin/true", "--verifier-target", "orama-orchard-verifier"}
+	infra.ExpectExit(t, run(t, cli, full[:5]...), exitUsage, "required")
+	infra.ExpectExit(t, run(t, cli, full[:9]...), exitUsage, "--verifier and --verifier-target are required")
 	infra.ExpectExit(t, run(t, cli, full...), exitUsage, "exactly one of --upgrade")
 	infra.ExpectExit(t, run(t, cli, append(full, "--genesis", "--upgrade", "x")...), exitUsage, "exactly one of --upgrade")
 	res := run(t, cli, append(full, "--genesis")...)

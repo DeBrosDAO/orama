@@ -21,7 +21,7 @@ import (
 // A release repository is a static directory served over HTTPS:
 //
 //	<base>/timestamp.json  <base>/snapshot.json  <base>/targets.json
-//	<base>/<role>.json     one per delegated role (a channel)
+//	<base>/<N>.root.json   every version of the root (rotate.go)
 //	<base>/targets/<path>  the files the targets metadata names
 //
 // Nothing fetched is trusted until CheckFile has verified it against the
@@ -44,6 +44,10 @@ const (
 	dialTimeout   = 30 * time.Second
 	dialKeepAlive = 30 * time.Second
 )
+
+// ErrNotFound is a file the release repository answered 404 for. A root
+// update reads it as "there is no newer root".
+var ErrNotFound = errors.New("not found in the release repository")
 
 // Repository is a release repository at BaseURL.
 type Repository struct {
@@ -136,17 +140,10 @@ func publicHost(host string) bool {
 	return ip == nil || !netguard.Reserved(ip)
 }
 
-// FetchMetadata downloads timestamp.json, snapshot.json, targets.json and
-// each of roles' <role>.json into dir.
-func (r Repository) FetchMetadata(ctx context.Context, dir string, roles []string) error {
-	names := []string{TimestampFile, SnapshotFile, TargetsFile}
-	for _, role := range roles {
-		if err := ValidRoleName(role); err != nil {
-			return err
-		}
-		names = append(names, role+".json")
-	}
-	for _, name := range names {
+// FetchMetadata downloads timestamp.json, snapshot.json and targets.json into
+// dir.
+func (r Repository) FetchMetadata(ctx context.Context, dir string) error {
+	for _, name := range []string{TimestampFile, SnapshotFile, TargetsFile} {
 		data, err := r.getMetadata(ctx, name)
 		if err != nil {
 			return err
@@ -218,6 +215,10 @@ func (r Repository) get(ctx context.Context, rel string) (*http.Response, error)
 	resp, err := r.client().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetch %s: %w", u, err)
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		resp.Body.Close()
+		return nil, fmt.Errorf("fetch %s: the release repository answered %s: %w", u, resp.Status, ErrNotFound)
 	}
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()

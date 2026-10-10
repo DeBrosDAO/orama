@@ -50,8 +50,10 @@ func execute(flags *Flags) error {
 	// Step 1: Build
 	if !flags.NoBuild {
 		fmt.Printf("Step 1/3: Building binary archive...\n\n")
+		// A rollout upgrades cluster nodes; the global layer is not part of it.
 		buildFlags := &build.Flags{
-			Arch: "amd64",
+			Arch:            "amd64",
+			SkipGlobalLayer: true,
 		}
 		builder := build.NewBuilder(buildFlags)
 		if err := builder.Build(); err != nil {

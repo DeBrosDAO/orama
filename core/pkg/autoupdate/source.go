@@ -27,6 +27,10 @@ const (
 type Source struct {
 	RootPath string
 	SeenPath string
+	// AdoptedRoot, when set, keeps the newest root this machine has adopted
+	// beside the rollback record, for a caller that rebuilds RootPath from a
+	// pinned root on every run (releaseverify.RootUpdate.Adopted).
+	AdoptedRoot string
 	// WorkDir is where metadata and archives are fetched to, below which a
 	// fresh directory is made for each fetch. Only root may read it.
 	WorkDir string
@@ -40,8 +44,6 @@ type Release struct {
 	Target  releaseverify.Target
 	// Dir holds the metadata and, after Download, the archive.
 	Dir string
-	// Roles are the delegated roles the metadata was verified with.
-	Roles []string
 }
 
 // MetadataDir is where the verified metadata is.
@@ -66,8 +68,9 @@ func (s Source) SweepStale() error {
 	return nil
 }
 
-// Newest fetches the channel's metadata from repoURL, verifies it against the
-// adopted root and the rollback record, and returns the newest release for
+// Newest brings the adopted root up to the newest version repoURL publishes
+// (a rotation, releaseverify.Repository.UpdateRoot), fetches the channel's
+// metadata from repoURL, verifies it against that root and the rollback record, and returns the newest release for
 // this machine's architecture. ok is false when the channel lists none. The
 // directory it makes holds the metadata; Remove deletes it.
 func (s Source) Newest(ctx context.Context, repoURL, channel string) (rel Release, ok bool, err error) {
@@ -83,13 +86,14 @@ func (s Source) Newest(ctx context.Context, repoURL, channel string) (rel Releas
 			err = errors.Join(err, os.RemoveAll(dir))
 		}
 	}()
-	rel = Release{Dir: dir, Roles: []string{channel}}
+	rel = Release{Dir: dir}
 	if err := os.Mkdir(rel.MetadataDir(), workDirPerm); err != nil {
 		return Release{}, false, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, fetchBudget)
 	defer cancel()
-	if err := (releaseverify.Repository{BaseURL: repoURL}).FetchMetadata(ctx, rel.MetadataDir(), rel.Roles); err != nil {
+	update := releaseverify.RootUpdate{RootPath: s.RootPath, SeenPath: s.SeenPath, Adopted: s.AdoptedRoot, Now: s.Now()}
+	if err := (releaseverify.Repository{BaseURL: repoURL}).Sync(ctx, rel.MetadataDir(), update); err != nil {
 		return Release{}, false, fmt.Errorf("fetch the %s channel: %w", channel, err)
 	}
 	verified, err := releaseverify.Load(s.check(rel, ""))
@@ -132,6 +136,6 @@ func (r Release) Remove() error { return os.RemoveAll(r.Dir) }
 func (s Source) check(rel Release, target string) releaseverify.FileCheck {
 	return releaseverify.FileCheck{
 		RootPath: s.RootPath, SeenPath: s.SeenPath, MetadataDir: rel.MetadataDir(),
-		Roles: rel.Roles, Target: target, Now: s.Now(),
+		Target: target, Now: s.Now(),
 	}
 }

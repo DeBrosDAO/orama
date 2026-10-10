@@ -197,8 +197,12 @@ type ChainInit struct {
 
 // GlobalInstallOptions is one `orama global install`.
 type GlobalInstallOptions struct {
-	Services        []GlobalService
-	StagedDir       string
+	Services  []GlobalService
+	StagedDir string
+	// Manifest is the manifest.json of the release StagedDir holds a copy of
+	// (DefaultStagedManifest): every binary the install reads must be listed
+	// in it with the digest the staged file has.
+	Manifest        string
 	PersistentPeers string
 	InitChain       *ChainInit
 	EnableFirewall  bool
@@ -252,6 +256,9 @@ func (o GlobalInstallOptions) validate() error {
 	}
 	if o.StagedDir == "" {
 		return fmt.Errorf("the staged binary directory is required")
+	}
+	if o.Manifest == "" {
+		return fmt.Errorf("the release manifest is required: the staged binaries are installed only if it lists them")
 	}
 	if err := ValidatePersistentPeers(o.PersistentPeers); err != nil {
 		return err

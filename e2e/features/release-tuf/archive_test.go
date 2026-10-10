@@ -46,7 +46,7 @@ func TestStageArchive_releaseRootRefusalsChangeNothing(t *testing.T) {
 		t.Fatalf("rollback record %q, want %q", got, want)
 	}
 	before := nd.snapshot(t)
-	for _, c := range refusals(t, repo, archiveTarget, content) {
+	for _, c := range refusals(t, repo, archiveTarget, content, nil) {
 		t.Run(c.name, func(t *testing.T) {
 			exit, out := nd.orama(t, stageArgs(nd.upload(t, c.name, c.meta)))
 			wantRefused(t, exit, out, append([]string{refusedPrefix}, c.wants...)...)

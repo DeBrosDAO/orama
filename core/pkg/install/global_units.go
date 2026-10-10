@@ -3,6 +3,7 @@ package install
 import (
 	"fmt"
 	"net"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -134,8 +135,16 @@ func needsIPFS(unit string) string {
 // chainStartArgs is oramad's start command with the chain's listeners: p2p
 // public, everything else on loopback.
 func chainStartArgs() string {
-	return fmt.Sprintf("start --home %s --p2p.laddr tcp://0.0.0.0:%d --rpc.laddr tcp://127.0.0.1:%d --grpc.enable=true --grpc.address 127.0.0.1:%d --api.enable=true --api.address tcp://127.0.0.1:%d",
-		constants.ChainHome, constants.ChainP2PPort, constants.ChainRPCPort, constants.ChainGRPCPort, constants.ChainAPIPort)
+	return fmt.Sprintf("start --home %s --shielded-verifier %s --p2p.laddr tcp://0.0.0.0:%d --rpc.laddr tcp://127.0.0.1:%d --grpc.enable=true --grpc.address 127.0.0.1:%d --api.enable=true --api.address tcp://127.0.0.1:%d",
+		constants.ChainHome, chainVerifierPath(), constants.ChainP2PPort, constants.ChainRPCPort, constants.ChainGRPCPort, constants.ChainAPIPort)
+}
+
+// chainVerifierPath is the shielded verifier of the version cosmovisor runs:
+// beside oramad in current/bin, so an upgrade switches the verifier with the
+// binary (the unit's arguments never change). oramad checks the file against
+// the digest linked into it.
+func chainVerifierPath() string {
+	return filepath.Join(cosmovisor.Layout{Home: constants.ChainHome}.CurrentBinDir(), constants.ChainVerifierBinary)
 }
 
 func chainPrometheusNote() string {

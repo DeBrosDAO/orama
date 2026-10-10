@@ -316,6 +316,9 @@ volumes:
               - core/pkg/archivetrust/
               - core/pkg/releasesign/
               - core/pkg/releaseverify/
+              - core/pkg/releasepub/
+              - core/pkg/releasefetch/
+              - core/cmd/orama/internal/cmd/releasecmd/
               - core/pkg/version/
               - core/cmd/testtuf/
               - core/thirdparty/olric/

@@ -38,6 +38,9 @@ type Builder struct {
 	zig string
 	// agent signs the manifest: the RootWallet agent.
 	agent archiveSigner
+	// globalLayer is set by planGlobalLayer: this build carries oramad and the
+	// rest of the global layer.
+	globalLayer bool
 	// releaseRoot is the manifest's release_root: base64 of the validated
 	// root.json --release-root named, or "".
 	releaseRoot string
@@ -77,6 +80,10 @@ func (b *Builder) Build() error {
 
 	b.zig, err = resolveZig(filepath.Join(projectDir, "..", "vault"))
 	if err != nil {
+		return err
+	}
+
+	if err := b.planGlobalLayer(); err != nil {
 		return err
 	}
 
@@ -145,6 +152,13 @@ func (b *Builder) Build() error {
 	// Step 8: Download pre-built RQLite
 	if err := b.downloadRQLite(); err != nil {
 		return fmt.Errorf("failed to download rqlite: %w", err)
+	}
+
+	// The global layer: the chain node and its companions.
+	if b.globalLayer {
+		if err := b.buildGlobalLayer(); err != nil {
+			return fmt.Errorf("failed to build the global layer: %w", err)
+		}
 	}
 
 	// Step 9: Copy systemd templates

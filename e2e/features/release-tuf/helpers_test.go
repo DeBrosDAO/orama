@@ -145,22 +145,30 @@ type refusal struct {
 }
 
 // refusals are the TUF failures, each a real signed repository but one:
-// target is the name the node is asked for, content its bytes.
-func refusals(t *testing.T, repo *tuf.Repo, target string, content []byte) []refusal {
+// target is the name the node is asked for, content its bytes. also are further
+// targets every repository lists unchanged (the verifier staged beside oramad).
+func refusals(t *testing.T, repo *tuf.Repo, target string, content []byte, also map[string][]byte) []refusal {
 	t.Helper()
+	listing := func(name string, c []byte) map[string][]byte {
+		targets := map[string][]byte{name: c}
+		for n, b := range also {
+			targets[n] = b
+		}
+		return targets
+	}
 	valid := func(v int64, c []byte) map[string][]byte {
-		return repo.Metadata(t, v, time.Time{}, map[string][]byte{target: c})
+		return repo.Metadata(t, v, time.Time{}, listing(target, c))
 	}
 	return []refusal{
 		{"rollback", valid(olderVersion, content), []string{tuf.ErrRollback,
 			fmt.Sprintf("snapshot version %d is lower than %d already seen", olderVersion, acceptedVersion)}},
-		{"expired-timestamp", repo.Metadata(t, newerVersion, time.Now().Add(-time.Hour), map[string][]byte{target: content}),
+		{"expired-timestamp", repo.Metadata(t, newerVersion, time.Now().Add(-time.Hour), listing(target, content)),
 			[]string{tuf.ErrFreeze}},
 		{"below-threshold", tuf.Unsigned(t, valid(newerVersion, content), tuf.Files[0]), []string{tuf.ErrThreshold, "timestamp"}},
 		{"hash-mismatch", valid(newerVersion, tuf.Flipped(content)), []string{tuf.ErrTargetHash, "sha256 does not match"}},
 		{"length-mismatch", valid(newerVersion, tuf.Longer(content)), []string{tuf.ErrTargetHash,
 			fmt.Sprintf("is not %d bytes long", len(content)+1)}},
-		{"wrong-target", repo.Metadata(t, newerVersion, time.Time{}, map[string][]byte{"other-" + target: content}),
+		{"wrong-target", repo.Metadata(t, newerVersion, time.Time{}, listing("other-"+target, content)),
 			[]string{fmt.Sprintf("targets metadata does not name %q", target)}},
 	}
 }

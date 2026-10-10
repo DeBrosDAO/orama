@@ -339,6 +339,7 @@ build() {
 	# The second shielded verifier: a separately built and pinned Rust binary, run out of process. The
 	# same make target links its sha256 into oramad, so oramad refuses any other file.
 	cp "$chain_root/build/orama-orchard-verifier-linux-amd64" "$work/orama-orchard-verifier"
+	cp "$chain_root/build/orama-orchard-verifier-linux-amd64.sha256" "$work/orama-orchard-verifier.sha256"
 	cp "$chain_root/build/orama-global-linux-amd64" "$work/orama-global"
 	cp "$chain_root/build/stagenet-node-linux-amd64" "$work/stagenet-node"
 	log "building the orama CLI for linux/amd64"
@@ -349,6 +350,23 @@ build() {
 	fetch "$KUBO_URL" "$cache_dir/$KUBO_TARBALL" "$KUBO_SHA256" "$KUBO_SHA512"
 	tar -xzf "$cache_dir/$KUBO_TARBALL" -C "$work" kubo/ipfs
 	mv "$work/kubo/ipfs" "$work/ipfs"
+	write_manifest
+}
+
+# write_manifest lists the staged release files with their digests, the manifest.json that
+# `orama global install --manifest` holds the staged directory to (a release archive carries the
+# same file, written and signed by `orama build`).
+write_manifest() {
+	local f first=1
+	{
+		printf '{"version":"stagenet","checksums":{'
+		for f in oramad orama orama-global ipfs orama-orchard-verifier orama-orchard-verifier.sha256 "$COSMOVISOR_TARBALL"; do
+			[ "$first" = 1 ] || printf ','
+			first=0
+			printf '"%s":"%s"' "$f" "$(sha256_of "$work/$f")"
+		done
+		printf '}}\n'
+	} > "$work/manifest.json"
 }
 
 # build_host_tools compiles what runs on this machine: stagenetctl, and the orama CLI for this OS
@@ -392,6 +410,8 @@ stage_release() {
 	for f in oramad orama orama-global ipfs orama-orchard-verifier; do
 		put_root_file "$alias" 0755 "$STAGE_DIR/$f" < "$work/$f"
 	done
+	put_root_file "$alias" 0644 "$STAGE_DIR/orama-orchard-verifier.sha256" < "$work/orama-orchard-verifier.sha256"
+	put_root_file "$alias" 0644 "$STAGE_DIR/manifest.json" < "$work/manifest.json"
 	put_root_file "$alias" 0644 "$STAGE_DIR/$COSMOVISOR_TARBALL" < "$work/$COSMOVISOR_TARBALL"
 	# --init-chain wants a genesis of the right chain id; the real one needs this node's own keys, so
 	# a placeholder goes in first and the real genesis replaces it before anything starts.
@@ -421,7 +441,7 @@ global_install() {
 	local login
 	login="$(login_user "$alias")"
 	local args=(sudo "$STAGE_DIR/orama" global install --colocated --services "$services"
-		--public-storage-gb "$PUBLIC_STORAGE_GB" --staged-dir "$STAGE_DIR")
+		--public-storage-gb "$PUBLIC_STORAGE_GB" --staged-dir "$STAGE_DIR" --manifest "$STAGE_DIR/manifest.json")
 	# root is always allowed to reach the chain, and the install refuses it as a client user.
 	if [ "$login" != root ]; then
 		args+=(--chain-client-user "$login")
@@ -586,16 +606,6 @@ configure_node() {
 	assert_set "$alias" "$HOME_DIR/config/app.toml" "iavl-cache-size = $IAVL_CACHE_SIZE" "the IAVL cache size"
 }
 
-# install_verifier puts the pinned out-of-process shielded verifier where oramad looks for it by
-# default, <home>/bin/orama-orchard-verifier. The directory and the file are root's: a file the
-# chain's own user could rewrite would be protected only by the sha256 linked into oramad.
-install_verifier() {
-	local alias="$1" name="$2"
-	log "[$name] installing the shielded verifier in $HOME_DIR/bin"
-	on "$alias" "sudo install -d -m 0755 -o root -g root $HOME_DIR/bin"
-	put_root_file "$alias" 0755 "$HOME_DIR/bin/orama-orchard-verifier" < "$work/orama-orchard-verifier"
-}
-
 cmd_up() {
 	build
 	local n alias name ip
@@ -614,7 +624,6 @@ cmd_up() {
 	for n in "${NODES[@]}"; do
 		alias="$(field "$n" 2)"; name="$(field "$n" 1)"; ip="$(field "$n" 3)"
 		configure_node "$alias" "$name" "$ip"
-		install_verifier "$alias" "$name"
 		global_install "$alias" "$name" 2 "$peer_list"
 	done
 	cmd_start

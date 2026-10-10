@@ -93,12 +93,21 @@ func extractCosmovisor(tarball []byte) ([]byte, error) {
 	}
 }
 
+// chainPlan is what the chain install checked before anything changed.
+type chainPlan struct {
+	cosmovisor  []byte
+	oramadSum   string
+	verifierSum string
+}
+
 // preflightChain runs every check that can refuse the chain install before
 // anything on the host changes: the staged cosmovisor tarball against its pin
 // (returning the cosmovisor file), a chain home with a genesis to stage oramad
-// for (unless --init-chain will create it), and a staged oramad that matches
-// the genesis binary already in the cosmovisor layout.
-func preflightChain(h GlobalHost, opts GlobalInstallOptions) ([]byte, error) {
+// for (unless --init-chain will create it), the staged oramad and verifier
+// against the release manifest, the verifier against its digest file and
+// against the digest oramad pins, and a staged oramad that matches the genesis
+// binary already in the cosmovisor layout.
+func preflightChain(h GlobalHost, opts GlobalInstallOptions, manifest stagedManifest) (*chainPlan, error) {
 	cosmovisorBinary, err := verifyCosmovisor(h, opts.StagedDir)
 	if err != nil {
 		return nil, err
@@ -112,49 +121,39 @@ func preflightChain(h GlobalHost, opts GlobalInstallOptions) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read the staged %s (put the release's %s in %s): %w", globalOramadBinary, globalOramadBinary, opts.StagedDir, err)
 	}
+	if err := manifest.verify(globalOramadBinary, data); err != nil {
+		return nil, err
+	}
+	verifierSum, err := verifyStagedVerifier(opts.StagedDir, manifest, data)
+	if err != nil {
+		return nil, err
+	}
 	sum := sha256.Sum256(data)
 	layout := cosmovisor.Layout{Home: h.ChainHome, Daemon: constants.ChainDaemonName}
 	if _, err := stagedBinaryHasSum(layout.GenesisBinary(), hex.EncodeToString(sum[:])); err != nil {
 		return nil, err
 	}
-	return cosmovisorBinary, nil
+	if err := checkCurrentHasVerifier(layout); err != nil {
+		return nil, err
+	}
+	return &chainPlan{cosmovisor: cosmovisorBinary, oramadSum: hex.EncodeToString(sum[:]), verifierSum: verifierSum}, nil
 }
 
-// stageGenesisBinary puts oramad in the cosmovisor layout as the genesis
-// binary, which is what `current` points at until an upgrade. sum is the
-// SHA-256 of the staged oramad the installer read. A genesis binary already
-// there is left alone when it is the same bytes (a second install run) and
-// refused when it is not: a chain binary is changed with
-// `orama global stage-oramad --upgrade`, never by staging over the layout.
-func stageGenesisBinary(h GlobalHost, src, sum string) error {
-	dst, err := h.StageGenesis(src, sum)
+// stageGenesisBinary puts oramad, and the verifier that rides with it, in the
+// cosmovisor layout as the genesis version, which is what `current` points at
+// until an upgrade. A genesis binary already there is left alone when it is the
+// same bytes (a second install run) and refused when it is not: a chain binary
+// is changed with `orama maint global stage-oramad --upgrade`, never by staging over
+// the layout. A verifier missing beside an unchanged oramad (a node installed
+// before the release shipped one) is added.
+func stageGenesisBinary(h GlobalHost, stagedDir string, plan *chainPlan) error {
+	companions := []StagedFile{{Name: globalVerifierBinary, Src: filepath.Join(stagedDir, globalVerifierBinary), Sum: plan.verifierSum}}
+	dst, err := h.StageGenesis(filepath.Join(stagedDir, globalOramadBinary), plan.oramadSum, companions)
 	if err != nil {
 		return err
 	}
-	h.Logf("  ✓ oramad staged at %s", dst)
+	h.Logf("  ✓ oramad and %s staged at %s", globalVerifierBinary, filepath.Dir(dst))
 	return nil
-}
-
-// stageGenesisInLayout is GlobalHost.StageGenesis on a real node: root stages
-// src into the chain home's cosmovisor layout, verifying through the staged
-// copy's own descriptor that its bytes are the ones the installer hashed.
-func stageGenesisInLayout(home string) func(src, sum string) (string, error) {
-	return func(src, sum string) (string, error) {
-		uid, gid, err := cosmovisor.LookupAccount(constants.ChainUser)
-		if err != nil {
-			return "", err
-		}
-		layout := cosmovisor.Layout{Home: home, Daemon: constants.ChainDaemonName, ChainUID: uid, ChainGID: gid}
-		dst := layout.GenesisBinary()
-		same, err := stagedBinaryHasSum(dst, sum)
-		if err != nil {
-			return "", err
-		}
-		if same {
-			return dst, nil
-		}
-		return layout.StageGenesis(src, func(f *os.File) error { return fileHasSum(f, sum) })
-	}
 }
 
 // stagedBinaryHasSum reports whether the file at path has SHA-256 sum. A
@@ -166,11 +165,11 @@ func stagedBinaryHasSum(path, sum string) (bool, error) {
 		return false, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("read the staged oramad %s: %w", path, err)
+		return false, fmt.Errorf("read the staged %s: %w", path, err)
 	}
 	got := sha256.Sum256(data)
 	if hex.EncodeToString(got[:]) != sum {
-		return false, fmt.Errorf("%s is already staged with different bytes than the staged oramad; change the chain binary with 'orama global stage-oramad --upgrade <plan>', not by installing again", path)
+		return false, fmt.Errorf("%s is already staged with different bytes than the release's; change the chain binary with 'orama maint global stage-oramad --upgrade <plan>', not by installing again", path)
 	}
 	return true, nil
 }

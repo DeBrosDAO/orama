@@ -100,7 +100,7 @@ func (ps *ProductionSetup) TrustJoinedArchiveSigners(signers []string, rotatedAt
 	if len(signers) == 0 {
 		return fmt.Errorf("the node that minted the invite sent no archive signers: it runs a release " +
 			"from before archives were signed, or has no trust anchor of its own. Upgrade that node " +
-			"(and give it an anchor with `orama push --trust-signers`), then mint a new invite")
+			"(and give it an anchor with `orama maint push --trust-signers`), then mint a new invite")
 	}
 	normalized, err := archivetrust.NormalizeSigners(signers)
 	if err != nil {
@@ -181,7 +181,7 @@ func (ps *ProductionSetup) preflightArchive(expected []string) error {
 // refuse never costs the node its uptime.
 func (ps *ProductionSetup) VerifyPreBuiltArchive() error {
 	if !HasPreBuiltArchive() {
-		return fmt.Errorf("no build archive at %s (%s is missing); push one with `orama push`", archiveDir, OramaManifest)
+		return fmt.Errorf("no build archive at %s (%s is missing); push one with `orama maint push`", archiveDir, OramaManifest)
 	}
 	unlock, err := lockArchive(archiveDir)
 	if err != nil {

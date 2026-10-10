@@ -9,24 +9,16 @@ import (
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/maintcmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/node"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/nodescmd"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/releasecmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmdmeta"
 )
 
 // newMaintCmd returns `orama maint` with everything mounted under it.
 func newMaintCmd() *cobra.Command {
 	maint := maintcmd.New()
-	mountReleaseCommands(maint)
+	maint.AddCommand(releasecmd.NewCommand())
 	return maint
 }
-
-// mountReleaseCommands is where the release commands join `orama maint`.
-//
-// MERGE POINT (epic 3306): the release commands are a package of their own
-// (internal/cmd/releasecmd), built on another branch, and mount here with one
-// line once that branch is merged:
-//
-//	maint.AddCommand(releasecmd.NewCommand())
-func mountReleaseCommands(*cobra.Command) {}
 
 // hideReplacedGroups hides, from `orama --help`, the operator command groups that
 // `orama setup`, `status`, `upgrade` and `remove` replace. They keep working at

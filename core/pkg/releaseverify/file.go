@@ -53,12 +53,8 @@ type FileCheck struct {
 	RootPath string
 	// SeenPath is the rollback record; it is created on first success.
 	SeenPath string
-	// MetadataDir holds timestamp.json, snapshot.json and targets.json, and
-	// <role>.json for each of Roles.
+	// MetadataDir holds timestamp.json, snapshot.json and targets.json.
 	MetadataDir string
-	// Roles are the delegated targets roles to read and verify, normally the
-	// release channel. Target may be one of theirs.
-	Roles []string
 	// Target is the name the targets metadata lists the file under.
 	Target string
 	// File is an open descriptor of the file that must be that target. It
@@ -79,7 +75,7 @@ func CheckFile(c FileCheck) (v *Verified, err error) {
 	if c.File == nil {
 		return nil, fmt.Errorf("no file to check against target %q", c.Target)
 	}
-	meta, err := readMetadata(c.RootPath, c.MetadataDir, c.Roles)
+	meta, err := readMetadata(c.RootPath, c.MetadataDir)
 	if err != nil {
 		return nil, err
 	}
@@ -161,7 +157,7 @@ func newHash(algo string) (hash.Hash, error) {
 	}
 }
 
-func readMetadata(rootPath, dir string, roles []string) (Metadata, error) {
+func readMetadata(rootPath, dir string) (Metadata, error) {
 	root, err := readLimited(rootPath)
 	if errors.Is(err, fs.ErrNotExist) {
 		return Metadata{}, fmt.Errorf("%w: %s does not exist", ErrNoRoot, rootPath)
@@ -180,19 +176,6 @@ func readMetadata(rootPath, dir string, roles []string) (Metadata, error) {
 			return Metadata{}, fmt.Errorf("read release metadata: %w", err)
 		}
 		*dst = data
-	}
-	for _, role := range roles {
-		if err := ValidRoleName(role); err != nil {
-			return Metadata{}, err
-		}
-		data, err := readLimited(filepath.Join(dir, role+".json"))
-		if err != nil {
-			return Metadata{}, fmt.Errorf("read release metadata: %w", err)
-		}
-		if meta.Delegated == nil {
-			meta.Delegated = map[string][]byte{}
-		}
-		meta.Delegated[role] = data
 	}
 	return meta, nil
 }

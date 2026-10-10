@@ -30,6 +30,7 @@ const (
 	// noticePath, nodeManifest and previousDir are the node's own paths
 	// (core/pkg/updatenotice, core/pkg/install).
 	noticePath   = "/etc/orama/update-notice.json"
+	adoptedRoot  = "/etc/orama/release-root.json"
 	nodeManifest = "/opt/orama/manifest.json"
 	// snapshot versions: the first the node accepts, and an older replay.
 	firstSnapshot = 7
@@ -207,6 +208,30 @@ func TestAutoupdateRun_followsItsPolicyAndRefusesWhatDoesNotVerify(t *testing.T)
 		a.publish(t, a.repo.Files(t, olderSnapshot, time.Time{}, a.arch, archives))
 		out := a.orama(t, "maint", "node", "autoupdate", "run")
 		infra.ExpectNodeExit(t, "autoupdate run", out, infra.ExitOK, "refuse:", "rolled-back")
+	})
+	t.Run("followsARootRotationTheRepositoryPublished", func(t *testing.T) {
+		cli.MustOK(t, "cluster", "settings", "set", "auto-update", "notify")
+		name, rotated := a.repo.Rotate(t)
+		a.put(t, path.Join(repoDir, name), rotated)
+		a.publish(t, a.repo.Files(t, firstSnapshot+3, time.Time{}, a.arch, archives))
+		out := a.orama(t, "node", "autoupdate", "run")
+		infra.ExpectNodeExit(t, "autoupdate run", out, infra.ExitOK, "notify:", a.newVer)
+		adopted := a.f.MustExec(t, a.node, "sha256sum "+adoptedRoot).Stdout
+		if !strings.HasPrefix(adopted, a.repo.Digest()) {
+			t.Fatalf("the node did not adopt the rotated root %s: %s", a.repo.Digest(), adopted)
+		}
+	})
+	t.Run("readsTheNightlyChannelByItsPathPrefix", func(t *testing.T) {
+		cli.MustOK(t, "cluster", "settings", "set", "update-channel", "nightly")
+		a.publish(t, a.repo.FilesOn(t, "nightly", firstSnapshot+4, time.Time{}, a.arch, archives))
+		out := a.orama(t, "node", "autoupdate", "run")
+		infra.ExpectNodeExit(t, "autoupdate run", out, infra.ExitOK, "notify:", a.newVer)
+		cli.MustOK(t, "cluster", "settings", "set", "update-channel", "main")
+		out = a.orama(t, "node", "autoupdate", "run")
+		infra.ExpectNodeExit(t, "autoupdate run", out, infra.ExitOK)
+		if strings.Contains(out.Stdout, a.newVer) {
+			t.Fatalf("the main channel offered a release listed only under nightly/:\n%s", out.Stdout)
+		}
 	})
 	t.Run("offStopsLookingAndClearsTheNotice", func(t *testing.T) {
 		cli.MustOK(t, "maint", "cluster", "settings", "set", "auto-update", "off")

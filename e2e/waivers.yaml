@@ -11,6 +11,24 @@
 # waiver for an item that no longer ships, and on a waiver without a reason or
 # a trigger. See e2e/README.md, "Waivers".
 waivers:
+  - id: cli:orama maint release
+    reason: "Signing a release asks the owner's RootWallet for a human approval of every signature (the headless agent refuses wallet:sign:orama-release), and publish writes to the release host and GitHub; a fleet run has neither. cut --dry-run and the TUF metadata are unit-tested in core/pkg/releasepub and core/cmd/orama/internal/cmd/releasecmd."
+    trigger: "Epic 3306 I1: the first signed nightly release published to releases.orama.network, after which a fleet test fetches and verifies it (autoupdate-agent nightly-channel test)"
+  - id: cli:orama maint release cut
+    reason: "Signing a release asks the owner's RootWallet for a human approval of every signature (the headless agent refuses wallet:sign:orama-release), and publish writes to the release host and GitHub; a fleet run has neither. cut --dry-run and the TUF metadata are unit-tested in core/pkg/releasepub and core/cmd/orama/internal/cmd/releasecmd."
+    trigger: "Epic 3306 I1: the first signed nightly release published to releases.orama.network, after which a fleet test fetches and verifies it (autoupdate-agent nightly-channel test)"
+  - id: cli:orama maint release init-root
+    reason: "Signing a release asks the owner's RootWallet for a human approval of every signature (the headless agent refuses wallet:sign:orama-release), and publish writes to the release host and GitHub; a fleet run has neither. cut --dry-run and the TUF metadata are unit-tested in core/pkg/releasepub and core/cmd/orama/internal/cmd/releasecmd."
+    trigger: "Epic 3306 I1: the first signed nightly release published to releases.orama.network, after which a fleet test fetches and verifies it (autoupdate-agent nightly-channel test)"
+  - id: cli:orama maint release publish
+    reason: "Signing a release asks the owner's RootWallet for a human approval of every signature (the headless agent refuses wallet:sign:orama-release), and publish writes to the release host and GitHub; a fleet run has neither. cut --dry-run and the TUF metadata are unit-tested in core/pkg/releasepub and core/cmd/orama/internal/cmd/releasecmd."
+    trigger: "Epic 3306 I1: the first signed nightly release published to releases.orama.network, after which a fleet test fetches and verifies it (autoupdate-agent nightly-channel test)"
+  - id: cli:orama maint release refresh-timestamp
+    reason: "Signing a release asks the owner's RootWallet for a human approval of every signature (the headless agent refuses wallet:sign:orama-release), and publish writes to the release host and GitHub; a fleet run has neither. cut --dry-run and the TUF metadata are unit-tested in core/pkg/releasepub and core/cmd/orama/internal/cmd/releasecmd."
+    trigger: "Epic 3306 I1: the first signed nightly release published to releases.orama.network, after which a fleet test fetches and verifies it (autoupdate-agent nightly-channel test)"
+  - id: cli:orama maint release renew-root
+    reason: "Signing a release asks the owner's RootWallet for a human approval of every signature (the headless agent refuses wallet:sign:orama-release), and publish writes to the release host and GitHub; a fleet run has neither. cut --dry-run and the TUF metadata are unit-tested in core/pkg/releasepub and core/cmd/orama/internal/cmd/releasecmd."
+    trigger: "Epic 3306 I1: the first signed nightly release published to releases.orama.network, after which a fleet test fetches and verifies it (autoupdate-agent nightly-channel test)"
   - id: unit:orama-namespace-sni-router@.service
     reason: The SNI router is off on every node by default. Turning it on needs a node.yaml edit (sni_router.enabled) followed by an upgrade, and the fleet harness cannot prepare a node's config before install.
     trigger: orama node install gains a flag for the SNI router, or the harness can write node.yaml before install (Bugboard 2818 E2E-19)

@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -95,7 +96,10 @@ type chownCall struct {
 	uid, gid int
 }
 
-type stageCall struct{ src, sum string }
+type stageCall struct {
+	src, sum   string
+	companions []StagedFile
+}
 
 type globalFixture struct {
 	node   *fakeGlobalNode
@@ -105,7 +109,14 @@ type globalFixture struct {
 	stages []stageCall
 	// tarball is the staged cosmovisor release, whose SHA-256 the host pins.
 	tarball []byte
+	// manifest is the release manifest listing the staged files.
+	manifest string
+	// verifierSum is the digest of the staged shielded verifier.
+	verifierSum string
 }
+
+// stagedVerifier is the verifier binary of the fixture's release.
+const stagedVerifier = "binary orama-orchard-verifier"
 
 // cosmovisorTarball is a release tarball holding a LICENSE and the cosmovisor file.
 func cosmovisorTarball(t *testing.T, binary string) []byte {
@@ -139,8 +150,14 @@ func newGlobalFixture(t *testing.T) *globalFixture {
 			t.Fatal(err)
 		}
 	}
-	for _, name := range []string{"oramad", "orama", "orama-global", "ipfs"} {
-		if err := os.WriteFile(filepath.Join(f.staged, name), []byte("binary "+name), 0o700); err != nil {
+	vsum := sha256.Sum256([]byte(stagedVerifier))
+	f.verifierSum = hex.EncodeToString(vsum[:])
+	for name, body := range map[string]string{
+		// oramad pins the digest of its verifier, as a release build links it in.
+		"oramad": "binary oramad pinning " + f.verifierSum, "orama": "binary orama", "orama-global": "binary orama-global", "ipfs": "binary ipfs",
+		"orama-orchard-verifier": stagedVerifier, "orama-orchard-verifier.sha256": f.verifierSum + "\n",
+	} {
+		if err := os.WriteFile(filepath.Join(f.staged, name), []byte(body), 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -148,6 +165,8 @@ func newGlobalFixture(t *testing.T) *globalFixture {
 	if err := os.WriteFile(filepath.Join(f.staged, constants.CosmovisorTarball("amd64")), f.tarball, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	f.manifest = filepath.Join(tmp, "manifest.json")
+	f.writeManifest(t)
 	pin := sha256.Sum256(f.tarball)
 	chainHome := filepath.Join(tmp, "varlib", "orama-global", "chain")
 	// The chain home exists with a genesis, as after --init-chain or a restore.
@@ -171,8 +190,8 @@ func newGlobalFixture(t *testing.T) *globalFixture {
 		LookupGroup:    func(string) (int, error) { return 995, nil },
 		Arch:           "amd64",
 		CosmovisorPins: map[string]string{"amd64": hex.EncodeToString(pin[:])},
-		StageGenesis: func(src, sum string) (string, error) {
-			f.stages = append(f.stages, stageCall{src, sum})
+		StageGenesis: func(src, sum string, companions []StagedFile) (string, error) {
+			f.stages = append(f.stages, stageCall{src, sum, companions})
 			return filepath.Join(chainHome, "cosmovisor", "genesis", "bin", "oramad"), nil
 		},
 		Chown: func(_ rootfs.Root, path string, uid, gid int) error {
@@ -185,7 +204,7 @@ func newGlobalFixture(t *testing.T) *globalFixture {
 }
 
 func (f *globalFixture) options(services ...GlobalService) GlobalInstallOptions {
-	return GlobalInstallOptions{Services: services, StagedDir: f.staged, SSHPort: 22, PublicStorageBytes: 500_000_000_000}
+	return GlobalInstallOptions{Services: services, StagedDir: f.staged, Manifest: f.manifest, SSHPort: 22, PublicStorageBytes: 500_000_000_000}
 }
 
 // freshHome removes the chain home the fixture starts with, for --init-chain.
@@ -383,4 +402,39 @@ func TestInstallGlobal_enableFirewallRefusesAnSSHPortSSHDoesNotUse(t *testing.T)
 	if len(f.node.changes()) != 0 {
 		t.Fatal("accounts changed before the refusal")
 	}
+}
+
+// writeManifest lists every regular file in the staged directory with its
+// digest, as the release's manifest.json does.
+func (f *globalFixture) writeManifest(t *testing.T) {
+	t.Helper()
+	entries, err := os.ReadDir(f.staged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sums := map[string]string{}
+	for _, e := range entries {
+		data, err := os.ReadFile(filepath.Join(f.staged, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(data)
+		sums[e.Name()] = hex.EncodeToString(sum[:])
+	}
+	doc, err := json.Marshal(map[string]any{"version": "0.0.0", "checksums": sums})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(f.manifest, doc, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// restage replaces a staged file and re-lists it, as a different release would have.
+func (f *globalFixture) restage(t *testing.T, name, body string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(f.staged, name), []byte(body), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	f.writeManifest(t)
 }

@@ -19,6 +19,11 @@ type Flags struct {
 	// the archive against its current trust anchor then trusts exactly these
 	// addresses (signer rotation, docs/SECURITY.md).
 	Signers []string
+	// SkipGlobalLayer leaves out the chain node (oramad, its verifier,
+	// orama-global) and the cosmovisor release. The archive then serves a
+	// cluster-only install, and `orama global install` refuses it. The default
+	// builds the layer and fails when the toolchain is missing.
+	SkipGlobalLayer bool
 	// ReleaseRoot is the path of a TUF root.json to put in the signed
 	// manifest: a node that installs the build adopts it as its release root,
 	// the way it takes a signer rotation.

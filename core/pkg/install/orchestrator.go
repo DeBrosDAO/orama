@@ -226,7 +226,7 @@ func (ps *ProductionSetup) Phase2bInstallBinaries() error {
 
 	if !HasPreBuiltArchive() {
 		return fmt.Errorf("no build archive at %s (%s is missing): put one there with `orama node setup` on a "+
-			"new machine or `orama push` on an installed node", OramaBase, OramaManifest)
+			"new machine or `orama maint push` on an installed node", OramaBase, OramaManifest)
 	}
 	manifest, err := LoadPreBuiltManifest()
 	if err != nil {

@@ -64,13 +64,12 @@ func ValidMode(mode string) error {
 }
 
 // ValidChannel reports whether channel can name a release channel. A channel is
-// a delegated role of the release repository, so it is judged by the rule that
-// role names are verified with (releaseverify.ValidRoleName): a setting the
-// verifier would refuse is refused where it is written, not by every node
-// at every tick. Root, targets, snapshot and timestamp are top-level roles, not
-// channels.
+// the path prefix of its archives in the release repository, so it is judged
+// by the rule that release targets are read with (releaseverify.ValidChannel):
+// a setting the verifier would refuse is refused where it is written, not by
+// every node at every tick.
 func ValidChannel(channel string) error {
-	if err := releaseverify.ValidRoleName(channel); err != nil {
+	if err := releaseverify.ValidChannel(channel); err != nil {
 		return fmt.Errorf("update channel: %w", err)
 	}
 	return nil

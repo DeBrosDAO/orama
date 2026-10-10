@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
@@ -69,14 +68,13 @@ func copyArchive(src, dst string) (*os.File, error) {
 
 // checkReleaseFile is the node's TUF check of an archive file. It returns the
 // snapshot version the archive was accepted at. A target in a channel
-// ("stable/orama-...") is the delegated role of that name's, which is read
-// from the metadata directory with the top-level roles.
+// ("nightly/orama-...") is a target of the top-level targets role, whose
+// metadata is read from the metadata directory.
 func checkReleaseFile(archive *os.File, metadataDir, target string) (int64, error) {
 	verified, err := releaseverify.CheckFile(releaseverify.FileCheck{
 		RootPath:    releaseverify.RootPath,
 		SeenPath:    releaseverify.SeenPath,
 		MetadataDir: metadataDir,
-		Roles:       rolesOf(target),
 		Target:      target,
 		File:        archive,
 		Now:         time.Now(),
@@ -85,15 +83,6 @@ func checkReleaseFile(archive *os.File, metadataDir, target string) (int64, erro
 		return 0, err
 	}
 	return verified.SnapshotVersion, nil
-}
-
-// rolesOf is the delegated role a target is in: the first path segment of a
-// target with a directory, none for a top-level one.
-func rolesOf(target string) []string {
-	if role, _, ok := strings.Cut(target, "/"); ok {
-		return []string{role}
-	}
-	return nil
 }
 
 // endorseStaged records that the archive whose manifest is manifestSHA256 was
