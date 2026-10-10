@@ -148,6 +148,14 @@ func checkCurrentHasVerifier(layout cosmovisor.Layout) error {
 	if target == "genesis" {
 		return nil
 	}
+	if filepath.IsAbs(target) {
+		// cosmovisor may write the link either way.
+		rel, err := filepath.Rel(layout.Root(), target)
+		if err != nil {
+			return fmt.Errorf("%s points at %q: %w", layout.Current(), target, err)
+		}
+		target = rel
+	}
 	if !filepath.IsLocal(target) {
 		return fmt.Errorf("%s points at %q, outside the cosmovisor directory", layout.Current(), target)
 	}

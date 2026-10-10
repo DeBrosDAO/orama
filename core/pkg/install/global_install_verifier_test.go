@@ -256,4 +256,24 @@ func TestCheckCurrentHasVerifier_genesisAbsentAndEscapingLinks(t *testing.T) {
 	if err := checkCurrentHasVerifier(layout); err == nil {
 		t.Fatal("a current that points outside the cosmovisor directory was accepted")
 	}
+	// An absolute link inside the directory is read like the relative one.
+	if err := os.Remove(layout.Current()); err != nil {
+		t.Fatal(err)
+	}
+	upgrade := filepath.Join(layout.Root(), "upgrades", "v3")
+	if err := os.MkdirAll(filepath.Join(upgrade, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(upgrade, layout.Current()); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkCurrentHasVerifier(layout); err == nil {
+		t.Fatal("an absolute link to an upgrade with no verifier was accepted")
+	}
+	if err := os.WriteFile(filepath.Join(upgrade, "bin", "orama-orchard-verifier"), []byte("v"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkCurrentHasVerifier(layout); err != nil {
+		t.Fatalf("an absolute link to an upgrade with its verifier: %v", err)
+	}
 }

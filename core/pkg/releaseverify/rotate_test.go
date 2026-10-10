@@ -418,3 +418,35 @@ func TestUpdateRoot_aCallerThatStartsFromAPinnedRootClearsTheRecordOncePerRotati
 		t.Fatal("RootPath was not brought to the newest root")
 	}
 }
+
+// Once a machine has adopted a root, a repository that stops serving it (or
+// serves an older chain) does not take the machine back to retired keys.
+func TestUpdateRoot_aRepositoryOfferingAnOlderRootThanTheAdoptedOneIsRefused(t *testing.T) {
+	c := newRootChain(t, 2, true)
+	adopted := filepath.Join(t.TempDir(), "adopted-root.json")
+	if err := os.WriteFile(adopted, c.versions[1], 0o644); err != nil {
+		t.Fatal(err)
+	}
+	u := c.adopted(t, 1)
+	u.Adopted = adopted
+	// The repository no longer serves 2.root.json.
+	repo := Repository{BaseURL: serveRepo(t, nil, nil)}
+	if _, err := repo.UpdateRoot(context.Background(), u); !errors.Is(err, ErrRootRotation) || !strings.Contains(err.Error(), "retired keys") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestUpdateRoot_anAdoptedRootOfAnotherChainIsNotTrusted(t *testing.T) {
+	c := newRootChain(t, 2, true)
+	foreign := newRootChain(t, 2, true)
+	adopted := filepath.Join(t.TempDir(), "adopted-root.json")
+	if err := os.WriteFile(adopted, foreign.versions[1], 0o644); err != nil {
+		t.Fatal(err)
+	}
+	u := c.adopted(t, 1)
+	u.Adopted = adopted
+	repo := Repository{BaseURL: serveRepo(t, c.served(2, 2), nil)}
+	if _, err := repo.UpdateRoot(context.Background(), u); !errors.Is(err, ErrRootRotation) || !strings.Contains(err.Error(), "another chain") {
+		t.Fatalf("err = %v", err)
+	}
+}

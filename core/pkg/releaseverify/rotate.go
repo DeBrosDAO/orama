@@ -1,6 +1,7 @@
 package releaseverify
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -72,6 +73,7 @@ func (r Repository) UpdateRoot(ctx context.Context, u RootUpdate) (int, error) {
 	}
 	first, keysChanged := trusted.Root, false
 	newest, applied := adopted, 0
+	chain := map[int64][]byte{first.Signed.Version: adopted}
 	for {
 		next, err := r.getMetadata(ctx, fmt.Sprintf(rootVersionFile, trusted.Root.Signed.Version+1))
 		if errors.Is(err, ErrNotFound) {
@@ -90,6 +92,10 @@ func (r Repository) UpdateRoot(ctx context.Context, u RootUpdate) (int, error) {
 		}
 		keysChanged = keysChanged || rolesChanged(before, trusted.Root, metadata.TIMESTAMP, metadata.SNAPSHOT)
 		newest, applied = next, applied+1
+		chain[trusted.Root.Signed.Version] = next
+	}
+	if err := checkAdoptedFloor(u.Adopted, trusted.Root.Signed.Version, chain); err != nil {
+		return applied, err
 	}
 	return applied, r.settle(u, first, trusted.Root, newest, keysChanged)
 }
@@ -191,4 +197,34 @@ func (r Repository) Sync(ctx context.Context, dir string, u RootUpdate) error {
 		return err
 	}
 	return r.FetchMetadata(ctx, dir)
+}
+
+// checkAdoptedFloor holds the walk to what this machine has already adopted
+// (u.Adopted): a repository that now offers an older newest root than the one
+// adopted would have a client accept metadata signed by keys since retired, and
+// an adopted root that is not the chain's root at its version belongs to another
+// chain (another pin). Neither is a rotation to follow.
+func checkAdoptedFloor(path string, newest int64, chain map[int64][]byte) error {
+	if path == "" {
+		return nil
+	}
+	data, err := ReadRoot(path)
+	if errors.Is(err, ErrNoRoot) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	known, err := metadata.Root().FromBytes(data)
+	if err != nil {
+		return fmt.Errorf("parse the adopted release root %s: %w", path, err)
+	}
+	version := known.Signed.Version
+	if version > newest {
+		return fmt.Errorf("%w: the repository's newest root is version %d, older than the version %d this machine adopted (%s): refusing the retired keys", ErrRootRotation, newest, version, path)
+	}
+	if walked, ok := chain[version]; ok && !bytes.Equal(walked, data) {
+		return fmt.Errorf("%w: the root adopted at %s is not the repository's version %d: it belongs to another chain, so it is not trusted", ErrRootRotation, path, version)
+	}
+	return nil
 }
