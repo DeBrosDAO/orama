@@ -54,7 +54,7 @@ The chain is implemented and tested in the repository. It is not what `orama mai
 | Relay registry, reporting and payout | Implemented. The end block settles each reported epoch and splits pay 90/5/5. No relay is registered or running yet |
 | Token factory | Implemented, including a CosmWasm contract as a token's transfer hook |
 | Compressed NFTs and market | Implemented |
-| Shielded pool | Implemented. A node accepts shielded bundles only when both verifiers are present |
+| Shielded pool | Implemented. A node accepts shielded bundles only when both verifiers are present. Shielding is optional: a public send between accounts works, and `orama chain send` is private unless `--public`. The RootWallet does not build shielded bundles yet, so a private send stops with that explanation |
 | CosmWasm contracts | Implemented in builds with cgo. Five standard contracts in genesis |
 | Block explorer | The page reads the chain through the gateway's `/v1/chain/` routes and the chain indexer, with no demo data |
 | Public chain | Not built. Devnet, stagenet and localnet only |

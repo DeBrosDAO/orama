@@ -71,6 +71,9 @@ var reservedNamespaces = map[string]bool{
 	"api": true, "www": true, "mail": true, "cdn": true, "docs": true,
 	"status": true, "push": true, "turn": true,
 	"ns1": true, "ns2": true, "ns3": true, "ns4": true,
+	// The owner tag of the node-name records in dns_records (nodenames.RecordNamespace): a
+	// namespace of this name would have its deployments' records mistaken for the sync's own.
+	"node-names": true,
 }
 
 // Provisioner starts a namespace's cluster. Satisfied by the gateway's cluster

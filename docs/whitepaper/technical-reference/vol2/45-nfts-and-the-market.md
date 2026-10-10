@@ -45,7 +45,7 @@ Neither module has an authority address, a pause or a parameter. Everything is c
 
 **Listing, bid.** A seller's offer of one leaf at a fixed price, and a buyer's escrowed offer on a listing.
 
-**Earnings.** An account balance in `x/fees` that pays fees and a fixed set of spends, and cannot be sent as a public balance.
+**Earnings.** An account balance in `x/fees` that pays fees and a fixed set of spends, and cannot be sent to another account directly; its owner withdraws it to the owner's own bank balance (`MsgWithdrawEarnings`) first.
 
 ## How it works
 

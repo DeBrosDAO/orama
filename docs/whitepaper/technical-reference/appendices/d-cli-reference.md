@@ -33,15 +33,17 @@ Every command the `orama` binary defines, with its flags. [The CLI](../vol1/35-t
   - [`orama auth status`](#orama-auth-status) - Show what is stored on this machine, without asking the gateway
   - [`orama auth switch`](#orama-auth-switch) - Switch between stored credentials
   - [`orama auth whoami`](#orama-auth-whoami) - Ask the gateway who this credential is and what it may do
-- [`orama chain`](#orama-chain) - Read the Orama chain: status, balances, earnings, nodes, deals, validators; fund test accounts
+- [`orama chain`](#orama-chain) - Read the Orama chain, send ORAMA, withdraw earnings; fund test accounts
   - [`orama chain balance`](#orama-chain-balance) - Show an account's bank balances
   - [`orama chain deal`](#orama-chain-deal) - Show a storage deal (x/storage)
   - [`orama chain earnings`](#orama-chain-earnings) - Show an account's earnings balance (x/fees)
   - [`orama chain faucet`](#orama-chain-faucet) - Fund an account on a test network (stagenet, devnet)
   - [`orama chain node`](#orama-chain-node) - Show a registered node (x/nodes)
   - [`orama chain query`](#orama-chain-query) - Run any Orama module query through the gateway or --rpc
+  - [`orama chain send`](#orama-chain-send) - Send ORAMA, privately by default; --public sends openly
   - [`orama chain status`](#orama-chain-status) - Show the chain's height, network and sync state
   - [`orama chain validator`](#orama-chain-validator) - List the validator set, or show one validator
+  - [`orama chain withdraw-earnings`](#orama-chain-withdraw-earnings) - Move earnings to your own balance, where they can be sent
 - [`orama cluster`](#orama-cluster) - Register this cluster on the chain, and remove a tenant namespace
   - [`orama cluster namespace`](#orama-cluster-namespace) - Operator actions on a namespace
     - [`orama cluster namespace remove`](#orama-cluster-namespace-remove) - Remove a namespace whose owner can no longer delete it
@@ -635,7 +637,7 @@ orama auth whoami
 
 ## orama chain
 
-Read the Orama chain: status, balances, earnings, nodes, deals, validators; fund test accounts
+Read the Orama chain, send ORAMA, withdraw earnings; fund test accounts
 
 ```text
 orama chain [flags]
@@ -643,7 +645,8 @@ orama chain [flags]
 
 ```text
 Read the Orama chain. Every command here only reads, except 'faucet', which
-funds an account on a test network.
+funds an account on a test network, 'send', which pays another account, and
+'withdraw-earnings', which moves your earnings to your own balance.
 
 Three read paths exist, and each command uses one:
 
@@ -658,9 +661,11 @@ Three read paths exist, and each command uses one:
              through abci_query; with --rpc set, earnings, node, deal and query read
              it directly instead of through the gateway.
 
-Transactions are built and signed by 'orama global', 'orama storage' and
-'orama cluster'; --onion on those submits through Tor. 'faucet' is the one
-transaction here, and it signs on a node over SSH (see 'orama chain faucet').
+Node, deal and cluster transactions are built and signed by 'orama global',
+'orama storage' and 'orama cluster'; --onion on those submits through Tor.
+'send' and 'withdraw-earnings' are signed by your RootWallet and sent through the
+gateway, or --node; 'send' is private unless --public is given (see 'orama chain
+send'). 'faucet' signs on a node over SSH (see 'orama chain faucet').
 ```
 
 | Flag | Default | Description |
@@ -669,7 +674,7 @@ transaction here, and it signs on a node over SSH (see 'orama chain faucet').
 | `--node` | — | Chain REST API, for example http://127.0.0.1:31003 |
 | `--rpc` | — | CometBFT RPC, for example http://127.0.0.1:31001 |
 
-Subcommands: `balance`, `deal`, `earnings`, `faucet`, `node`, `query`, `status`, `validator`
+Subcommands: `balance`, `deal`, `earnings`, `faucet`, `node`, `query`, `send`, `status`, `validator`, `withdraw-earnings`
 
 ## orama chain balance
 
@@ -793,6 +798,53 @@ field names. For example:
 | `--list` | `false` | List every query the CLI knows and exit |
 
 
+## orama chain send
+
+Send ORAMA, privately by default; --public sends openly
+
+```text
+orama chain send <to> <amount> [--public] [flags]
+```
+
+```text
+Send ORAMA to another account. <amount> is in ORAMA, with up to nine decimals
+(12, 0.5, 0.000000001).
+
+A send is PRIVATE unless you say otherwise: value moves inside the shielded pool,
+and the chain shows no sender, recipient or amount. A private send needs the
+RootWallet to build the shielded bundle, and this RootWallet cannot yet (its agent
+refuses shielded messages), so today a send without --public stops with that
+explanation. It never turns into a public payment on its own.
+
+--public is the only way to pay openly, and it is a choice you make each time:
+the sender, the recipient and the amount are then visible on the chain to everyone,
+permanently. The command prints the payment and that warning and asks you to type
+"yes"; --yes skips the question for scripts. The RootWallet then shows the
+transaction and asks you to approve it.
+
+<to> is an orama1... account for a public send. Withdraw earnings to your balance
+first ('orama chain withdraw-earnings'); earnings cannot be sent directly.
+
+Transactions go through the gateway of the selected network, or --node (a chain
+REST API, for example one reached over an SSH tunnel). Either must be https, or on
+this machine. The wallet signs only for the chain the selected network names (from
+its registry manifest): an endpoint that answers another chain id is refused, and a
+network that names none needs --chain-id. The fee is worked out from the chain and
+shown before you confirm; one over --max-fee (1 ORAMA unless you raise it) is
+refused before it is signed.
+
+  orama chain send orama1fvfzzvqv2ara2crn3z352zjhnfl0tw4rk82j53 12.5 --public
+  orama chain send orama1fvfzzvqv2ara2crn3z352zjhnfl0tw4rk82j53 0.5 --public --yes
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--chain-id` | — | The chain id you expect, for a network that does not name one (a network from the registry already does); refused if the endpoint runs another |
+| `--max-fee` | — | Most the transaction may pay in fee, in ORAMA (default 1): a higher fee is refused before it is signed |
+| `--public` | `false` | Send publicly: the sender, recipient and amount are visible on the chain |
+| `--yes` | `false` | Do not ask before a public send |
+
+
 ## orama chain status
 
 Show the chain's height, network and sync state
@@ -820,6 +872,42 @@ Without an argument, list the CometBFT validator set from the gateway's
 /v1/chain/validators (or --rpc's /validators). With an oramavaloper address,
 show that validator's staking record from --node's REST API.
 ```
+
+
+## orama chain withdraw-earnings
+
+Move earnings to your own balance, where they can be sent
+
+```text
+orama chain withdraw-earnings <amount> [flags]
+```
+
+```text
+Move <amount> ORAMA of your earnings to your own bank balance
+(MsgWithdrawEarnings). <amount> is in ORAMA, with up to nine decimals.
+
+Earnings are what your nodes are paid; they sit in a separate account that cannot
+be sent from. Withdrawing makes them spendable: the amount is the one thing you
+choose, the destination is always your own account, and the chain refuses an
+amount above your earnings. See what you have with 'orama chain earnings <address>'.
+
+Then use them as you choose: send them publicly ('orama chain send <to> <amount>
+--public'), or move them into the shielded pool to keep them private (this needs a
+RootWallet that builds shielded bundles). Withdrawing is itself visible on the
+chain: it shows that this account withdrew this amount.
+
+The RootWallet shows the transaction and asks you to approve it. Transactions go
+through the gateway of the selected network, or --node, over https or on this
+machine, and the wallet signs only for the chain the selected network names (see
+'orama chain send' for --chain-id and --max-fee).
+
+  orama chain withdraw-earnings 25
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--chain-id` | — | The chain id you expect, for a network that does not name one (a network from the registry already does); refused if the endpoint runs another |
+| `--max-fee` | — | Most the transaction may pay in fee, in ORAMA (default 1): a higher fee is refused before it is signed |
 
 
 ## orama cluster

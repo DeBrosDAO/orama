@@ -22,12 +22,22 @@ export type {
   WalletPageOptions,
 } from "./client";
 
+export { PUBLIC_TRANSFER_WARNING, PrivateTransferUnavailableError, transfer, withdrawEarnings } from "./transfer";
+export type {
+  PrivateTransferResult,
+  PublicTransferResult,
+  ShieldedTransferBuilder,
+  TransferOptions,
+  TransferRequest,
+  TransferResult,
+} from "./transfer";
+
 export { LocalSigner, verifyDirectSignature } from "./signer";
 export type { OramaSigner } from "./signer";
 
 export { addressFromPublicKey, addressToBytes, isOramaAddress } from "./address";
 
-export { assembleTx, buildSignDoc, signTx, verifyTx, SECP256K1_PUBKEY_TYPE_URL } from "./tx";
+export { assembleTx, buildSignDoc, signTx, txHashOf, verifyTx, SECP256K1_PUBKEY_TYPE_URL } from "./tx";
 export type { SignDocument, SignedTx, UnsignedTx } from "./tx";
 
 export { MSG, MESSAGE_REGISTRY } from "./messages";
@@ -45,5 +55,6 @@ export {
   formatBps,
   formatCoins,
   fromHex,
+  printable,
   toHex,
 } from "./format";

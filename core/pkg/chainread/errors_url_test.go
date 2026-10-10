@@ -85,3 +85,18 @@ func TestGatewayPostTx_unbuildableURLErrorDropsTheQueryString(t *testing.T) {
 		t.Errorf("the error quotes the query: %v", err)
 	}
 }
+
+func TestStatusError_bodyIsStrippedOfTerminalControls(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "oops \x1b[31mred\x1b[0m ‮reversed", http.StatusBadGateway)
+	}))
+	defer srv.Close()
+	_, err := (&Reader{REST: srv.URL}).RESTGet(context.Background(), "/x")
+	var status *StatusError
+	if !errors.As(err, &status) {
+		t.Fatalf("err = %v", err)
+	}
+	if strings.ContainsAny(err.Error(), "\x1b‮") {
+		t.Fatalf("%q", err.Error())
+	}
+}

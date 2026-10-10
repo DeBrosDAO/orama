@@ -269,6 +269,7 @@ volumes:
             verified: "0.3.0"
             owns:
               - core/pkg/coredns/
+              - core/pkg/nodenames/
           - file: vol1/25-tls-and-certificates.md
             title: TLS and certificates
             template: subsystem

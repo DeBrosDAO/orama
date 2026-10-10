@@ -114,6 +114,24 @@ Writes go through `Query` too (the client detects them). Also `DropTable` and `G
 
 See the examples in the package documentation. `ListTopics` returns the topics of the client's namespace that this node's pubsub service holds a subscription on, sorted; another namespace's topics are never listed.
 
+## Sending ORAMA
+
+The chain is not in `pkg/client`. `github.com/DeBrosOfficial/network/pkg/onchain` sends one account's transactions, signed by the RootWallet agent, and `orama chain send` and `orama chain withdraw-earnings` are built on it.
+
+```go
+chain := onchain.Gateway{Reader: &chainread.Reader{Gateway: gatewayURL}} // or onchain.REST{Base: nodeRESTURL}
+c, err := onchain.New(chain, rwagent.New(os.Getenv("RW_AGENT_SOCK")), "orama-stagenet-5")
+
+// Move 25 ORAMA of earnings to your own balance (there is no destination argument).
+_, err = c.WithdrawEarnings(ctx, "25000000000")
+
+// Pay in the open: you must say so. The zero Privacy is Private.
+receipt, err := c.Send(ctx, recipient, "5000000000", onchain.Public)
+fmt.Println(onchain.PublicWarning)
+```
+
+Amounts are norama, as decimal text. `Send` takes a `Privacy`, and its zero value is `Private`: a private send needs the RootWallet to build the shielded bundle, which it cannot yet, so it returns `ErrPrivateUnavailable` before the wallet or the chain is touched. It never turns into a public payment; only `onchain.Public` does, and `PublicWarning` is the text to show next to it. The client derives the account number, sequence, gas and fee itself.
+
 ## Not in the Go client
 
 - **Cache.** The distributed cache has no accessor yet. Use the TypeScript SDK or the REST API.

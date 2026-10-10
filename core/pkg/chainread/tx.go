@@ -13,6 +13,10 @@ import (
 )
 
 const (
+	// maxRefusalLog and maxRefusalField bound the chain's words in a refusal printed to a terminal.
+	maxRefusalLog   = 300
+	maxRefusalField = 64
+
 	simulateRoute  = "simulate"
 	broadcastRoute = "broadcast"
 )
@@ -54,7 +58,8 @@ type TxRefusedError struct {
 }
 
 func (e *TxRefusedError) Error() string {
-	return fmt.Sprintf("the chain refused the transaction (code %d %s): %s", e.Code, e.Codespace, e.Log)
+	return fmt.Sprintf("the chain refused the transaction (code %d %s): %s", e.Code,
+		httputil.PrintableMax(e.Codespace, maxRefusalField), httputil.PrintableMax(e.Log, maxRefusalLog))
 }
 
 // Simulate runs the signed transaction txRaw (the protobuf TxRaw bytes) through the gateway's
@@ -121,7 +126,7 @@ func (r *Reader) gatewayPostTx(ctx context.Context, route string, txRaw []byte) 
 		return nil, &refused
 	}
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("%s answered HTTP %d: %s", req.URL.Host, resp.StatusCode, truncate(string(body)))
+		return nil, &StatusError{Host: req.URL.Host, Code: resp.StatusCode, Body: truncate(httputil.Printable(string(body)))}
 	}
 	return body, nil
 }

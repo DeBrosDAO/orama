@@ -1,11 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { ChainTxRefusedError, LocalSigner, MSG, OramaChainClient, verifyTx } from "../../../src/chain";
+import { ChainTxRefusedError, LocalSigner, MSG, OramaChainClient, txHashOf, verifyTx } from "../../../src/chain";
 import { NetworkError, SDKError } from "../../../src/errors";
 
 const ADDRESS = "orama19rl4cm2hmr8afy4kldpxz3fka4jguq0a5tup0s";
 const HASH = "ab".repeat(32);
 
 interface Call { url: string; init?: RequestInit }
+
+/** The hash of the transaction a broadcast request carries, as a node computes it. */
+function postedHash(init?: RequestInit): string {
+  const posted = JSON.parse(String(init?.body));
+  return txHashOf(Uint8Array.from(Buffer.from(posted.tx_bytes, "base64")));
+}
 
 function fakeFetch(answer: (url: string, init?: RequestInit) => { status?: number; body?: unknown; text?: string }) {
   const calls: Call[] = [];
@@ -111,15 +117,15 @@ describe("REST reads and broadcast", () => {
   });
 
   it("signs with the account it read and broadcasts the verified bytes", async () => {
-    const { fn, calls } = fakeFetch((url) =>
+    const { fn, calls } = fakeFetch((url, init) =>
       url.includes("/accounts/")
         ? { body: { account: { account_number: "7", sequence: "3" } } }
-        : { body: { tx_response: { code: 0, txhash: "ABC", raw_log: "" } } },
+        : { body: { tx_response: { code: 0, txhash: postedHash(init), raw_log: "" } } },
     );
     const chain = new OramaChainClient({ restURL: rest, fetch: fn });
     const msg = MSG.bankSend.create({ fromAddress: ADDRESS, toAddress: ADDRESS, amount: [{ denom: "norama", amount: "1" }] });
     const { signed, result } = await chain.signAndBroadcast([msg], signer, { chainId: "orama-test-1", gasLimit: 90000, feeNorama: 5000 });
-    expect(result.txHash).toBe("ABC");
+    expect(result.txHash).toBe(txHashOf(signed.txBytes));
     verifyTx(signed.txBytes, "orama-test-1", 7);
     const posted = JSON.parse(String(calls[1].init?.body));
     expect(posted.mode).toBe("BROADCAST_MODE_SYNC");
@@ -319,10 +325,45 @@ describe("wallet reads and transactions through the gateway", () => {
   });
 
   it("broadcasts through POST /v1/chain/broadcast and returns the hash", async () => {
-    const { fn, calls } = fakeFetch(() => ({ body: { code: 0, codespace: "", log: "", tx_hash: HASH.toUpperCase() } }));
+    const bytes = new Uint8Array([1, 2, 3]);
+    const { fn, calls } = fakeFetch(() => ({ body: { code: 0, codespace: "", log: "", tx_hash: txHashOf(bytes) } }));
     const chain = new OramaChainClient({ gatewayURL: gw, fetch: fn });
-    expect(await chain.broadcastTx(new Uint8Array([1, 2, 3]))).toEqual({ txHash: HASH.toUpperCase(), code: 0, log: "" });
+    expect(await chain.broadcastTx(bytes)).toEqual({ txHash: txHashOf(bytes), code: 0, log: "" });
     expect(calls[0]!.url).toBe("https://gw.example/v1/chain/broadcast");
+  });
+
+  it("refuses an answer whose hash is not the hash of the bytes that were sent", async () => {
+    const bytes = new Uint8Array([1, 2, 3]);
+    for (const answered of [HASH.toUpperCase(), "", "\u001b[2J" + txHashOf(bytes) + "x", undefined]) {
+      const gateway = fakeFetch(() => ({ body: { code: 0, codespace: "", log: "", tx_hash: answered } }));
+      const err = await new OramaChainClient({ gatewayURL: gw, fetch: gateway.fn }).broadcastTx(bytes).catch((e) => e);
+      expect(err).toBeInstanceOf(SDKError);
+      expect(err.code).toBe("CHAIN_TX_HASH_MISMATCH");
+      expect(err.message).not.toContain("\u001b");
+      const node = fakeFetch(() => ({ body: { tx_response: { code: 0, txhash: answered, raw_log: "" } } }));
+      const nodeErr = await new OramaChainClient({ restURL: "http://node.example:31003", fetch: node.fn }).broadcast(bytes).catch((e) => e);
+      // A node that answers no hash at all is a bad response; any other hash is a mismatch.
+      expect(nodeErr.code).toBe(answered ? "CHAIN_TX_HASH_MISMATCH" : "CHAIN_BAD_RESPONSE");
+    }
+  });
+
+  it("accepts the right hash in lower case or with 0x, and reports the computed one", async () => {
+    const bytes = new Uint8Array([9, 9]);
+    for (const answered of [txHashOf(bytes).toLowerCase(), "0x" + txHashOf(bytes)]) {
+      const { fn } = fakeFetch(() => ({ body: { code: 0, codespace: "", log: "", tx_hash: answered } }));
+      expect((await new OramaChainClient({ gatewayURL: gw, fetch: fn }).broadcastTx(bytes)).txHash).toBe(txHashOf(bytes));
+    }
+  });
+
+  it("txHashOf is the SHA-256 of the bytes in upper-case hex", () => {
+    expect(txHashOf(new Uint8Array([]))).toBe("E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855");
+  });
+
+  it("strips terminal controls from the chain's reason", async () => {
+    const { fn } = fakeFetch(() => ({ status: 422, body: { code: 5, codespace: "sdk", log: "low fee \u001b[31m red \u202eevil" } }));
+    const err = await new OramaChainClient({ gatewayURL: gw, fetch: fn }).broadcastTx(new Uint8Array([1])).catch((e) => e);
+    for (const bad of ["\u001b", "\u202e"]) expect(err.message + err.log).not.toContain(bad);
+    expect(err.log).toContain("low fee");
   });
 
   it("raises a ChainTxRefusedError with the chain's code, codespace and log", async () => {

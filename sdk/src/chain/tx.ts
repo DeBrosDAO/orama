@@ -2,7 +2,8 @@ import { Any } from "./gen/google/protobuf/any";
 import { PubKey } from "./gen/cosmos/crypto/secp256k1/keys";
 import { SignMode } from "./gen/cosmos/tx/signing/v1beta1/signing";
 import { AuthInfo, SignDoc, TxBody, TxRaw } from "./gen/cosmos/tx/v1beta1/tx";
-import { BASE_DENOM } from "./format";
+import { sha256 } from "@noble/hashes/sha2.js";
+import { BASE_DENOM, toHex } from "./format";
 import type { AnyMsg } from "./msg";
 import { verifyDirectSignature, type OramaSigner } from "./signer";
 
@@ -136,4 +137,13 @@ export function verifyTx(txBytes: Uint8Array, chainId: string, accountNumber: bi
     throw new Error("the signature does not verify for this chain id and account number");
   }
   return publicKey;
+}
+
+/**
+ * The hash CometBFT and the Cosmos SDK give a transaction: SHA-256 of its TxRaw bytes, upper-case
+ * hex. A broadcast's answer must carry this hash; an answer that carries another is not about the
+ * transaction that was sent.
+ */
+export function txHashOf(txBytes: Uint8Array): string {
+  return toHex(sha256(txBytes)).toUpperCase();
 }

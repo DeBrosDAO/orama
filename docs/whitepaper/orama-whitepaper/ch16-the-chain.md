@@ -16,7 +16,7 @@ First, the chain starts with no money and no stake, and proof of stake needs bon
 
 Second, stake-weighted sets concentrate. The code caps one validator's share, rate-limits how fast power moves and ramps new stake in over 30 epochs. Each rule exists because a review found a way to take the set over without it.
 
-Third, payments between users are not public. The bank module is kept, norama moves publicly between users, and every protocol payout lands in an earnings ledger. The only way to pay a person is the shielded pool.
+Third, a payment between users is a choice, not a default of the chain. The bank module is kept, so norama moves publicly between users, and every protocol payout lands in an earnings ledger that its owner moves to a bank balance when they choose. The private way to pay a person is the shielded pool, and the command-line tool and the SDK make private the default: a send is private unless it says `--public` or `public: true`, and it never falls back to a public payment.
 
 Fourth, a validator must not censor for free. Vote extensions carry each validator's list of long-waiting transactions, and a proposal that omits a valid listed transaction is rejected.
 

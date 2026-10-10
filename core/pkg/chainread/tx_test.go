@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -87,5 +88,18 @@ func TestBroadcast_otherFailures(t *testing.T) {
 	t.Cleanup(bad.Close)
 	if _, err := (&Reader{Gateway: bad.URL}).Simulate(context.Background(), []byte("abc")); err == nil {
 		t.Fatal("a 422 that is not a refusal was accepted")
+	}
+}
+
+func TestTxRefusedError_stripsWhatActsOnATerminal(t *testing.T) {
+	e := &TxRefusedError{Code: 5, Codespace: "sdk\x1b[2J", Log: "fee \x1b]0;pwned\a too low ‮evil"}
+	msg := e.Error()
+	for _, bad := range []string{"\x1b", "\a", "‮"} {
+		if strings.Contains(msg, bad) {
+			t.Errorf("%q carries %q", msg, bad)
+		}
+	}
+	if !strings.Contains(msg, "too low") {
+		t.Errorf("the reason was lost: %q", msg)
 	}
 }

@@ -17,7 +17,7 @@ First, the chain starts with no money and no stake. A proof-of-stake chain needs
 
 Second, a stake-weighted validator set concentrates. The code caps one validator's power share and redistributes the excess, rate-limits how fast power can move, and ramps new stake in over 30 epochs. Each rule exists because the review that wrote it found a way to take over the set without them (the comments in `chain/x/power/keeper/` name the findings).
 
-Third, payments between users are not public. The bank module is kept, `norama` moves publicly between users, and every protocol payout lands in an earnings ledger. The only way to pay a person is the shielded pool.
+Third, a payment between users is a choice, not a default of the chain. The bank module is kept, so `norama` moves publicly between users, and every protocol payout lands in an earnings ledger that its owner moves to a bank balance with `MsgWithdrawEarnings` when they choose. The private way to pay a person is the shielded pool. `orama chain send` and the SDK's `chain.transfer` make private the default and take an explicit `--public` or `public: true` to pay in the open, so a payment cannot become public by omission; they never fall back to a public payment when the private one cannot be built.
 
 Fourth, a validator must not be able to censor for free. Vote extensions carry each validator's list of long-waiting mempool transactions, and a proposal that omits a valid listed transaction is rejected by every other validator (`chain/x/inclusion/`).
 
@@ -471,7 +471,7 @@ For the archive, `oramad query archive last-archived-height` is the contiguous a
 
 **What an attacker can and cannot do.**
 
-- *A user.* Cannot pay another user in norama, cannot change any parameter, cannot mint, cannot make a transaction free (the base fee is consensus-enforced), cannot spend earnings except on fees, bonds, deposits and shielding, and cannot fill a block with listed transactions beyond the caps (32 KiB per sender per extension, 1,024 ante runs per block).
+- *A user.* Can pay another user in norama in the open, or privately through the pool, but cannot pay a module account, cannot change any parameter, cannot mint, cannot make a transaction free (the base fee is consensus-enforced), cannot spend earnings except on fees, bonds, deposits and shielding, and cannot fill a block with listed transactions beyond the caps (32 KiB per sender per extension, 1,024 ante runs per block).
 - *A proposer.* Can order and select transactions but cannot omit a valid listed one, cannot pad the injected commit with unknown fields, and cannot take another proposer's tips.
 - *A validator holding up to a third of power.* Can stall but not finalise a conflicting block; the one-third publication bound means the validator set can never change by more than a third in a step, so a light client can follow it.
 - *An operator with stake at the cap.* Is held to 5% (3%) of stake power after redistribution, however many validators it runs, and a stake added today counts fully only after 30 epochs. Splitting the stake across validators of one operator changes nothing, and each identity's redistribution gain is bounded by twice its own raw proportion. Splitting across operator accounts is not detected (the chain cannot tell them apart).

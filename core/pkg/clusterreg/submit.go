@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -89,25 +90,24 @@ func Broadcast(ctx context.Context, base string, tx []byte) (string, error) {
 		return "", fmt.Errorf("broadcast response is not JSON")
 	}
 	if resp.TxResponse.Code != 0 || resp.TxResponse.TxHash == "" {
-		log := resp.TxResponse.RawLog
+		log := []rune(printable(resp.TxResponse.RawLog))
 		if len(log) > 200 {
 			log = log[:200]
 		}
-		return "", fmt.Errorf("broadcast rejected the tx (code %d): %s", resp.TxResponse.Code, log)
+		return "", fmt.Errorf("broadcast rejected the tx (code %d): %s", resp.TxResponse.Code, string(log))
 	}
 	return resp.TxResponse.TxHash, nil
 }
 
+// parseUint reads a decimal uint64 a node answered; empty is 0, and a number past uint64 is an
+// error and not a wrapped-around small one.
 func parseUint(s string) (uint64, error) {
 	if s == "" {
 		return 0, nil
 	}
-	var n uint64
-	for i := 0; i < len(s); i++ {
-		if s[i] < '0' || s[i] > '9' {
-			return 0, fmt.Errorf("%q is not an integer", s)
-		}
-		n = n*10 + uint64(s[i]-'0')
+	n, err := strconv.ParseUint(s, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%q is not an unsigned 64-bit integer", printable(s))
 	}
 	return n, nil
 }

@@ -10,6 +10,10 @@
 # locked from earnings and released on retire) and x/houses (tiers closed,
 # proposals refused, votes and execution need a proposal, bank-only bond).
 # Signed on the node by the validators' own keyrings (features/internal/chain).
+# Every payout lands in earnings, which the owner leaves there, withdraws to a
+# bank balance and sends in the open (MsgWithdrawEarnings, features/chain-core
+# and chain-transfers), or moves into the shielded pool (features/chain-shielded):
+# none of the three is mandatory.
 id: chain-economics
 title: Emission, power, node registry and two-house governance
 area: chain

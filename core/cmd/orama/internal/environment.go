@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -53,6 +54,11 @@ type EnvironmentConfig struct {
 	Environments      []Environment `json:"environments"`
 	ActiveEnvironment string        `json:"active_environment"`
 }
+
+// ErrNoActiveNetwork is wrapped by GetActiveEnvironment when no network is configured, or the one
+// marked active is not in the list: nothing is selected, as against a configuration that cannot be
+// read.
+var ErrNoActiveNetwork = errors.New("no active network")
 
 // noEnvironmentHelp is what a command says when this computer has no cluster
 // configured. A fresh install does not point at anyone else's network.
@@ -233,7 +239,7 @@ func GetActiveEnvironment() (*Environment, error) {
 	}
 
 	if len(envConfig.Environments) == 0 || envConfig.ActiveEnvironment == "" {
-		return nil, fmt.Errorf("%s", noEnvironmentHelp)
+		return nil, fmt.Errorf("%w: %s", ErrNoActiveNetwork, noEnvironmentHelp)
 	}
 
 	for _, env := range envConfig.Environments {
@@ -248,8 +254,8 @@ func GetActiveEnvironment() (*Environment, error) {
 	for _, env := range envConfig.Environments {
 		names = append(names, env.Name)
 	}
-	return nil, fmt.Errorf("active network %q is not configured (configured: %s); choose one with `orama network use <name>` or pass --env",
-		envConfig.ActiveEnvironment, strings.Join(names, ", "))
+	return nil, fmt.Errorf("%w: %q is not configured (configured: %s); choose one with `orama network use <name>` or pass --env",
+		ErrNoActiveNetwork, envConfig.ActiveEnvironment, strings.Join(names, ", "))
 }
 
 // SwitchEnvironment switches to a different environment

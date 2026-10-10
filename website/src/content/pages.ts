@@ -64,6 +64,8 @@ export const OG_SIZE = { width: 1200, height: 630 } as const;
 export const DOCS_PATH = "/docs";
 export const EXPLORER_PATH = "/explorer";
 export const docPath = (slug: string) => `${DOCS_PATH}/${slug}`;
+/** The one page for a newcomer who wants to join the network: the site's "Get started" button goes here. */
+export const GET_STARTED_PATH = docPath("start/get-started");
 
 const MAX_TITLE = 60;
 /** A tag page lists the same posts as the blog until it has a few of its own. */

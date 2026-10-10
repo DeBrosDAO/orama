@@ -56,3 +56,12 @@ export function fromHex(hex: string): Uint8Array {
 export function shortHex(bytes: Uint8Array): string {
   return bytes.length <= 8 ? toHex(bytes) : `${toHex(bytes.slice(0, 8))}...`;
 }
+
+/**
+ * Text a chain, node or gateway sent, without the control and invisible format characters that act
+ * on a terminal or hide text in it. Run it on anything untrusted before it reaches an error message
+ * or a prompt.
+ */
+export function printable(text: string): string {
+  return text.replace(/[\p{Cc}\p{Cf}]/gu, "");
+}
