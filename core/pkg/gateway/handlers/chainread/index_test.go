@@ -11,6 +11,10 @@ import (
 // The bech32 orama account address of 20 zero bytes.
 const testAccount = "orama1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqmg3rhc"
 
+// An operator address of the shape the proxy accepts: the proxy checks the shape, the indexer the
+// checksum.
+const testOperator = "oramavaloper1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"
+
 // indexUpstream records every request URI the indexer receives.
 type indexUpstream struct {
 	mu   sync.Mutex
@@ -66,6 +70,19 @@ func TestIndexProxy_buildsEachUpstreamURL(t *testing.T) {
 		{"/v1/chain/index/accounts/" + testAccount + "/txs?limit=100&page=1000", "/index/v1/accounts/" + testAccount + "/txs?limit=100&page=1000"},
 		{"/v1/chain/index/cnft/assets/" + hash, "/index/v1/cnft/assets/" + strings.ToLower(hash)},
 		{"/v1/chain/index/cnft/owners/" + testAccount + "/assets?page=2", "/index/v1/cnft/owners/" + testAccount + "/assets?page=2"},
+		{"/v1/chain/index/epochs", "/index/v1/epochs"},
+		{"/v1/chain/index/epochs?page=1000&limit=100", "/index/v1/epochs?limit=100&page=1000"},
+		{"/v1/chain/index/epochs/12", "/index/v1/epochs/12"},
+		{"/v1/chain/index/epochs/12/validators?limit=5", "/index/v1/epochs/12/validators?limit=5"},
+		{"/v1/chain/index/supply?page=3", "/index/v1/supply?page=3"},
+		{"/v1/chain/index/validators", "/index/v1/validators"},
+		{"/v1/chain/index/validators/" + testOperator, "/index/v1/validators/" + testOperator},
+		{"/v1/chain/index/validators/" + testOperator + "/epochs?limit=2", "/index/v1/validators/" + testOperator + "/epochs?limit=2"},
+		{"/v1/chain/index/validators/" + testOperator + "/slashes", "/index/v1/validators/" + testOperator + "/slashes"},
+		{"/v1/chain/index/validators/" + testOperator + "/jails?page=2", "/index/v1/validators/" + testOperator + "/jails?page=2"},
+		{"/v1/chain/index/stats/hourly?limit=100", "/index/v1/stats/hourly?limit=100"},
+		{"/v1/chain/index/stats/daily", "/index/v1/stats/daily"},
+		{"/v1/chain/index/stats/weekly?page=9", "/index/v1/stats/weekly?page=9"},
 	}
 	for _, tc := range cases {
 		p, up := indexProxy(t)
@@ -125,6 +142,32 @@ func TestIndexProxy_refusesBadParamsWithoutCallingTheIndexer(t *testing.T) {
 		{"/v1/chain/index/accounts/orama1" + strings.Repeat("q", 415) + "/txs", http.StatusNotFound},
 		{"/v1/chain/index/cnft/assets/" + hash + "00", http.StatusNotFound},
 		{"/v1/chain/index/cnft/owners/" + testAccount, http.StatusNotFound},
+		{"/v1/chain/index/epochs?limit=101", http.StatusBadRequest},
+		{"/v1/chain/index/epochs?limit=0", http.StatusBadRequest},
+		{"/v1/chain/index/epochs?page=1001", http.StatusBadRequest},
+		{"/v1/chain/index/epochs?page=1&page=2", http.StatusBadRequest},
+		{"/v1/chain/index/epochs?offset=1", http.StatusBadRequest},
+		{"/v1/chain/index/epochs/3?limit=1", http.StatusBadRequest},
+		{"/v1/chain/index/epochs/3/validators?limit=101", http.StatusBadRequest},
+		{"/v1/chain/index/supply?x=1", http.StatusBadRequest},
+		{"/v1/chain/index/validators?page=0", http.StatusBadRequest},
+		{"/v1/chain/index/validators/" + testOperator + "?page=1", http.StatusBadRequest},
+		{"/v1/chain/index/validators/" + testOperator + "/slashes?limit=101", http.StatusBadRequest},
+		{"/v1/chain/index/stats/daily?limit=101", http.StatusBadRequest},
+		{"/v1/chain/index/stats/weekly?x=1", http.StatusBadRequest},
+		{"/v1/chain/index/epochs/0", http.StatusNotFound},
+		{"/v1/chain/index/epochs/-1", http.StatusNotFound},
+		{"/v1/chain/index/epochs/01", http.StatusNotFound},
+		{"/v1/chain/index/epochs/x/validators", http.StatusNotFound},
+		{"/v1/chain/index/epochs/3/other", http.StatusNotFound},
+		{"/v1/chain/index/supply/1", http.StatusNotFound},
+		{"/v1/chain/index/validators/" + testAccount, http.StatusNotFound},
+		{"/v1/chain/index/validators/" + strings.ToUpper(testOperator), http.StatusNotFound},
+		{"/v1/chain/index/validators/oramavaloper1bbbb", http.StatusNotFound},
+		{"/v1/chain/index/validators/" + testOperator + "/other", http.StatusNotFound},
+		{"/v1/chain/index/validators/" + testOperator + "/epochs/1", http.StatusNotFound},
+		{"/v1/chain/index/stats/yearly", http.StatusNotFound},
+		{"/v1/chain/index/stats/daily/1", http.StatusNotFound},
 		{"/v1/chain/index/", http.StatusNotFound},
 		{"/v1/chain/index/blocks/1/txs", http.StatusNotFound},
 		{"/v1/chain/index/blocks/1/", http.StatusNotFound},

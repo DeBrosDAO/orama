@@ -75,7 +75,9 @@ func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case len(segs) == 4 && segs[0] == "cnft" && segs[1] == "owners" && segs[3] == "assets":
 		a.serveOwnerAssets(w, r, segs[2])
 	default:
-		writeError(w, http.StatusNotFound, "not found")
+		if !a.serveAggregates(w, r, segs) {
+			writeError(w, http.StatusNotFound, "not found")
+		}
 	}
 }
 

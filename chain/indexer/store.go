@@ -27,11 +27,27 @@ const (
 	pfxLatest  = "l/"   // height index → 32-byte hash, for the newest-first transaction list
 	pfxHour    = "s/h/" // unix hour → hour statistics
 	pfxSummary = "s/a/" // address → account summary
+	pfxDay     = "s/d/" // unix day → day statistics
+	pfxWeek    = "s/w/" // Monday-based week number → week statistics
+
+	keyWatch   = "e/w"  // the aggregator's position
+	pfxEpoch   = "e/r/" // epoch → EpochRow
+	pfxSupply  = "e/s/" // epoch → SupplyPoint
+	pfxValEp   = "e/h/" // consensus address, epoch → ValidatorEpoch
+	pfxPowerIx = "e/p/" // epoch, inverted power, consensus address → empty
+	pfxCounter = "e/c/" // epoch, consensus address → counters of the epoch in progress
+	pfxSlash   = "e/x/" // consensus address, height, event index → Slash
+	pfxJail    = "e/j/" // consensus address, height → JailPeriod
+	pfxRegVal  = "g/v/" // consensus address → ValidatorInfo
+	pfxRegOp   = "g/o/" // operator address → consensus address
 )
 
 // schemaVersion is the layout of an index. An index written by another version
-// is refused rather than served with fields it never recorded.
-const schemaVersion uint64 = 2
+// is refused rather than served with fields it never recorded: its aggregates
+// (epochs, supply, validators, daily and weekly statistics) are computed as blocks
+// are ingested, so an index that did not compute them cannot be completed later.
+// Version 3 added them.
+const schemaVersion uint64 = 3
 
 // Store is the on-disk index. Reads are safe while the follower writes.
 type Store struct {

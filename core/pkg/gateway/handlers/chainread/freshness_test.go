@@ -37,6 +37,11 @@ func TestProxy_everyReadReachesTheNodeAndNothingIsStorable(t *testing.T) {
 		"/v1/chain/supply/norama",
 		"/v1/chain/staking/pool",
 		"/v1/chain/index/status",
+		"/v1/chain/index/epochs",
+		"/v1/chain/index/epochs/3",
+		"/v1/chain/index/supply",
+		"/v1/chain/index/validators",
+		"/v1/chain/index/stats/daily",
 	}
 	for _, path := range paths {
 		var bodies [2]string

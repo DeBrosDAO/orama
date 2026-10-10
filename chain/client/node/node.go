@@ -212,6 +212,28 @@ func (c *Client) Block(ctx context.Context, height int64) (*coretypes.ResultBloc
 	return res, nil
 }
 
+// validatorsPerPage is the most validators CometBFT's validators RPC returns in one page.
+const validatorsPerPage = 100
+
+// ValidatorAddresses returns the consensus addresses of the validator set that signed the block at
+// height, in the order CometBFT numbers them: the order of a commit's signatures.
+func (c *Client) ValidatorAddresses(ctx context.Context, height int64) ([][]byte, error) {
+	var out [][]byte
+	perPage := validatorsPerPage
+	for page := 1; ; page++ {
+		res, err := c.rpc.Validators(ctx, &height, &page, &perPage)
+		if err != nil {
+			return nil, fmt.Errorf("read the validator set at %d (page %d): %w", height, page, err)
+		}
+		for _, v := range res.Validators {
+			out = append(out, v.Address.Bytes())
+		}
+		if len(out) >= res.Total || len(res.Validators) == 0 {
+			return out, nil
+		}
+	}
+}
+
 // FeeFunds is what addr can pay a transaction's base fee from: its spendable norama plus its x/fees
 // fee-only balance. A node's hot key has only the latter (MsgFundHotKey fills it), so its bank
 // balance alone reads zero while it can pay.

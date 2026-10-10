@@ -35,6 +35,9 @@ type Chain interface {
 	Block(ctx context.Context, height int64) (*coretypes.ResultBlock, error)
 	BlockResults(ctx context.Context, height int64) (*coretypes.ResultBlockResults, error)
 	QueryAt(ctx context.Context, height int64, method string, req, resp gogoproto.Message) error
+	// ValidatorAddresses returns the consensus addresses of the validator set of a height, in the
+	// order of a commit's signatures.
+	ValidatorAddresses(ctx context.Context, height int64) ([][]byte, error)
 }
 
 // Follower indexes committed blocks in order from a start height.
@@ -43,6 +46,8 @@ type Follower struct {
 	store *Store
 	start int64
 	codec *codec.ProtoCodec
+	// signing is the validator set the last commit was read against.
+	signing signerSet
 }
 
 // NewFollower binds store to start. A store that was started from another
@@ -135,6 +140,10 @@ func (f *Follower) indexBlock(ctx context.Context, height int64) error {
 	if err := w.putBlock(block); err != nil {
 		return errors.Join(err, w.close())
 	}
+	facts := blockFacts{height: height, time: block.Time, commit: blk.Block.LastCommit, valsHash: blk.Block.ValidatorsHash, events: res.FinalizeBlockEvents}
+	if err := f.aggregate(ctx, w, facts); err != nil {
+		return errors.Join(fmt.Errorf("aggregate block %d: %w", height, err), w.close())
+	}
 	return w.commit(height)
 }
 
@@ -190,7 +199,7 @@ func (f *Follower) writeTx(w *writer, pos txPos, hash []byte, t Tx, res *abci.Ex
 	if err := w.addLatest(pos.height, pos.index, hash); err != nil {
 		return err
 	}
-	if err := w.addToHour(pos.time, res.Code != 0, burned); err != nil {
+	if err := w.addToBuckets(pos.time, res.Code != 0, burned); err != nil {
 		return err
 	}
 	for _, addr := range eventAddresses(res.Events) {
@@ -218,6 +227,9 @@ func (f *Follower) applyMessages(ctx context.Context, w *writer, pos txPos, hash
 		if err := a.apply(msgs[i], resps[i]); err != nil {
 			return fmt.Errorf("transaction %s message %d (%s): %w", hashHex, i, msgs[i].TypeUrl, err)
 		}
+	}
+	if err := f.noteUnjails(ctx, w, pos, msgs); err != nil {
+		return fmt.Errorf("transaction %s: %w", hashHex, err)
 	}
 	return nil
 }

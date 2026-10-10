@@ -92,7 +92,7 @@ func TestFollower_cnftLifecycle(t *testing.T) {
 	require.Equal(t, alice, a.Owner, "the failed transfer changed nothing")
 	require.Equal(t, chainLeafHash(t, leafA), a.LeafHash)
 	require.ElementsMatch(t, []string{hex.EncodeToString(idA), hex.EncodeToString(idB)}, owned(t, store, alice))
-	require.Empty(t, chain.asked, "a tree created after the start height needs no query")
+	require.Empty(t, chain.askedBeyondAggregates(), "a tree created after the start height needs no query")
 
 	leafB := cnfttypes.Leaf{AssetId: idB, Owner: alice, Delegate: bob, MetadataCid: "bafyB", CreatorHash: creatorHash, HashId: cnfttypes.HashIDSHA256}
 	chain.add(
@@ -214,7 +214,7 @@ func TestFollower_marketSettleMovesTheLeafToTheBidder(t *testing.T) {
 	next := leaf
 	next.Owner, next.Delegate, next.Nonce = bob, "", 1
 	require.Equal(t, chainLeafHash(t, next), a.LeafHash)
-	require.Empty(t, chain.asked, "list and bids were in the index")
+	require.Empty(t, chain.askedBeyondAggregates(), "list and bids were in the index")
 	_, ok, err := getRaw(store.db, listingKey(7))
 	require.NoError(t, err)
 	require.False(t, ok, "a settled listing is dropped")

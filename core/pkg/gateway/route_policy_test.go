@@ -273,6 +273,11 @@ func TestRoutePolicy_chainIndexReadsArePublic(t *testing.T) {
 		"/v1/chain/index/status",
 		"/v1/chain/index/accounts/orama1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqmg3rhc/txs",
 		"/v1/chain/index/cnft/assets/" + strings.Repeat("ab", 32),
+		"/v1/chain/index/epochs",
+		"/v1/chain/index/epochs/7/validators",
+		"/v1/chain/index/supply",
+		"/v1/chain/index/validators/oramavaloper1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq/slashes",
+		"/v1/chain/index/stats/daily",
 	} {
 		if !policyOf(http.MethodGet, path).Access.Anonymous() {
 			t.Errorf("%q is not reachable without a credential", path)

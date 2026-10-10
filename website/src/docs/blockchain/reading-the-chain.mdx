@@ -18,6 +18,10 @@ Every gateway can serve a read-only proxy to a chain node. It is an open route (
 | `index/status`, `index/stats`, `index/blocks/{h}`, `index/txs`, `index/txs/{hash}` | The chain indexer |
 | `index/accounts/{addr}`, `index/accounts/{addr}/txs` | An address's summary and its transactions |
 | `index/cnft/assets/{id}`, `index/cnft/owners/{addr}/assets` | Compressed NFT ownership |
+| `index/epochs`, `index/epochs/{n}`, `index/epochs/{n}/validators` | Closed emission epochs (minted, burned, fees, rewards credited) and each epoch's validators |
+| `index/supply` | The supply breakdown (total, minted, burned, bonded, unbonding, earnings pools, storage escrow, circulating), one point per epoch |
+| `index/validators`, `index/validators/{operator}`, `index/validators/{operator}/epochs`, `…/slashes`, `…/jails` | Validators with their voting power, uptime, slashes and jail periods |
+| `index/stats/hourly`, `index/stats/daily`, `index/stats/weekly` | Transaction statistics beyond the 48 hourly buckets of `index/stats` |
 | `query/{package.Service}/{Method}` | Any allowed module query, and the wallet queries below |
 | `simulate`, `broadcast` (POST) | Price and submit a signed transaction for a wallet with no node of its own |
 
@@ -113,6 +117,15 @@ Every module has an `invariants` query. They return false if the module's accoun
 ## The chain indexer
 
 `orama-global indexer` (loopback port 31015) indexes blocks, transactions, per-address transactions and cNFT assets into a Pebble database. It feeds the `index/…` routes.
+
+It also keeps aggregates for the explorer, computed once as each block is indexed and never per request:
+
+- One row per closed emission epoch: its first and last block and time, what was minted (validator and delegator share, storage and relay services, development, faucet) and burned during it, the fees collected, burned and distributed, and what the closing block credited to earnings accounts. Each figure is the chain's own, taken from its running totals at the epoch's closing height or from the closing block's events.
+- The supply breakdown at each epoch's end: total supply, minted and burned to date, bonded, unbonding, the earnings pools, the storage escrow, what other protocol accounts hold, and the circulating remainder.
+- Each validator's voting power, signed and missed blocks, slashes and jail periods per epoch.
+- Transaction statistics by hour, day and week.
+
+Every list is paged like the others (`page` up to 1000, `limit` up to 100, newest first). The first epoch an index tracks is marked `partial` when the index began inside it. The chain does not expose the reward each validator was paid, the split of the validator share between validators and delegators, or the split of service mints between storage and relay, so the index does not show them.
 
 ## The explorer
 

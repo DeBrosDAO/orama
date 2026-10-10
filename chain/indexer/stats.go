@@ -14,22 +14,31 @@ const HourlyWindow = 48
 // hourOf is the unix hour a time falls in.
 func hourOf(t time.Time) int64 { return t.UTC().Unix() / int64(time.Hour/time.Second) }
 
+// hourRecord is the stored form of every statistics bucket: an hour, a day or a week.
 type hourRecord struct {
 	Txs    uint64 `json:"txs"`
 	Failed uint64 `json:"failed"`
 	Burned string `json:"burned"`
 }
 
-// addToHour counts one transaction in the hour of its block.
-func (w *writer) addToHour(blockTime time.Time, failed bool, burned math.Int) error {
-	key := hourKey(hourOf(blockTime))
+// addToBuckets counts one transaction in the hour, the day and the week of its block.
+func (w *writer) addToBuckets(blockTime time.Time, failed bool, burned math.Int) error {
+	for _, key := range [][]byte{hourKey(hourOf(blockTime)), dayKey(dayOf(blockTime)), weekKey(weekOf(blockTime))} {
+		if err := w.addToBucket(key, failed, burned); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (w *writer) addToBucket(key []byte, failed bool, burned math.Int) error {
 	rec := hourRecord{Burned: "0"}
 	if _, err := getJSON(w.b, key, &rec); err != nil {
 		return err
 	}
 	have, ok := math.NewIntFromString(rec.Burned)
 	if !ok {
-		return fmt.Errorf("hour record %q holds burned %q, not an integer", key, rec.Burned)
+		return fmt.Errorf("statistics record %q holds burned %q, not an integer", key, rec.Burned)
 	}
 	rec.Txs++
 	if failed {

@@ -8,6 +8,13 @@
 // message responses). x/cnft and x/market emit no events of their own, so
 // cNFT state is rebuilt from the message bodies and their responses, the same
 // way the chain rebuilds a leaf from the transaction that wrote it.
+//
+// The follower also keeps aggregates for the explorer, computed once as it ingests
+// blocks and never per request (agg_*.go): one row per closed emission epoch, the
+// supply breakdown at each epoch's end, each validator's voting power, signing, slashes
+// and jail periods per epoch, and transaction statistics by hour, day and week.
+// Epoch figures are the chain's cumulative counters and balances queried at the
+// epoch's closing height, plus the closing block's events; nothing is estimated.
 package indexer
 
 import (

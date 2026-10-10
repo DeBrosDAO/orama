@@ -32,6 +32,9 @@ var (
 	// checksum; this module does not import the chain's bech32 code.
 	accountPattern = regexp.MustCompile(`^orama1[02-9ac-hj-np-z]{8,414}$`)
 	hash32Pattern  = regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
+	// validatorPattern is the shape of a lowercase bech32 orama validator operator address, the
+	// account range under the oramavaloper prefix. The indexer verifies the checksum.
+	validatorPattern = regexp.MustCompile(`^oramavaloper1[02-9ac-hj-np-z]{8,414}$`)
 )
 
 // serveIndex matches one indexer route. Each route builds its own upstream
@@ -103,6 +106,37 @@ func indexRoute(segs []string) (string, int, bool) {
 		return "cnft/assets/" + strings.ToLower(segs[2]), queryNone, hash32Pattern.MatchString(segs[2])
 	case len(segs) == 4 && segs[0] == "cnft" && segs[1] == "owners" && segs[3] == "assets":
 		return "cnft/owners/" + segs[2] + "/assets", queryPaged, accountPattern.MatchString(segs[2])
+	default:
+		return aggregateRoute(segs)
+	}
+}
+
+// validatorLists are the per-validator lists the indexer pages through, and seriesNames the
+// statistics series it serves beyond the 48 hourly buckets of /stats.
+var (
+	validatorLists = map[string]bool{"epochs": true, "slashes": true, "jails": true}
+	seriesNames    = map[string]bool{"hourly": true, "daily": true, "weekly": true}
+)
+
+// aggregateRoute matches the routes over the aggregates the indexer computes as it follows the
+// chain: epochs, the supply breakdown, validators and the long statistics series. Every list takes
+// page and limit; a single epoch or validator takes none.
+func aggregateRoute(segs []string) (string, int, bool) {
+	switch {
+	case len(segs) == 1 && (segs[0] == "epochs" || segs[0] == "supply" || segs[0] == "validators"):
+		return segs[0], queryPaged, true
+	case len(segs) == 2 && segs[0] == "epochs":
+		n, ok := parsePositive(segs[1])
+		return "epochs/" + strconv.FormatInt(n, 10), queryNone, ok
+	case len(segs) == 3 && segs[0] == "epochs" && segs[2] == "validators":
+		n, ok := parsePositive(segs[1])
+		return "epochs/" + strconv.FormatInt(n, 10) + "/validators", queryPaged, ok
+	case len(segs) == 2 && segs[0] == "validators":
+		return "validators/" + segs[1], queryNone, validatorPattern.MatchString(segs[1])
+	case len(segs) == 3 && segs[0] == "validators" && validatorLists[segs[2]]:
+		return "validators/" + segs[1] + "/" + segs[2], queryPaged, validatorPattern.MatchString(segs[1])
+	case len(segs) == 2 && segs[0] == "stats" && seriesNames[segs[1]]:
+		return "stats/" + segs[1], queryPaged, true
 	default:
 		return "", queryNone, false
 	}
