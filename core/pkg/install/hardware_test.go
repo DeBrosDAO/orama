@@ -91,3 +91,10 @@ func TestParseHardware_refusesAMissingOrBrokenLine(t *testing.T) {
 		}
 	}
 }
+
+func TestParseHardware_ignoresTheProbesOtherLines(t *testing.T) {
+	hw, err := ParseHardware("arch=x86_64\ncpu=2\nram_kb=2097152\ndisk_kb=10485760\ncluster=1\n")
+	if err != nil || hw.CPUCores != 2 {
+		t.Fatalf("got %+v, %v", hw, err)
+	}
+}

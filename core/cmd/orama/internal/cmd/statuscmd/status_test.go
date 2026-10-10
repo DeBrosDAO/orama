@@ -1,6 +1,7 @@
 package statuscmd
 
 import (
+	cli "github.com/DeBrosOfficial/network/cmd/orama/internal"
 	"strings"
 	"testing"
 )
@@ -36,5 +37,46 @@ func TestCmd_mountsEveryView(t *testing.T) {
 func TestCmd_refusesAPositionalArgument(t *testing.T) {
 	if err := Cmd.Args(Cmd, []string{"clustr"}); err == nil {
 		t.Fatal("orama status accepted a stray argument")
+	}
+}
+
+const recordedOperator = "orama1fvfzzvqv2ara2crn3z352zjhnfl0tw4rk82j53"
+
+func recordEnvironment(t *testing.T, name string, withOperator bool) {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	if err := cli.AddEnvironment(name, "https://cluster.example.org", "test"); err != nil {
+		t.Fatal(err)
+	}
+	if withOperator {
+		if err := cli.RecordOperator(name, recordedOperator); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// `orama setup` records the operator on the environment; status shows it without --operator.
+func TestOperatorToShow_defaultsToTheRecordedOperator(t *testing.T) {
+	recordEnvironment(t, "mine", true)
+	if got := operatorToShow("", "mine"); got != recordedOperator {
+		t.Fatalf("operatorToShow = %q, want the recorded %q", got, recordedOperator)
+	}
+}
+
+func TestOperatorToShow_theFlagWins(t *testing.T) {
+	recordEnvironment(t, "mine", true)
+	const other = "orama1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"
+	if got := operatorToShow(other, "mine"); got != other {
+		t.Fatalf("operatorToShow = %q, want the flag's %q", got, other)
+	}
+}
+
+func TestOperatorToShow_nothingRecorded(t *testing.T) {
+	recordEnvironment(t, "mine", false)
+	if got := operatorToShow("", "mine"); got != "" {
+		t.Fatalf("operatorToShow = %q, want none", got)
+	}
+	if got := operatorToShow("", "unknown"); got != "" {
+		t.Fatalf("an unknown environment gave %q", got)
 	}
 }

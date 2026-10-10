@@ -101,14 +101,15 @@ func gib(b uint64) string {
 }
 
 // ParseHardware reads what HardwareProbeCommand printed: three lines
-// `cpu=<threads>`, `ram_kb=<MemTotal>` and `disk_kb=<free KiB of /opt>`. A line
-// that is missing or not a number is an error, never a zero that would read as
+// `cpu=<threads>`, `ram_kb=<MemTotal>` and `disk_kb=<free KiB of /opt>`, among
+// any others. A line that is missing or not a number is an error, never a zero that would read as
 // a machine with nothing.
 func ParseHardware(out string) (Hardware, error) {
 	values := map[string]uint64{}
 	for _, line := range strings.Split(out, "\n") {
 		key, val, ok := strings.Cut(strings.TrimSpace(line), "=")
-		if !ok {
+		// Other lines of the probe's output are not this function's.
+		if !ok || (key != "cpu" && key != "ram_kb" && key != "disk_kb") {
 			continue
 		}
 		n, err := strconv.ParseUint(strings.TrimSpace(val), 10, 64)
