@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"unicode"
+	"unicode/utf8"
 )
 
 // Step is one thing a run does to a machine, in the order it does them.
@@ -66,11 +67,58 @@ func CleanTerminal(s string) string {
 		switch {
 		case r == '\n' || r == '\t':
 			return r
-		case unicode.IsControl(r), r >= bidiFirst && r <= bidiLast, r >= isolateFirst && r <= isolateLast, r == unicode.ReplacementChar:
+		case unicode.IsControl(r), r >= bidiFirst && r <= bidiLast, r >= isolateFirst && r <= isolateLast, isMark(r), r == unicode.ReplacementChar:
 			return '?'
 		}
 		return r
 	}, s)
+}
+
+// NewTerminalWriter returns a writer that passes w what is written to it with
+// CleanTerminal applied, as it arrives: a prompt without a newline is shown at
+// once. A multi-byte character split across two writes is held back until it is
+// whole.
+func NewTerminalWriter(w io.Writer) io.Writer { return &terminalWriter{w: w} }
+
+type terminalWriter struct {
+	w    io.Writer
+	tail []byte
+}
+
+func (t *terminalWriter) Write(p []byte) (int, error) {
+	data := append(t.tail, p...)
+	cut := wholeRunes(data)
+	t.tail = append([]byte(nil), data[cut:]...)
+	if _, err := io.WriteString(t.w, CleanTerminal(string(data[:cut]))); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
+// wholeRunes is the length of the longest prefix of data that does not end in
+// the middle of a UTF-8 sequence.
+func wholeRunes(data []byte) int {
+	for i := len(data) - 1; i >= 0 && i >= len(data)-utf8.UTFMax; i-- {
+		if utf8.RuneStart(data[i]) {
+			if utf8.FullRune(data[i:]) {
+				return len(data)
+			}
+			return i
+		}
+	}
+	return len(data)
+}
+
+// oneLine is s cleaned and on one line: a detail printed after a step's name must
+// not be able to start another line of the log.
+func oneLine(s string) string {
+	return strings.ReplaceAll(CleanTerminal(s), "\n", " | ")
+}
+
+// isMark: the direction marks and the line and paragraph separators, which move
+// text on the line without being visible.
+func isMark(r rune) bool {
+	return r == '\u200e' || r == '\u200f' || r == '\u061c' || r == '\u2028' || r == '\u2029'
 }
 
 // The bidirectional embeddings, overrides and isolates (U+202A-U+202E, U+2066-U+2069).
@@ -98,7 +146,7 @@ func (t *TextReporter) Emit(e Event) {
 	}
 	suffix := ""
 	if e.Detail != "" {
-		suffix = ": " + CleanTerminal(e.Detail)
+		suffix = ": " + oneLine(e.Detail)
 	}
 	fmt.Fprintf(t.Out, "[%s] %s %s%s\n", where, e.Step, e.State, suffix)
 }

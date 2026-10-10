@@ -44,7 +44,9 @@ var probeScript = strings.Join([]string{
 	`echo cli_sha=$(sha256sum /opt/orama/bin/orama 2>/dev/null | cut -d' ' -f1)`,
 	// The node's last start, and the chain unit's file time: the gateway reads the
 	// chain's listeners when it starts, so a unit newer than the start is not seen.
-	`ts=$(systemctl show orama-node.service -p ActiveEnterTimestamp --value 2>/dev/null); ` +
+	// TZ=UTC: systemd prints the time in the host's zone, with an abbreviation date(1)
+	// may not know or may read as another zone; in UTC it is always parsed right.
+	`ts=$(TZ=UTC systemctl show orama-node.service -p ActiveEnterTimestamp --value 2>/dev/null); ` +
 		`if [ -n "$ts" ]; then started=$(date -d "$ts" +%s 2>/dev/null || echo 0); else started=0; fi; ` +
 		`unit=$(stat -c %Y ` + unitDir + `/` + constants.ChainServiceUnit + ` 2>/dev/null || echo 0); ` +
 		`if [ "$unit" -gt "$started" ]; then echo restart_pending=1; else echo restart_pending=0; fi`,

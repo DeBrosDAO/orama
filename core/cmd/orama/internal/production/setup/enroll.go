@@ -2,6 +2,7 @@ package setup
 
 import (
 	"fmt"
+	"net"
 	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/inspector"
@@ -96,14 +97,15 @@ func NodeArch(node inspector.Node) (string, error) {
 // on it and nothing is asked; a host key that is not in that file is a refusal,
 // never a first contact (the same rule as --join-via).
 func Reach(ip, user string) (*Enrolled, error) {
-	if user == "" {
-		user = "root"
-	}
 	knownHosts, err := operatorKnownHosts()
 	if err != nil {
 		return nil, err
 	}
-	nodes := []inspector.Node{{Host: ip, User: user, VaultTarget: ip + "/" + user, KnownHostsFile: knownHosts}}
+	node, err := reachableNode(ip, user, knownHosts)
+	if err != nil {
+		return nil, err
+	}
+	nodes := []inspector.Node{node}
 	cleanup, err := remotessh.PrepareNodeKeys(nodes)
 	if err != nil {
 		return nil, fmt.Errorf("the RootWallet has no SSH key for %s@%s: %w", user, ip, err)
@@ -113,6 +115,22 @@ func Reach(ip, user string) (*Enrolled, error) {
 		return nil, err
 	}
 	return &Enrolled{Node: nodes[0], Close: cleanup}, nil
+}
+
+// reachableNode is the machine Reach opens: its login and address are checked
+// (they come from the CLI's configuration, and go into an ssh command line), and
+// it is held to the known_hosts file with no other source of host keys.
+func reachableNode(ip, user, knownHosts string) (inspector.Node, error) {
+	if user == "" {
+		user = "root"
+	}
+	if !sshUserPattern.MatchString(user) {
+		return inspector.Node{}, fmt.Errorf("the recorded login %q is not a login name", user)
+	}
+	if parsed := net.ParseIP(ip); parsed == nil || parsed.To4() == nil {
+		return inspector.Node{}, fmt.Errorf("the recorded address %q is not an IPv4 address", ip)
+	}
+	return inspector.Node{Host: ip, User: user, VaultTarget: ip + "/" + user, KnownHostsFile: knownHosts}, nil
 }
 
 // HostKeyInfo is one SSH host key a machine presents: its type and its

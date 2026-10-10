@@ -120,15 +120,26 @@ func ParseHardware(out string) (Hardware, error) {
 	}
 	for _, key := range []string{"cpu", "ram_kb", "disk_kb"} {
 		if _, ok := values[key]; !ok {
-			return Hardware{}, fmt.Errorf("hardware probe: no %s in %q", key, strings.TrimSpace(out))
+			return Hardware{}, fmt.Errorf("hardware probe: no %s in %q", key, shown(out))
 		}
 	}
 	// A machine with no CPU or no memory is a broken probe; a disk with no free
 	// space is a real answer, and one the floor refuses by name.
 	if values["cpu"] == 0 || values["ram_kb"] == 0 {
-		return Hardware{}, fmt.Errorf("hardware probe: cpu=%d ram_kb=%d in %q", values["cpu"], values["ram_kb"], strings.TrimSpace(out))
+		return Hardware{}, fmt.Errorf("hardware probe: cpu=%d ram_kb=%d in %q", values["cpu"], values["ram_kb"], shown(out))
 	}
 	return Hardware{CPUCores: int(values["cpu"]), RAMBytes: values["ram_kb"] * 1024, FreeDiskBytes: values["disk_kb"] * 1024}, nil
+}
+
+// shownProbe is how much of a probe's output an error repeats.
+const shownProbe = 200
+
+func shown(out string) string {
+	out = strings.TrimSpace(out)
+	if len(out) > shownProbe {
+		return out[:shownProbe] + "..."
+	}
+	return out
 }
 
 // HardwareProbeCommand is the shell snippet that prints what ParseHardware

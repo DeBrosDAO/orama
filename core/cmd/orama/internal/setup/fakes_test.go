@@ -87,12 +87,14 @@ type fakeMachine struct {
 	facts Facts
 
 	installClusterErr error
-	state             ChainState
-	stateErr          error
-	waitErr           error
-	installed         ClusterInstall
-	globalIn          GlobalInstall
-	identityErr       error
+	// quorumRefuses: the node's own quorum check refuses a restart without --force.
+	quorumRefuses bool
+	state         ChainState
+	stateErr      error
+	waitErr       error
+	installed     ClusterInstall
+	globalIn      GlobalInstall
+	identityErr   error
 }
 
 func goodHardware() install.Hardware {
@@ -156,6 +158,9 @@ func (m *fakeMachine) WaitNode(context.Context, time.Duration) error {
 }
 func (m *fakeMachine) RestartNode(_ context.Context, _ time.Duration, force bool) error {
 	m.w.add("restart-force=%v %s", force, m.ip)
+	if m.quorumRefuses && !force {
+		return errors.New("Cannot restart: it would break quorum.\n  Use 'orama node restart --force' to proceed anyway.")
+	}
 	m.w.mu.Lock()
 	m.w.restarting++
 	if m.w.restarting > m.w.maxRestarting {
@@ -171,11 +176,13 @@ func (m *fakeMachine) RestartNode(_ context.Context, _ time.Duration, force bool
 func (m *fakeMachine) Close() { m.w.add("close %s", m.ip) }
 
 type fakeEnroller struct {
-	w       *world
-	facts   map[string]Facts
-	fail    map[string]error
-	created map[string]*fakeMachine
-	state   ChainState
+	// quorumRefuses makes every machine's restart refuse without --force.
+	quorumRefuses bool
+	w             *world
+	facts         map[string]Facts
+	fail          map[string]error
+	created       map[string]*fakeMachine
+	state         ChainState
 }
 
 func (e *fakeEnroller) Enroll(_ context.Context, req MachineRequest) (Machine, error) {
@@ -187,7 +194,7 @@ func (e *fakeEnroller) Enroll(_ context.Context, req MachineRequest) (Machine, e
 	if !ok {
 		facts = freshFacts()
 	}
-	m := &fakeMachine{w: e.w, ip: req.IP, facts: facts, state: e.state}
+	m := &fakeMachine{w: e.w, ip: req.IP, facts: facts, state: e.state, quorumRefuses: e.quorumRefuses}
 	if e.created == nil {
 		e.created = map[string]*fakeMachine{}
 	}

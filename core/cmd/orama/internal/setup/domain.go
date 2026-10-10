@@ -95,7 +95,7 @@ func (c clusterDomain) ready(ctx context.Context, env, domain string) (bool, err
 	if len(findings) > 0 {
 		lines := make([]string, len(findings))
 		for i, f := range findings {
-			lines[i] = f.String()
+			lines[i] = CleanTerminal(f.String())
 		}
 		return false, fmt.Errorf("the parent zone does not return the records yet: %s", strings.Join(lines, "; "))
 	}

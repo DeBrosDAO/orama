@@ -30,10 +30,7 @@ const (
 func tunnelArgs(node inspector.Node, localPort int, remote string) []string {
 	args := append(node.HostKeyOptions(), baseSSHOptions()...)
 	args = append(args,
-		"-o", "ExitOnForwardFailure=yes",
-		// The operator's ssh_config may forward an agent; this machine has just been
-		// installed and is not given one.
-		"-o", "ForwardAgent=no",
+		"-o", "ExitOnForwardFailure=yes", "-o", "BatchMode=yes",
 		"-i", node.SSHKey, "-N",
 		"-L", net.JoinHostPort(tunnelLoopback, strconv.Itoa(localPort))+":"+remote,
 		fmt.Sprintf("%s@%s", node.User, node.Host))

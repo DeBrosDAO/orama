@@ -210,7 +210,7 @@ func (r *runner) restartPhase(ctx context.Context) error {
 			continue
 		}
 		r.emit(n.plan.IP, StepRestart, StateRunning, "")
-		if err := n.m.RestartNode(ctx, r.d.Timing.RestartBudget, r.clusterTooSmallForQuorum()); err != nil {
+		if err := r.restartNode(ctx, n); err != nil {
 			r.emit(n.plan.IP, StepRestart, StateFailed, err.Error())
 			return fmt.Errorf("machine %s: restart the cluster node: %w\n  the machines after it were left alone, so the cluster keeps its other voters", n.plan.IP, err)
 		}
@@ -218,6 +218,25 @@ func (r *runner) restartPhase(ctx context.Context) error {
 	}
 	return nil
 }
+
+// restartNode restarts the cluster node under the node's own quorum check. Only a
+// node that refuses, on a cluster the CLI records as under three nodes (which
+// cannot keep a quorum through any restart), is restarted again with --force: the
+// check is the node's own reading of its voters, and the record is only a count
+// of the nodes this CLI installed.
+func (r *runner) restartNode(ctx context.Context, n *nodeRun) error {
+	budget := r.d.Timing.RestartBudget
+	err := n.m.RestartNode(ctx, budget, false)
+	if err == nil || !r.clusterTooSmallForQuorum() || !strings.Contains(err.Error(), quorumRefusalHint) {
+		return err
+	}
+	r.d.Report.Linef("the cluster has %d recorded node(s), too few to keep a quorum through a restart: restarting %s with --force", r.clusterSize, n.plan.IP)
+	return n.m.RestartNode(ctx, budget, true)
+}
+
+// quorumRefusalHint is what `orama node restart` says when its quorum check
+// refuses: "Use 'orama node restart --force' to proceed anyway".
+const quorumRefusalHint = "node restart --force"
 
 // clusterTooSmallForQuorum says restarting a node cannot keep a quorum: with one
 // or two voters, one down is already too many. The node's own check refuses

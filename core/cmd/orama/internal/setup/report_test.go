@@ -17,6 +17,8 @@ func TestCleanTerminal(t *testing.T) {
 		"an isolate":        {"a⁦b", "a?b"},
 		"invalid utf-8":     {"a\xffb", "a?b"},
 		"a carriage return": {"a\rb", "a?b"},
+		"direction marks":   {"a\u200eb\u200fc\u061cd", "a?b?c?d"},
+		"line separators":   {"a\u2028b\u2029c", "a?b?c"},
 		"unicode text":      {"héllo wörld", "héllo wörld"},
 	} {
 		if got := CleanTerminal(tc.in); got != tc.want {
@@ -48,5 +50,52 @@ func TestTextReporter_aStartWithoutDetailIsNotALine(t *testing.T) {
 	r.Emit(Event{Step: StepDNS, State: StateDone, Detail: "cluster.example.org"})
 	if !strings.Contains(out.String(), "[setup] dns done: cluster.example.org") {
 		t.Errorf("a step of the run as a whole is attributed to setup: %q", out.String())
+	}
+}
+
+func TestTerminalWriter_passesPromptsAtOnceAndCleansThem(t *testing.T) {
+	var out bytes.Buffer
+	w := NewTerminalWriter(&out)
+	if n, err := w.Write([]byte("Continue? [y/N]: ")); err != nil || n != 17 {
+		t.Fatalf("%d, %v", n, err)
+	}
+	if out.String() != "Continue? [y/N]: " {
+		t.Errorf("a prompt without a newline is shown at once, got %q", out.String())
+	}
+	out.Reset()
+	if _, err := w.Write([]byte("x\x1b]0;owned\x07y")); err != nil {
+		t.Fatal(err)
+	}
+	if strings.ContainsAny(out.String(), "\x1b\x07") {
+		t.Errorf("got %q", out.String())
+	}
+}
+
+func TestTerminalWriter_aCharacterSplitAcrossWritesIsKeptWhole(t *testing.T) {
+	var out bytes.Buffer
+	w := NewTerminalWriter(&out)
+	euro := []byte("€")
+	for _, chunk := range [][]byte{euro[:1], euro[1:2], euro[2:]} {
+		if n, err := w.Write(chunk); err != nil || n != len(chunk) {
+			t.Fatalf("%d, %v", n, err)
+		}
+	}
+	if out.String() != "€" {
+		t.Errorf("got %q: a character split across reads must not become question marks", out.String())
+	}
+}
+
+func TestOneLine(t *testing.T) {
+	if got := oneLine("a\nb\x1b[2J"); got != "a | b?[2J" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestTextReporter_aDetailCannotStartAnotherLogLine(t *testing.T) {
+	var out bytes.Buffer
+	r := &TextReporter{Out: &out}
+	r.Emit(Event{Node: "203.0.113.5", Step: StepCluster, State: StateFailed, Detail: "boom\n[203.0.113.9] cluster done"})
+	if strings.Count(out.String(), "\n") != 1 {
+		t.Errorf("a forged line got through: %q", out.String())
 	}
 }

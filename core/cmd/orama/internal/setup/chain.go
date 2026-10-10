@@ -23,6 +23,8 @@ const (
 	chainReadLimit = 4 << 20
 	// denom is the chain's base denomination.
 	denom = "norama"
+	// chainBodyShown is how much of a refused answer an error carries.
+	chainBodyShown = 200
 	// roleNamePrefix is how the REST gateway names an x/nodes role in JSON.
 	roleNamePrefix = "ROLE_"
 )
@@ -77,7 +79,7 @@ func (s *restSession) get(ctx context.Context, path string, into any) (found boo
 		return false, nil
 	}
 	if resp.StatusCode != http.StatusOK {
-		return false, fmt.Errorf("read %s: HTTP %d: %.200s", path, resp.StatusCode, body)
+		return false, fmt.Errorf("read %s: HTTP %d: %s", path, resp.StatusCode, tail(string(body), chainBodyShown))
 	}
 	if err := json.Unmarshal(body, into); err != nil {
 		return false, fmt.Errorf("read %s: the answer is not the JSON expected: %w", path, err)
@@ -108,14 +110,14 @@ func (s *restSession) Params(ctx context.Context) (ChainParams, error) {
 	p := ChainParams{MinBond: map[int]*big.Int{}}
 	for _, b := range doc.Params.MinBond {
 		role, ok := roleNumber(b.Role)
-		amount, okAmount := new(big.Int).SetString(b.Amount, 10)
+		amount, okAmount := parseAmount(b.Amount)
 		if !ok || !okAmount {
 			return ChainParams{}, fmt.Errorf("the chain lists min_bond %q = %q, which is not a role and an amount", b.Role, b.Amount)
 		}
 		p.MinBond[role] = amount
 	}
 	var ok bool
-	if p.BondPerGiB, ok = new(big.Int).SetString(doc.Params.BondPerGiB, 10); !ok {
+	if p.BondPerGiB, ok = parseAmount(doc.Params.BondPerGiB); !ok {
 		return ChainParams{}, fmt.Errorf("the chain's bond_per_gib %q is not a number", doc.Params.BondPerGiB)
 	}
 	return p, nil
@@ -126,6 +128,18 @@ func notThere(found bool, what string) error {
 		return nil
 	}
 	return fmt.Errorf("the chain has no %s", what)
+}
+
+// maxAmountDigits bounds a number the chain node reports: no amount of norama has
+// more digits than this, and parsing a longer string would cost CPU for nothing.
+const maxAmountDigits = 40
+
+// parseAmount reads a non-negative integer the chain node reported.
+func parseAmount(s string) (*big.Int, bool) {
+	if s == "" || len(s) > maxAmountDigits || strings.HasPrefix(s, "-") || strings.HasPrefix(s, "+") {
+		return nil, false
+	}
+	return new(big.Int).SetString(s, 10)
 }
 
 // roleNumber maps the gateway's role name (ROLE_STORAGE) to clusterreg's number.
@@ -154,9 +168,9 @@ func (s *restSession) Balance(ctx context.Context, address string) (*big.Int, er
 	if !found || doc.Balance.Amount == "" {
 		return new(big.Int), nil
 	}
-	amount, ok := new(big.Int).SetString(doc.Balance.Amount, 10)
+	amount, ok := parseAmount(doc.Balance.Amount)
 	if !ok {
-		return nil, fmt.Errorf("the balance %q of %s is not a number", doc.Balance.Amount, address)
+		return nil, fmt.Errorf("the balance %q of %s is not an amount of norama", doc.Balance.Amount, address)
 	}
 	return amount, nil
 }
@@ -191,14 +205,14 @@ func (s *restSession) Node(ctx context.Context, id string) (*RegisteredNode, err
 	}
 	for _, b := range doc.Node.Bonds {
 		role, ok := roleNumber(b.Role)
-		amount, okAmount := new(big.Int).SetString(b.Amount, 10)
+		amount, okAmount := parseAmount(b.Amount)
 		if !ok || !okAmount {
 			return nil, fmt.Errorf("node %q has a bond %q = %q that is not a role and an amount", id, b.Role, b.Amount)
 		}
 		n.Bonds[role] = amount
 	}
 	if doc.Node.Capacity != "" {
-		c, ok := new(big.Int).SetString(doc.Node.Capacity, 10)
+		c, ok := parseAmount(doc.Node.Capacity)
 		if !ok || !c.IsUint64() {
 			return nil, fmt.Errorf("node %q declares capacity %q, which is not a byte count", id, doc.Node.Capacity)
 		}

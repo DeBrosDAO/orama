@@ -109,3 +109,10 @@ func TestParseHardware_aFullDiskIsAnAnswerNotAMissingLine(t *testing.T) {
 		t.Fatalf("got %v, want the full disk named", err)
 	}
 }
+
+func TestParseHardware_aLongProbeOutputIsNotRepeatedWhole(t *testing.T) {
+	_, err := ParseHardware(strings.Repeat("x", 5000))
+	if err == nil || len(err.Error()) > 400 {
+		t.Fatalf("got a %d byte error: output a machine controls is cut", len(err.Error()))
+	}
+}

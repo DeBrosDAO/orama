@@ -390,3 +390,14 @@ func TestTail_isCleaned(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+func TestTailBuffer_keepsOnlyTheEnd(t *testing.T) {
+	b := &tailBuffer{max: 10}
+	for range 1000 {
+		fmt.Fprint(b, "0123456789")
+	}
+	fmt.Fprint(b, "END")
+	if got := b.String(); len(got) != 10 || !strings.HasSuffix(got, "END") {
+		t.Errorf("got %q: only the last bytes of a machine's stderr are kept", got)
+	}
+}

@@ -114,7 +114,7 @@ echo %s; journalctl -u %s -n %d --no-pager 2>&1 | tail -n %d || true`,
 // moment to open it.
 func ParseChainState(out string) (ChainState, error) {
 	sec := splitMarked(out, markStatus, markActive, markLog)
-	st := ChainState{Running: strings.TrimSpace(sec[markActive]) == "active", Detail: strings.TrimSpace(sec[markLog])}
+	st := ChainState{Running: strings.TrimSpace(sec[markActive]) == "active", Detail: CleanTerminal(strings.TrimSpace(sec[markLog]))}
 	body := strings.TrimSpace(sec[markStatus])
 	if body == "" {
 		return st, nil

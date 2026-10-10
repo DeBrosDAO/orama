@@ -3,6 +3,7 @@ package setup
 import (
 	"context"
 	"errors"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -47,6 +48,18 @@ func TestProbeScript_readsTheUnitsAndFiles(t *testing.T) {
 		if !strings.Contains(probeScript, want) {
 			t.Errorf("the probe does not look at %s", want)
 		}
+	}
+}
+
+func TestProbeScript_isValidShellAndReadsTimeInUTC(t *testing.T) {
+	for _, shell := range []string{"bash", "sh"} {
+		cmd := exec.Command(shell, "-n", "-c", probeScript)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Errorf("%s -n: %v\n%s", shell, err, out)
+		}
+	}
+	if !strings.Contains(probeScript, "TZ=UTC systemctl show orama-node.service") {
+		t.Error("systemd's timestamp must be read in UTC: an abbreviation of the host's zone is ambiguous to date(1)")
 	}
 }
 

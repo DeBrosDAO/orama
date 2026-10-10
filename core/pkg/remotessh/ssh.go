@@ -107,9 +107,10 @@ func Command(ctx context.Context, node inspector.Node, command string) (*exec.Cm
 		return nil, fmt.Errorf("no SSH key for %s (call PrepareNodeKeys first)", node.Name())
 	}
 	args := append(node.HostKeyOptions(), baseSSHOptions()...)
-	// ForwardAgent=no: the operator's ssh_config may forward an agent, and a machine
-	// being set up is not given one. ClearAllForwardings: nor any port forward.
-	args = append(args, "-o", "ForwardAgent=no", "-o", "ClearAllForwardings=yes",
+	// BatchMode: a server's prompt (a keyboard-interactive challenge) is never put
+	// on the operator's terminal, where no filter reaches it. ClearAllForwardings:
+	// no port forward from the operator's ssh_config.
+	args = append(args, "-o", "BatchMode=yes", "-o", "ClearAllForwardings=yes",
 		"-i", node.SSHKey, fmt.Sprintf("%s@%s", node.User, node.Host), command)
 	return exec.CommandContext(ctx, "ssh", args...), nil
 }
@@ -151,5 +152,8 @@ func baseSSHOptions() []string {
 		"-o", fmt.Sprintf("ServerAliveInterval=%d", sshServerAliveInterval),
 		"-o", fmt.Sprintf("ServerAliveCountMax=%d", sshServerAliveCountMax),
 		"-o", "IdentitiesOnly=yes",
+		// The operator's ssh_config may forward an agent; a machine the CLI reaches is
+		// never given one.
+		"-o", "ForwardAgent=no",
 	}
 }

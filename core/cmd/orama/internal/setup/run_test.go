@@ -71,16 +71,38 @@ func TestRun_threeFullNodesFromScratch(t *testing.T) {
 	}
 }
 
-func TestRun_restartsForceOnlyOnAClusterTooSmallForQuorum(t *testing.T) {
+func TestRun_aSmallClusterIsForcedOnlyWhenTheNodeItselfRefuses(t *testing.T) {
 	small := newHarness()
+	small.enroll.quorumRefuses = true
 	mustRun(t, small, small.opts(ip1, ip2))
-	if small.w.index("restart-force=true "+ip1) < 0 || small.w.index("restart-force=false") >= 0 {
-		t.Errorf("a two-node cluster cannot keep quorum through a restart:\n%s", strings.Join(small.w.entries(), "\n"))
+	entries := strings.Join(small.w.entries(), "\n")
+	if small.w.index("restart-force=false "+ip1) < 0 || small.w.index("restart-force=true "+ip1) < 0 ||
+		small.w.index("restart-force=false "+ip1) > small.w.index("restart-force=true "+ip1) {
+		t.Errorf("a two-node cluster cannot keep quorum through a restart: the node is asked first, then forced:\n%s", entries)
 	}
-	big := newHarness()
-	mustRun(t, big, big.opts(ip1, ip2, ip3))
-	if big.w.index("restart-force=true") >= 0 || big.w.count("restart-force=false") != 3 {
-		t.Errorf("three nodes restart with the node's own quorum check:\n%s", strings.Join(big.w.entries(), "\n"))
+	if !strings.Contains(small.report.text(), "too few to keep a quorum") {
+		t.Errorf("forcing is announced:\n%s", small.report.text())
+	}
+
+	willing := newHarness()
+	mustRun(t, willing, willing.opts(ip1, ip2))
+	if willing.w.index("restart-force=true") >= 0 {
+		t.Errorf("a node that does not refuse is never forced:\n%s", strings.Join(willing.w.entries(), "\n"))
+	}
+}
+
+func TestRun_aClusterOfThreeIsNeverForced(t *testing.T) {
+	h := newHarness()
+	h.enroll.quorumRefuses = true
+	_, err := run(t, h, h.opts(ip1, ip2, ip3))
+	if err == nil || !strings.Contains(err.Error(), "restart the cluster node") || !strings.Contains(err.Error(), "--force") {
+		t.Fatalf("got %v: the node's refusal on a cluster that can keep a quorum is the answer", err)
+	}
+	if h.w.index("restart-force=true") >= 0 {
+		t.Error("a cluster of three is restarted under the node's own check, never forced")
+	}
+	if h.w.count("restart-force=false") != 1 {
+		t.Errorf("the next machine is not touched after a refusal, got %d restarts", h.w.count("restart-force=false"))
 	}
 }
 
@@ -681,5 +703,33 @@ func TestRun_theBudgetIsPrintedBeforeAnythingIsSigned(t *testing.T) {
 	mustRun(t, h, h.opts(ip1))
 	if !strings.Contains(h.report.text(), "this setup bonds 10 ORAMA, self-bonds 1000 ORAMA") {
 		t.Errorf("lines:\n%s", h.report.text())
+	}
+}
+
+func TestRun_aBondTheChainReportsAboveTheTargetIsNotSigned(t *testing.T) {
+	h := newHarness()
+	h.w.operatorRegistered = true
+	// 20 ORAMA already bonded against a 10 ORAMA target is not a reason to bond more.
+	h.w.nodes["alice"] = &RegisteredNode{Roles: []int{clusterreg.RoleStorage}, CapacityBytes: 10_000_000_000,
+		Bonds: map[int]*big.Int{clusterreg.RoleStorage: big.NewInt(20 * noramaPerOrama)}}
+	mustRun(t, h, h.opts(ip1))
+	if h.w.count("tx bond") != 0 {
+		t.Errorf("an over-bonded node is left as it is:\n%s", strings.Join(h.w.entries(), "\n"))
+	}
+}
+
+func TestBondRoles_refusesToSignAnInflatedDelta(t *testing.T) {
+	h := newHarness()
+	r := &runner{d: h.deps}
+	n := &nodeRun{plan: NodePlan{Name: "alice", Roles: []int{clusterreg.RoleStorage}}}
+	// A negative bond that reached here would make the difference larger than the target.
+	node := &RegisteredNode{Bonds: map[int]*big.Int{clusterreg.RoleStorage: big.NewInt(-5 * noramaPerOrama)}}
+	target := map[int]*big.Int{clusterreg.RoleStorage: big.NewInt(10 * noramaPerOrama)}
+	err := r.bondRoles(context.Background(), &fakeSession{w: h.w}, n, node, target)
+	if err == nil || !strings.Contains(err.Error(), "not signing a bond of 15000000000") {
+		t.Fatalf("got %v", err)
+	}
+	if h.w.count("tx bond") != 0 {
+		t.Error("nothing is signed")
 	}
 }

@@ -113,6 +113,17 @@ func TestParseChainState_catchingUp(t *testing.T) {
 	}
 }
 
+func TestParseChainState_theJournalCannotDriveTheTerminal(t *testing.T) {
+	out := "__STATUS__\n\n__ACTIVE__\nactive\n__LOG__\npeer says \x1b]52;c;ZXZpbA==\x07 hello\n"
+	st, err := ParseChainState(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.ContainsAny(st.Detail, "\x1b\x07") || !strings.Contains(st.Detail, "hello") {
+		t.Errorf("detail %q: the log of a node is text a peer wrote", st.Detail)
+	}
+}
+
 func TestParseChainState_garbage(t *testing.T) {
 	if _, err := ParseChainState("__STATUS__\nnot json\n__ACTIVE__\nactive\n"); err == nil {
 		t.Error("a status that is not JSON is an error")

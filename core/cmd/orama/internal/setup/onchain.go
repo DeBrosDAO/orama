@@ -190,6 +190,9 @@ func (r *runner) bondRoles(ctx context.Context, sess ChainSession, n *nodeRun, n
 			continue
 		}
 		delta := new(big.Int).Sub(target, have)
+		if delta.Sign() <= 0 || delta.Cmp(target) > 0 {
+			return fmt.Errorf("node %q: the chain reports a bond of %s for role %d against a target of %s: not signing a bond of %s", n.plan.Name, have, role, target, delta)
+		}
 		if _, err := sess.Bond(ctx, clusterreg.Bond{NodeID: n.plan.Name, Role: role, Amount: delta.String()}); err != nil {
 			return fmt.Errorf("bond %s ORAMA to role %d of node %q: %w", Orama(delta), role, n.plan.Name, err)
 		}

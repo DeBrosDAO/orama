@@ -7,12 +7,14 @@ package setupcmd
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"os/signal"
 	"strings"
+	"sync"
 
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
@@ -96,6 +98,20 @@ func init() {
 }
 
 func run(cmd *cobra.Command, args []string) error {
+	return cleanError(runSetup(cmd, args))
+}
+
+// cleanError makes the message of err safe to print: it carries text the machines,
+// the seeds and the chain nodes produced, and a control sequence in it could
+// rewrite the operator's terminal. The exit code is kept.
+func cleanError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return clierr.Wrap(clierr.CodeOf(err), errors.New(setup.CleanTerminal(err.Error())))
+}
+
+func runSetup(cmd *cobra.Command, args []string) error {
 	opts, err := optionsFromFlags(cmd, args)
 	if err != nil {
 		return err
@@ -115,6 +131,12 @@ func runFlags(ctx context.Context, cmd *cobra.Command, opts setup.Options, tty b
 		return err
 	}
 	out := cmd.OutOrStdout()
+	restoreStreams, err := filterStreams()
+	if err != nil {
+		return fmt.Errorf("filter what the machines print: %w", err)
+	}
+	restore := sync.OnceFunc(restoreStreams)
+	defer restore()
 	if opts.Exit && !opts.Yes {
 		if err := confirmExit(os.Stdin, out, &opts); err != nil {
 			return err
@@ -125,6 +147,9 @@ func runFlags(ctx context.Context, cmd *cobra.Command, opts setup.Options, tty b
 		deps.Confirm = func(p *setup.Plan) (bool, error) { return askYesNo(os.Stdin, out, "Go ahead?") }
 	}
 	res, err := setup.Run(ctx, opts, deps)
+	// The streams go back before anything full-screen runs: `orama status` draws
+	// escape sequences the filter would strip.
+	restore()
 	if err != nil {
 		return err
 	}

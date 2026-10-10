@@ -78,8 +78,16 @@ func captureOutput(m *Model) (restore func(), err error) {
 // pump calls feed with each line read from r until it ends.
 func pump(r io.Reader, feed func(string)) {
 	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
+	sc.Buffer(make([]byte, 0, pumpInitialBuffer), pumpMaxLine)
 	for sc.Scan() {
 		feed(sc.Text())
 	}
+	// A line longer than the limit ends the scan; what follows is still read and
+	// dropped, or the command writing to the pipe would block on it for good.
+	_, _ = io.Copy(io.Discard, r)
 }
+
+const (
+	pumpInitialBuffer = 64 << 10
+	pumpMaxLine       = 1 << 20
+)

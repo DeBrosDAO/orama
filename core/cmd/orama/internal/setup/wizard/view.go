@@ -160,7 +160,7 @@ func (m *Model) inspectBody() string {
 		if i.Err != nil {
 			glyph = "[!!]"
 		}
-		b.WriteString("  " + glyph + " " + i.Summary() + "\n")
+		b.WriteString("  " + glyph + " " + setup.CleanTerminal(i.Summary()) + "\n")
 	}
 	return b.String()
 }
@@ -172,7 +172,7 @@ func (m *Model) confirmBody() string {
 	var b strings.Builder
 	b.WriteString("This is what setup will do:\n\n")
 	for _, line := range m.plan.Summary() {
-		b.WriteString("  " + line + "\n")
+		b.WriteString("  " + setup.CleanTerminal(line) + "\n")
 	}
 	b.WriteString("\nStart? (y/n)")
 	return b.String()

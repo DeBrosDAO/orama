@@ -398,6 +398,19 @@ func TestCLIRecorder_activeFor(t *testing.T) {
 	}
 }
 
+func TestClusterDomain_findingsCannotDriveTheTerminal(t *testing.T) {
+	c := clusterDomain{
+		read: func(string) ([]dnsdelegation.Delegation, error) { return []dnsdelegation.Delegation{delegation()}, nil },
+		check: func(context.Context, dnsdelegation.Delegation) ([]dnsdelegation.Finding, error) {
+			return []dnsdelegation.Finding{{Kind: dnsdelegation.FindingMissingNS, Record: "x\x1b[2J.example.org", Want: "ns1"}}, nil
+		},
+	}
+	_, err := c.ready(context.Background(), "env", "cluster.example.org")
+	if err == nil || strings.ContainsRune(err.Error(), '\x1b') {
+		t.Fatalf("got %q: what the parent zone answered is text someone else wrote", err)
+	}
+}
+
 func TestCliChecksum(t *testing.T) {
 	good := `{"version":"0.3.1","checksums":{"orama":"` + strings.ToUpper(testCLISHA) + `","oramad":"` + testManifest + `"}}`
 	if got, err := cliChecksum([]byte(good)); err != nil || got != testCLISHA {

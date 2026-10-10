@@ -166,3 +166,27 @@ func TestRestSession_aSlowChainTimesOut(t *testing.T) {
 		t.Fatal("a chain that never answers must be an error")
 	}
 }
+
+func TestParseAmount(t *testing.T) {
+	for in, ok := range map[string]bool{
+		"0": true, "1000000000": true, "": false, "-5": false, "+5": false, "1e9": false, "12 ": false,
+		strings.Repeat("9", maxAmountDigits): true, strings.Repeat("9", maxAmountDigits+1): false,
+	} {
+		if _, got := parseAmount(in); got != ok {
+			t.Errorf("parseAmount(%q) ok = %v, want %v", in, got, ok)
+		}
+	}
+}
+
+func TestRestSession_aNegativeBondIsRefused(t *testing.T) {
+	s := chainServer(t, map[string]func(http.ResponseWriter){
+		"/orama/nodes/v1/node/alice": jsonBody(`{"node":{"bonds":[{"role":"ROLE_STORAGE","amount":"-1000000000000"}]}}`),
+		"/orama/nodes/v1/params":     jsonBody(`{"params":{"min_bond":[{"role":"ROLE_STORAGE","amount":"-1"}],"bond_per_gib":"1"}}`),
+	})
+	if _, err := s.Node(context.Background(), "alice"); err == nil {
+		t.Error("a node reporting a negative bond would make setup sign an inflated one")
+	}
+	if _, err := s.Params(context.Background()); err == nil {
+		t.Error("a negative minimum bond is not a parameter")
+	}
+}

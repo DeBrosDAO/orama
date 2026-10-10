@@ -2,6 +2,10 @@ package setupcmd
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
+	"io"
+	"os"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -209,6 +213,23 @@ func TestPrintSummary(t *testing.T) {
 	}
 }
 
+func TestCleanError_keepsTheCodeAndDropsTheEscapes(t *testing.T) {
+	err := cleanError(clierr.Conflict("the chain says \x1b]52;c;ZXZpbA==\x07 no"))
+	if clierr.CodeOf(err) != clierr.CodeConflict {
+		t.Errorf("code %d, want the conflict code kept", clierr.CodeOf(err))
+	}
+	if strings.ContainsAny(err.Error(), "\x1b\x07") || !strings.Contains(err.Error(), "the chain says") {
+		t.Errorf("message %q", err.Error())
+	}
+	if cleanError(nil) != nil {
+		t.Error("no error stays no error")
+	}
+	plain := cleanError(errors.New("bad\x1b[2J"))
+	if clierr.CodeOf(plain) != clierr.CodeFailure || strings.ContainsRune(plain.Error(), '\x1b') {
+		t.Errorf("%v (code %d)", plain, clierr.CodeOf(plain))
+	}
+}
+
 func TestCmd_isRegisteredWithItsFlags(t *testing.T) {
 	for _, name := range []string{"network", "ip", "name", "cluster-only", "exit", "storage-gb", "yes", "user", "password", "bootstrap-key", "host-key", "domain", "env", "tor-network", "asn", "no-validator", "contact", "acme-ca"} {
 		if Cmd.Flags().Lookup(name) == nil {
@@ -217,5 +238,35 @@ func TestCmd_isRegisteredWithItsFlags(t *testing.T) {
 	}
 	if Cmd.Flags().ShorthandLookup("y") == nil {
 		t.Error("-y is --yes")
+	}
+}
+
+func TestFilterStreams_whatReachesTheRealStreamsIsCleaned(t *testing.T) {
+	realR, realW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldOut, oldErr := os.Stdout, os.Stderr
+	os.Stdout, os.Stderr = realW, realW
+	restore, err := filterStreams()
+	if err != nil {
+		os.Stdout, os.Stderr = oldOut, oldErr
+		t.Fatal(err)
+	}
+	fmt.Fprint(os.Stdout, "Continue? [y/N]: ")
+	fmt.Fprint(os.Stderr, "\x1b]0;owned\x07 from a machine")
+	restore()
+	if os.Stdout != realW || os.Stderr != realW {
+		t.Fatal("the streams are not put back")
+	}
+	os.Stdout, os.Stderr = oldOut, oldErr
+	_ = realW.Close()
+	raw, err := io.ReadAll(realR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(raw)
+	if strings.ContainsAny(got, "\x1b\x07") || !strings.Contains(got, "Continue? [y/N]: ") || !strings.Contains(got, "from a machine") {
+		t.Errorf("got %q", got)
 	}
 }

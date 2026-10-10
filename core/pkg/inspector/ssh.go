@@ -90,6 +90,7 @@ func runSSHOnce(ctx context.Context, node Node, command string) SSHResult {
 		"-o", "ConnectTimeout=10",
 		"-o", "BatchMode=yes",
 		"-o", "IdentitiesOnly=yes",
+		"-o", "ForwardAgent=no",
 		"-i", node.SSHKey,
 		fmt.Sprintf("%s@%s", node.User, node.Host),
 		command,

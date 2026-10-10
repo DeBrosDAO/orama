@@ -35,13 +35,31 @@ func (s sshShell) Run(ctx context.Context, command string, stdin io.Reader, out 
 	if err != nil {
 		return err
 	}
-	var stderr bytes.Buffer
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, out, &stderr
+	stderr := &tailBuffer{max: stderrKept}
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, out, stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("run on %s: %w: %s", s.node.Host, err, tail(stderr.String(), stderrKept))
 	}
 	return nil
 }
+
+// tailBuffer keeps the end of what is written to it, at most max bytes: all that
+// an error shows of a command's stderr, so a machine that prints without end
+// cannot fill the operator's memory.
+type tailBuffer struct {
+	max int
+	buf []byte
+}
+
+func (t *tailBuffer) Write(p []byte) (int, error) {
+	t.buf = append(t.buf, p...)
+	if len(t.buf) > t.max {
+		t.buf = append([]byte(nil), t.buf[len(t.buf)-t.max:]...)
+	}
+	return len(p), nil
+}
+
+func (t *tailBuffer) String() string { return string(t.buf) }
 
 func (s sshShell) Upload(local, remote string) error {
 	return remotessh.UploadFile(s.node, local, remote)

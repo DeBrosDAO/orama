@@ -1,6 +1,9 @@
 package setup
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestHostKeyInfos_namesTheTypeOfEachKey(t *testing.T) {
 	hk := &hostKey{
@@ -46,5 +49,24 @@ func TestEnrollPassword_otherwiseTheVaultLogin(t *testing.T) {
 	got, err := enrollPassword(Options{IP: "203.0.113.5", User: "ubuntu"})
 	if err != nil || got != "ubuntu@203.0.113.5" {
 		t.Fatalf("got %q, %v", got, err)
+	}
+}
+
+func TestReachableNode_isHeldToTheKnownHostsFileAndItsInputsAreChecked(t *testing.T) {
+	node, err := reachableNode("203.0.113.5", "", "/home/me/.orama/known_hosts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if node.User != "root" || node.VaultTarget != "203.0.113.5/root" || node.KnownHostsFile != "/home/me/.orama/known_hosts" {
+		t.Errorf("%+v", node)
+	}
+	opts := strings.Join(node.HostKeyOptions(), " ")
+	if !strings.Contains(opts, "StrictHostKeyChecking=yes") || !strings.Contains(opts, "UserKnownHostsFile=/home/me/.orama/known_hosts") {
+		t.Errorf("a recorded machine is reached under the stored host key and no other: %s", opts)
+	}
+	for _, bad := range [][2]string{{"203.0.113.5", "-oProxyCommand=x"}, {"203.0.113.5", "a b"}, {"not-an-ip", "root"}, {"2001:db8::1", "root"}, {"", "root"}} {
+		if _, err := reachableNode(bad[0], bad[1], "/k"); err == nil {
+			t.Errorf("reachableNode(%q, %q) was accepted", bad[0], bad[1])
+		}
 	}
 }
