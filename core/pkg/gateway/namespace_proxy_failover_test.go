@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/httputil"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 )
 
@@ -184,5 +185,34 @@ func TestNamespaceProxy_aValidatedSlowUploadReachesTheMember(t *testing.T) {
 	}
 	if n := <-got; n != len("headtail") {
 		t.Fatalf("the member received %d bytes, want %d", n, len("headtail"))
+	}
+}
+
+// The stagenet demo page could not call its functions: the main gateway's CORS middleware set
+// Access-Control-Allow-Origin, the namespace gateway set it too, and the proxy added the second to
+// the first. A browser refuses two values. The namespace gateway's header replaces the proxy's.
+func TestCopyProxiedHeaders_theUpstreamsHeaderReplacesTheProxysOwn(t *testing.T) {
+	rec := httptest.NewRecorder()
+	rec.Header().Set("Access-Control-Allow-Origin", "https://demo.example.org")
+	rec.Header().Set("X-Proxy-Only", "kept")
+	resp := &http.Response{Header: http.Header{}}
+	resp.Header.Set("Access-Control-Allow-Origin", "https://demo.example.org")
+	resp.Header.Add("Set-Cookie", "a=1")
+	resp.Header.Add("Set-Cookie", "b=2")
+	resp.Header.Set(httputil.HeaderTenantOrigin, "ns")
+
+	copyProxiedHeaders(rec, resp)
+
+	if got := rec.Header().Values("Access-Control-Allow-Origin"); len(got) != 1 {
+		t.Errorf("Access-Control-Allow-Origin = %q, want one value", got)
+	}
+	if got := rec.Header().Values("Set-Cookie"); len(got) != 2 {
+		t.Errorf("Set-Cookie = %q, want both of the upstream's", got)
+	}
+	if rec.Header().Get("X-Proxy-Only") != "kept" {
+		t.Error("a header only the proxy set was dropped")
+	}
+	if rec.Header().Get(httputil.HeaderTenantOrigin) != "" {
+		t.Error("the tenant-origin marker reached the client")
 	}
 }

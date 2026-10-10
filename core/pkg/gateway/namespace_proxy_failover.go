@@ -95,14 +95,19 @@ func (g *Gateway) retainBreakers(namespace string, targets []namespaceGatewayTar
 // copyProxiedHeaders copies a proxied response's headers to w, leaving out the
 // tenant-origin marker, which is for the gateway that forwarded the request and
 // not for its client.
+//
+// Each header the namespace gateway sent replaces the one this gateway's own
+// middleware already set: the response is the namespace gateway's. Added to it
+// instead, the CORS headers both gateways set came out twice, and a browser
+// refuses a response whose Access-Control-Allow-Origin holds two values, so
+// every page calling a namespace's functions failed (the stagenet demo, 2026-10-10).
+// A header with several values upstream, such as Set-Cookie, keeps all of them.
 func copyProxiedHeaders(w http.ResponseWriter, resp *http.Response) {
 	for key, values := range resp.Header {
 		if strings.EqualFold(key, httputil.HeaderTenantOrigin) {
 			continue
 		}
-		for _, value := range values {
-			w.Header().Add(key, value)
-		}
+		w.Header()[key] = append([]string(nil), values...)
 	}
 }
 
