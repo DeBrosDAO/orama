@@ -107,7 +107,10 @@ func Command(ctx context.Context, node inspector.Node, command string) (*exec.Cm
 		return nil, fmt.Errorf("no SSH key for %s (call PrepareNodeKeys first)", node.Name())
 	}
 	args := append(node.HostKeyOptions(), baseSSHOptions()...)
-	args = append(args, "-i", node.SSHKey, fmt.Sprintf("%s@%s", node.User, node.Host), command)
+	// ForwardAgent=no: the operator's ssh_config may forward an agent, and a machine
+	// being set up is not given one. ClearAllForwardings: nor any port forward.
+	args = append(args, "-o", "ForwardAgent=no", "-o", "ClearAllForwardings=yes",
+		"-i", node.SSHKey, fmt.Sprintf("%s@%s", node.User, node.Host), command)
 	return exec.CommandContext(ctx, "ssh", args...), nil
 }
 

@@ -85,6 +85,7 @@ func TestParseHardware_refusesAMissingOrBrokenLine(t *testing.T) {
 		"no disk":     "cpu=4\nram_kb=8000000\n",
 		"not numeric": "cpu=four\nram_kb=1\ndisk_kb=1\n",
 		"zero cpu":    "cpu=0\nram_kb=1\ndisk_kb=1\n",
+		"zero memory": "cpu=2\nram_kb=0\ndisk_kb=1\n",
 	} {
 		if _, err := ParseHardware(out); err == nil {
 			t.Errorf("%s: want an error, got none", name)
@@ -96,5 +97,15 @@ func TestParseHardware_ignoresTheProbesOtherLines(t *testing.T) {
 	hw, err := ParseHardware("arch=x86_64\ncpu=2\nram_kb=2097152\ndisk_kb=10485760\ncluster=1\n")
 	if err != nil || hw.CPUCores != 2 {
 		t.Fatalf("got %+v, %v", hw, err)
+	}
+}
+
+func TestParseHardware_aFullDiskIsAnAnswerNotAMissingLine(t *testing.T) {
+	hw, err := ParseHardware("cpu=4\nram_kb=8388608\ndisk_kb=0\n")
+	if err != nil || hw.FreeDiskBytes != 0 {
+		t.Fatalf("got %+v, %v", hw, err)
+	}
+	if err := CheckHardware(ProfileClusterOnly, 0, hw); err == nil || !strings.Contains(err.Error(), "0.0 GiB free disk") {
+		t.Fatalf("got %v, want the full disk named", err)
 	}
 }

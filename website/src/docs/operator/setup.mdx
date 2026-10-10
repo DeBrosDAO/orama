@@ -43,14 +43,14 @@ orama setup --network stagenet --name alice --yes \
 2. **Enrol and check every machine.** For each address: an SSH key in your vault, the host key pinned, the key installed over the credential you named, the architecture, hardware and what is already installed read. A machine below its floor stops the run here.
 3. **The release.** The newest release of the network's channel is fetched from the manifest's release repository and verified against the TUF root the network pins (the root built into your CLI, followed through the repository's rotations), then your RootWallet signs it as the build your cluster runs, and each machine verifies it again before it is put under `/opt/orama`. A machine that already runs exactly that build is left alone.
 4. **The cluster.** The first machine creates the cluster, the others join it, one after another; each invite is minted over SSH on a node that is already in. With `--domain`, the nodes are nameservers of that domain. After each machine the cluster and its nodes are recorded in your CLI configuration under the environment (`--env`, else the active environment on this network, else `<network>-<name>`).
-5. **The global layer** (full profile), on every machine at once, up to four at a time:
+5. **The global layer** (full profile), on several machines at once: as many as the cluster could lose and still hold its Raft quorum (one on a cluster of three, two on five), never more than four:
    - the trust point is read through two of the network's seeds: the newest block both serve less 100 blocks, which must have the same hash on both (seeds that disagree stop the run);
    - `orama global install --colocated` installs the services; the chain home is created from the network's genesis, and the chain's configuration is written by the installer: the address it announces (your public IP, port 31000), no peer exchange, Prometheus on loopback, custom pruning, a snapshot every 1,000 blocks (two kept), and the state-sync block with the two seeds, the trusted block and a 7-day trust period;
    - the chain, the public IPFS and the relay (if any) are started;
-   - setup waits, with a deadline, until the chain has restored a snapshot and caught up. If the chain unit stays down, the wait ends with the end of its log.
-6. **Restart, one machine at a time.** The cluster gateway reads the chain's listeners when it starts, so each cluster node is restarted, and setup waits until it carries its share of the cluster again before it touches the next. A cluster of fewer than three nodes cannot keep a quorum through a restart; the node's own quorum check is bypassed there, and only there.
+   - setup waits, with a deadline, until the chain has restored a snapshot and caught up. If the chain unit stays down, or the machine cannot be polled five times running, the wait ends, with the end of the chain's log or the last error.
+6. **Restart, one machine at a time.** The cluster gateway reads the chain's listeners when it starts, so each cluster node whose gateway started before its chain unit was installed (this run's installs, and a machine an earlier run left that way) is restarted, and setup waits until it carries its share of the cluster again before it touches the next. A cluster of fewer than three nodes cannot keep a quorum through a restart; the node's own quorum check is bypassed there, and only there.
 7. **On the chain**, one transaction at a time, signed by your RootWallet with the account number, sequence, gas and fee derived:
-   - the operator account is checked for funds (see below);
+   - the budget is printed (the bonds, the self-bond, the fee allowance) and checked against a ceiling of 1,000,000 ORAMA, because the figures come from the chain node setup has just installed; the operator account is then checked for funds (see below);
    - register the operator, unless it is registered;
    - for each node: read its keys (the hot key is created on first use), register it with its roles, endpoint and autonomous system number, bond each role, declare its storage capacity, start the provider, and, on the first node, create the validator with the 1,000 ORAMA self-bond;
    - claim the node's name.
@@ -68,7 +68,9 @@ The operator account needs ORAMA for the bonds (the storage bond is the network'
 
 ## Running it again
 
-Setup reads each machine before it changes it, so the same command, or the same command with more addresses, is safe to run again. A machine with `orama-node.service` has its cluster step skipped; one with the chain unit has its global layer skipped; one whose `/opt/orama/manifest.json` is the release's has its upload skipped; a node, a bond, a capacity or a validator the chain already shows is not sent again. A failed run leaves a CLI that knows the nodes that were installed.
+Setup reads each machine before it changes it, so the same command, or the same command with more addresses, is safe to run again. A machine with `orama-node.service` has its cluster step skipped, once it answers; one with the chain unit has its global layer skipped, and its chain started if a stopped run left it down; a machine whose `/opt/orama/manifest.json` and `bin/orama` are the release's has its upload skipped; a node, a bond, a capacity or a validator the chain already shows is not sent again. The wait for the chain to catch up is always made, so a run that stopped while it was syncing never registers anything on a chain that is behind. A failed run leaves a CLI that knows the nodes that were installed, and a node of that cluster is reached again with the key and host key setup stored the first time, without asking.
+
+When a run stops at a step that waits (the chain, DNS), the error ends with the `orama setup` command that runs the same setup again.
 
 ## The exit relay
 

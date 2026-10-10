@@ -201,8 +201,8 @@ func TestChoicesFrom_marksTheActiveNetworkTheDefault(t *testing.T) {
 func TestPrintSummary(t *testing.T) {
 	var out bytes.Buffer
 	plan := &setup.Plan{Nodes: []setup.NodePlan{{IP: "203.0.113.10"}, {IP: "203.0.113.11"}}}
-	printSummary(&out, &setup.Result{Plan: plan, Env: "stagenet-alice", Operator: "orama1abc", Pending: []string{"claim a name"}})
-	for _, want := range []string{`recorded as "stagenet-alice"`, "203.0.113.10", "203.0.113.11", "Operator account: orama1abc", "Still to do: claim a name", "orama status --env stagenet-alice"} {
+	printSummary(&out, &setup.Result{Plan: plan, Env: "stagenet-alice", Operator: "orama1abc"})
+	for _, want := range []string{`recorded as "stagenet-alice"`, "203.0.113.10", "203.0.113.11", "Operator account: orama1abc", "orama status --env stagenet-alice"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("summary lacks %q:\n%s", want, out.String())
 		}

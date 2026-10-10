@@ -397,3 +397,66 @@ func TestCLIRecorder_activeFor(t *testing.T) {
 		t.Errorf("an environment on another network is not this network's: %q", got)
 	}
 }
+
+func TestCliChecksum(t *testing.T) {
+	good := `{"version":"0.3.1","checksums":{"orama":"` + strings.ToUpper(testCLISHA) + `","oramad":"` + testManifest + `"}}`
+	if got, err := cliChecksum([]byte(good)); err != nil || got != testCLISHA {
+		t.Fatalf("got %q, %v: the digest is compared as lowercase hex", got, err)
+	}
+	for name, doc := range map[string]string{
+		"not json":     "<html>",
+		"no checksums": `{"version":"1"}`,
+		"no orama":     `{"checksums":{"oramad":"` + testManifest + `"}}`,
+		"not a digest": `{"checksums":{"orama":"abc"}}`,
+	} {
+		if _, err := cliChecksum([]byte(doc)); err == nil {
+			t.Errorf("%s: want an error", name)
+		}
+	}
+}
+
+func TestClusterDomain_theFinalErrorSaysWhichQuestionWasUnanswered(t *testing.T) {
+	cases := map[string]struct {
+		c    clusterDomain
+		want string
+	}{
+		"the cluster has no nameserver": {
+			clusterDomain{read: func(string) ([]dnsdelegation.Delegation, error) { return nil, errors.New("ssh: connection refused") }},
+			"the cluster's nameservers: ssh: connection refused",
+		},
+		"DNS cannot be asked": {
+			clusterDomain{
+				read: func(string) ([]dnsdelegation.Delegation, error) { return []dnsdelegation.Delegation{delegation()}, nil },
+				check: func(context.Context, dnsdelegation.Delegation) ([]dnsdelegation.Finding, error) {
+					return nil, errors.New("SERVFAIL")
+				},
+			},
+			"asking DNS: SERVFAIL",
+		},
+		"the records are missing": {
+			clusterDomain{
+				read: func(string) ([]dnsdelegation.Delegation, error) { return []dnsdelegation.Delegation{delegation()}, nil },
+				check: func(context.Context, dnsdelegation.Delegation) ([]dnsdelegation.Finding, error) {
+					return []dnsdelegation.Finding{{Kind: dnsdelegation.FindingMissingNS, Record: "cluster.example.org", Want: "ns1.cluster.example.org"}}, nil
+				},
+			},
+			"the parent zone does not return the records yet",
+		},
+		"no certificate yet": {
+			clusterDomain{
+				read:  func(string) ([]dnsdelegation.Delegation, error) { return []dnsdelegation.Delegation{delegation()}, nil },
+				check: func(context.Context, dnsdelegation.Delegation) ([]dnsdelegation.Finding, error) { return nil, nil },
+				dialCert: func(context.Context, string) (*tls.ConnectionState, error) {
+					return nil, errors.New("connection refused")
+				},
+			},
+			"the cluster's certificate: connection refused",
+		},
+	}
+	for name, tc := range cases {
+		err := tc.c.Wait(context.Background(), "env", "cluster.example.org", time.Millisecond, 15*time.Millisecond)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: got %v, want it to contain %q", name, err, tc.want)
+		}
+	}
+}

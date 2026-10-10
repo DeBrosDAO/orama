@@ -18,14 +18,17 @@ import (
 // every value quoted, so the tests read exactly what reaches the machine.
 
 const (
-	orama = "/opt/orama/bin/orama"
+	stagedBinDir = "/opt/orama/bin"
+	orama        = stagedBinDir + "/orama"
+	// providerAccount is the storage provider's system account.
+	providerAccount = "orama-provider"
 	// globalStageDir is where the genesis is put for `orama global install
 	// --init-chain`: a root-only directory, because the installer refuses a genesis
 	// whose directory anyone else could write.
 	globalStageDir = "/opt/orama/.setup-global"
 	// torNetworkPath is where the Tor network file goes: beside the staged
 	// binaries, where `orama global install` reads it.
-	torNetworkPath = "/opt/orama/bin/" + constants.TorNetworkFile
+	torNetworkPath = stagedBinDir + "/" + constants.TorNetworkFile
 	// markers split the identity script's output.
 	markNodeID    = "__NODE_ID__"
 	markConsensus = "__CONSENSUS__"
@@ -51,7 +54,7 @@ func GlobalInstallCommand(in GlobalInstall) string {
 	n, q := in.Node, clusterops.ShellQuote
 	parts := []string{"sudo", orama, "global", "install", "--colocated",
 		"--services", q(strings.Join(n.ServiceNames(), ",")),
-		"--staged-dir", "/opt/orama/bin", "--manifest", install.DefaultStagedManifest,
+		"--staged-dir", stagedBinDir, "--manifest", install.DefaultStagedManifest,
 		"--public-storage-gb", strconv.FormatUint(n.StorageGB, 10),
 		"--init-chain", "--chain-id", q(in.ChainID), "--moniker", q(n.Name), "--genesis", q(globalStageDir + "/genesis.json"),
 		"--persistent-peers", q(in.Trust.PersistentPeers()),
@@ -62,7 +65,7 @@ func GlobalInstallCommand(in GlobalInstall) string {
 	for _, server := range in.Trust.Servers {
 		parts = append(parts, "--statesync-rpc", q(server))
 	}
-	if in.User != "root" {
+	if in.User != DefaultSSHUser {
 		parts = append(parts, "--chain-client-user", q(in.User))
 	}
 	if n.HasService(install.GlobalServiceRelay) {
@@ -183,7 +186,7 @@ runuser -u {CHAINUSER} -- {ORAMAD} --home {CHAINHOME} comet show-node-id
 echo {CONSENSUS}
 runuser -u {CHAINUSER} -- {ORAMAD} --home {CHAINHOME} comet show-validator
 echo {BINDING}
-{CLI} global bind --chain-id {CHAINID} --operator {OPERATOR} --service {SERVICE} --key-file "$HK" --key-type secp256k1 2>/dev/null
+{CLI} global bind --chain-id {CHAINID} --operator {OPERATOR} --service {SERVICE} --key-file "$HK" --key-type secp256k1
 `)
 }
 
@@ -249,7 +252,7 @@ func startServicesScript() string {
 	return fmt.Sprintf(`set -eu
 id=$(cat)
 dir=%s
-printf '%%s\n' "$id" | runuser -u orama-provider -- sh -c 'umask 022; tmp=$(mktemp "$1/.nid.XXXXXX") && cat >"$tmp" && mv -f "$tmp" "$1/node-id"' _ "$dir"
+printf '%%s\n' "$id" | runuser -u `+providerAccount+` -- sh -c 'umask 022; tmp=$(mktemp "$1/.nid.XXXXXX") && cat >"$tmp" && mv -f "$tmp" "$1/node-id"' _ "$dir"
 %s/orama global start provider
 `, constants.GlobalProviderHome, constants.GlobalBinDir)
 }

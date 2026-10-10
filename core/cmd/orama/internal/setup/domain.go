@@ -3,8 +3,10 @@ package setup
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/production/dnsdelegation"
@@ -65,21 +67,46 @@ func (c clusterDomain) Records(_ context.Context, env, domain string) ([]string,
 
 // Wait polls until the records resolve and the certificate is the cluster's.
 func (c clusterDomain) Wait(ctx context.Context, env, domain string, poll, deadline time.Duration) error {
-	return pollUntil(ctx, poll, deadline, domain+" to be delegated and to serve a certificate", func(ctx context.Context) (bool, error) {
-		d, err := c.delegationFor(env, domain)
-		if err != nil {
-			return false, nil
-		}
-		findings, err := c.check(ctx, d)
-		if err != nil || len(findings) > 0 {
-			return false, nil
-		}
-		state, err := c.dialCert(ctx, domain)
-		if err != nil {
-			return false, nil
-		}
-		return certServes(state, domain, time.Now()), nil
+	var why error
+	err := pollUntil(ctx, poll, deadline, domain+" to be delegated and to serve a certificate", func(ctx context.Context) (bool, error) {
+		done, reason := c.ready(ctx, env, domain)
+		why = reason
+		return done, nil
 	})
+	if err != nil {
+		return errors.Join(err, why)
+	}
+	return nil
+}
+
+// ready asks the three questions in order: does the cluster know its
+// nameservers, does the parent zone return them, does the cluster serve a
+// certificate for the name. When it is not ready, reason says which question
+// is the one unanswered.
+func (c clusterDomain) ready(ctx context.Context, env, domain string) (bool, error) {
+	d, err := c.delegationFor(env, domain)
+	if err != nil {
+		return false, fmt.Errorf("the cluster's nameservers: %w", err)
+	}
+	findings, err := c.check(ctx, d)
+	if err != nil {
+		return false, fmt.Errorf("asking DNS: %w", err)
+	}
+	if len(findings) > 0 {
+		lines := make([]string, len(findings))
+		for i, f := range findings {
+			lines[i] = f.String()
+		}
+		return false, fmt.Errorf("the parent zone does not return the records yet: %s", strings.Join(lines, "; "))
+	}
+	state, err := c.dialCert(ctx, domain)
+	if err != nil {
+		return false, fmt.Errorf("the cluster's certificate: %w", err)
+	}
+	if !certServes(state, domain, time.Now()) {
+		return false, fmt.Errorf("the cluster does not serve an issued certificate for %s yet", domain)
+	}
+	return true, nil
 }
 
 // dialCertificate reads the certificate the cluster serves for domain. The

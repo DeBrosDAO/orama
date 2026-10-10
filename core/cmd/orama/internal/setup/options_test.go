@@ -137,3 +137,75 @@ func TestParseIPList(t *testing.T) {
 		t.Error("a word that is not an address is refused")
 	}
 }
+
+func TestNormalize_moreRefusals(t *testing.T) {
+	for name, tc := range map[string]struct {
+		mutate func(*Options)
+		want   string
+	}{
+		"a user that is an ssh option":  {func(o *Options) { o.User = "-oProxyCommand=x" }, "--user"},
+		"a user with a space":           {func(o *Options) { o.User = "me you" }, "--user"},
+		"an environment with a slash":   {func(o *Options) { o.Env = "a/b" }, "--env"},
+		"a domain with a path":          {func(o *Options) { o.Domain = "cluster.example.org/x" }, "--domain"},
+		"a domain with a leading dash":  {func(o *Options) { o.Domain = "-x.example.org" }, "--domain"},
+		"a storage size that overflows": {func(o *Options) { o.StorageGB = 18_000_000_000 }, "--storage-gb"},
+	} {
+		o := validOptions()
+		tc.mutate(&o)
+		err := o.Normalize()
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: got %v, want an error containing %q", name, err, tc.want)
+		}
+	}
+}
+
+func TestNormalize_acceptsWhatItShould(t *testing.T) {
+	o := validOptions()
+	o.User, o.Env, o.Domain, o.StorageGB = "ubuntu", "stagenet-alice", "Cluster.Example.org.", MaxStorageGB
+	if err := o.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if o.Domain != "cluster.example.org" {
+		t.Errorf("the domain is lowercased and loses its root dot: %q", o.Domain)
+	}
+}
+
+func TestCommandLine_isTheCommandThatRunsTheSameSetup(t *testing.T) {
+	o := Options{
+		Network: "stagenet", Env: "stagenet-alice", Name: "alice", IPs: []string{"203.0.113.10", "203.0.113.11"},
+		HostKeys: map[string]string{"203.0.113.11": "SHA256:bbb", "203.0.113.10": "SHA256:aaa"},
+		User:     "ubuntu", BootstrapKey: "/home/me/my key", StorageGB: 80, NoValidator: true, ASN: 0, ASNSet: true,
+	}
+	got := o.CommandLine()
+	want := "orama setup --network stagenet --env stagenet-alice --name alice --ip 203.0.113.10 --ip 203.0.113.11 " +
+		"--host-key 203.0.113.10=SHA256:aaa --host-key 203.0.113.11=SHA256:bbb --user ubuntu --bootstrap-key '/home/me/my key' " +
+		"--storage-gb 80 --asn 0 --no-validator --yes"
+	if got != want {
+		t.Errorf("got\n  %s\nwant\n  %s", got, want)
+	}
+}
+
+func TestCommandLine_clusterOnlyAndSecrets(t *testing.T) {
+	o := Options{IPs: []string{"203.0.113.10"}, ClusterOnly: true, Domain: "cluster.example.org", UsePassword: true, Password: "typed-secret", HostKeys: map[string]string{"": "SHA256:aaa"}, User: DefaultSSHUser}
+	got := o.CommandLine()
+	if strings.Contains(got, "typed-secret") || strings.Contains(got, "--password") {
+		t.Errorf("a password typed for the run is never printed: %s", got)
+	}
+	for _, want := range []string{"--cluster-only", "--domain cluster.example.org", "--host-key SHA256:aaa", "--yes"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("%s lacks %q", got, want)
+		}
+	}
+	vault := Options{IPs: []string{"203.0.113.10"}, UsePassword: true, StorageGB: DefaultStorageGB}
+	if got := vault.CommandLine(); !strings.Contains(got, "--password") || strings.Contains(got, "--storage-gb") {
+		t.Errorf("the vault login is a switch and the default storage is not repeated: %s", got)
+	}
+}
+
+func TestShellArg(t *testing.T) {
+	for in, want := range map[string]string{"plain-1.2/x:y": "plain-1.2/x:y", "has space": "'has space'", "it's": `'it'"'"'s'`, "$(x)": "'$(x)'"} {
+		if got := shellArg(in); got != want {
+			t.Errorf("shellArg(%q) = %s, want %s", in, got, want)
+		}
+	}
+}

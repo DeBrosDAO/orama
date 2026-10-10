@@ -91,6 +91,30 @@ func NodeArch(node inspector.Node) (string, error) {
 	return nodeArchitecture(node)
 }
 
+// Reach opens a machine that was enrolled before: the RootWallet already has a
+// key on it and its host key is in ~/.orama/known_hosts. Nothing is installed
+// on it and nothing is asked; a host key that is not in that file is a refusal,
+// never a first contact (the same rule as --join-via).
+func Reach(ip, user string) (*Enrolled, error) {
+	if user == "" {
+		user = "root"
+	}
+	knownHosts, err := operatorKnownHosts()
+	if err != nil {
+		return nil, err
+	}
+	nodes := []inspector.Node{{Host: ip, User: user, VaultTarget: ip + "/" + user, KnownHostsFile: knownHosts}}
+	cleanup, err := remotessh.PrepareNodeKeys(nodes)
+	if err != nil {
+		return nil, fmt.Errorf("the RootWallet has no SSH key for %s@%s: %w", user, ip, err)
+	}
+	if err := checkNodeAccess(Options{IP: ip, User: user}, nodes[0]); err != nil {
+		cleanup()
+		return nil, err
+	}
+	return &Enrolled{Node: nodes[0], Close: cleanup}, nil
+}
+
 // HostKeyInfo is one SSH host key a machine presents: its type and its
 // SHA256:... fingerprint, as a provider's console shows it.
 type HostKeyInfo struct {

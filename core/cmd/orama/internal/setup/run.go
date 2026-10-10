@@ -41,8 +41,6 @@ type Result struct {
 	Operator string
 	// Skipped lists, by IP, the steps the machine already had.
 	Skipped map[string][]Step
-	// Pending is what the operator still has to do.
-	Pending []string
 }
 
 // nodeRun is one machine of the run.
@@ -240,6 +238,7 @@ func (r *runner) connect(ctx context.Context) error {
 		r.closers = append(r.closers, m.Close)
 		facts, err := m.Probe(ctx)
 		if err != nil {
+			r.emit(n.IP, StepEnroll, StateFailed, err.Error())
 			return fmt.Errorf("machine %s: read its hardware and what it has installed: %w", n.IP, err)
 		}
 		r.emit(n.IP, StepEnroll, StateDone, "")

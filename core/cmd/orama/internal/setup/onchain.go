@@ -54,6 +54,8 @@ func (r *runner) fund(ctx context.Context, sess ChainSession) (*Budget, error) {
 	if err != nil {
 		return nil, err
 	}
+	r.d.Report.Linef("this setup bonds %s ORAMA, self-bonds %s ORAMA for the validator and sets aside %s ORAMA for fees and deposits",
+		Orama(bondTotal(budget)), Orama(budget.SelfBond), Orama(budget.Reserve))
 	have, err := sess.Balance(ctx, r.oper)
 	if err != nil {
 		return nil, fmt.Errorf("read the balance of %s: %w", r.oper, err)

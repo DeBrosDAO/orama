@@ -155,7 +155,7 @@ func TestRun_alreadyInstalledMachinesAreSkipped(t *testing.T) {
 	h := newHarness()
 	installed := freshFacts()
 	installed.ClusterInstalled, installed.GlobalInstalled = true, true
-	installed.ManifestSHA256 = testManifest
+	installed.ManifestSHA256, installed.CLISHA256, installed.ChainActive = testManifest, testCLISHA, true
 	h.enroll.facts = map[string]Facts{ip1: installed}
 	h.w.operatorRegistered, h.w.validator = true, true
 	h.w.nodes["alice"] = &RegisteredNode{
@@ -173,6 +173,10 @@ func TestRun_alreadyInstalledMachinesAreSkipped(t *testing.T) {
 			t.Errorf("step %s was not reported as skipped", step)
 		}
 	}
+	// The chain is still asked whether it has caught up: a finished machine answers at once.
+	if !h.report.has(ip1, StepSync, StateDone) || h.w.index("chainstate "+ip1) < 0 {
+		t.Error("a re-run still waits for the chain to be synced before it registers anything")
+	}
 	if len(res.Skipped[ip1]) == 0 {
 		t.Error("the result lists no skipped steps")
 	}
@@ -189,8 +193,8 @@ func TestRun_addingANodeToAnExistingCluster(t *testing.T) {
 	if h.w.index("cluster "+ip2+" join") < 0 || h.w.index("cluster "+ip2+" create") >= 0 {
 		t.Errorf("the new node must join:\n%s", strings.Join(h.w.entries(), "\n"))
 	}
-	if h.w.index("enroll "+ip1) < 0 || h.w.index("invite on "+ip1) < 0 {
-		t.Error("the invite is minted on a node already in the cluster")
+	if h.w.index("reach "+ip1) < 0 || h.w.index("invite on "+ip1) < 0 {
+		t.Error("the invite is minted on a node already in the cluster, reached without a prompt")
 	}
 	if got := h.rec.gateway["stagenet-alice"]; got != "" {
 		t.Errorf("an existing environment keeps its gateway, setup passed %q", got)
@@ -401,8 +405,13 @@ func TestRun_domainThatNeverDelegatesGivesAResumeCommand(t *testing.T) {
 	opts := h.opts(ip1)
 	opts.Domain, opts.ClusterOnly, opts.StorageGB = "cluster.example.org", true, 0
 	res, err := run(t, h, opts)
-	if err == nil || !strings.Contains(err.Error(), "orama setup --network stagenet --domain cluster.example.org") || !strings.Contains(err.Error(), "--ip "+ip1) {
-		t.Fatalf("got %v, want a command that resumes", err)
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	for _, want := range []string{"orama setup --network stagenet --env stagenet-alice", "--ip " + ip1, "--domain cluster.example.org", "--cluster-only", "--yes", "resumes at this step"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error lacks %q:\n%v", want, err)
+		}
 	}
 	if res != nil {
 		t.Error("an error returns no result")
@@ -535,5 +544,142 @@ func TestNewDeps_wiresEveryPortExceptTheNameClaimer(t *testing.T) {
 	}
 	if d.Timing.SyncDeadline <= 0 || d.Timing.DNSDeadline <= 0 {
 		t.Errorf("timing %+v", d.Timing)
+	}
+}
+
+// installedFacts is a machine a first run finished: everything installed, the
+// chain running, the release in place and the cluster node started after the chain.
+func installedFacts() Facts {
+	f := freshFacts()
+	f.ClusterInstalled, f.GlobalInstalled, f.ChainActive = true, true, true
+	f.ManifestSHA256, f.CLISHA256 = testManifest, testCLISHA
+	return f
+}
+
+func TestRun_aRunStoppedBetweenTheInstallAndTheStartStartsTheChain(t *testing.T) {
+	h := newHarness()
+	f := installedFacts()
+	f.ChainActive = false
+	h.enroll.facts = map[string]Facts{ip1: f}
+	mustRun(t, h, h.opts(ip1))
+	if h.w.index("startglobal "+ip1+" chain,ipfs,provider") < 0 {
+		t.Errorf("an installed machine whose chain is down is started:\n%s", strings.Join(h.w.entries(), "\n"))
+	}
+	if h.w.index("global "+ip1) >= 0 {
+		t.Error("it is not installed again")
+	}
+	if h.w.index("startglobal") > h.w.index("chainstate") {
+		t.Error("the start comes before the wait for the chain")
+	}
+}
+
+func TestRun_aRunStoppedWhileTheChainWasSyncingWaitsAgainBeforeItRegisters(t *testing.T) {
+	h := newHarness()
+	h.enroll.facts = map[string]Facts{ip1: installedFacts()}
+	h.enroll.state = ChainState{Running: true, Height: 10, CatchingUp: true}
+	h.deps.Timing.SyncDeadline = 20 * 1_000_000
+	_, err := run(t, h, h.opts(ip1))
+	if err == nil || !strings.Contains(err.Error(), "gave up waiting") {
+		t.Fatalf("got %v: the chain has not caught up, and nothing may be sent on its stale answers", err)
+	}
+	if h.w.index("tx ") >= 0 || h.w.index("open chain") >= 0 {
+		t.Errorf("the chain was used before it had caught up:\n%s", strings.Join(h.w.entries(), "\n"))
+	}
+}
+
+func TestRun_aClusterNodeStartedBeforeTheChainUnitIsRestarted(t *testing.T) {
+	h := newHarness()
+	f := installedFacts()
+	f.RestartPending = true
+	h.enroll.facts = map[string]Facts{ip1: f}
+	mustRun(t, h, h.opts(ip1))
+	if h.w.count("restart ") != 1 {
+		t.Errorf("a node whose gateway predates the chain unit restarts even though this run installed nothing:\n%s", strings.Join(h.w.entries(), "\n"))
+	}
+}
+
+func TestRun_anInstalledClusterNodeThatDoesNotAnswerIsAnError(t *testing.T) {
+	h := newHarness()
+	h.enroll.facts = map[string]Facts{ip1: installedFacts()}
+	h.deps.Enroll = &failWait{fakeEnroller: h.enroll}
+	_, err := run(t, h, h.opts(ip1))
+	if err == nil || !strings.Contains(err.Error(), ip1) || !strings.Contains(err.Error(), "not carrying its share") {
+		t.Fatalf("got %v", err)
+	}
+	if h.w.index("global ") >= 0 || h.w.index("tx ") >= 0 {
+		t.Error("nothing follows a cluster node that does not answer")
+	}
+}
+
+type failWait struct{ *fakeEnroller }
+
+func (f *failWait) Enroll(ctx context.Context, req MachineRequest) (Machine, error) {
+	m, err := f.fakeEnroller.Enroll(ctx, req)
+	if err == nil {
+		m.(*fakeMachine).waitErr = errors.New("rqlite is not a voter yet")
+	}
+	return m, err
+}
+
+func TestRun_aReleaseWithADifferentCLIIsStagedEvenWithTheSameManifest(t *testing.T) {
+	for name, cliSum := range map[string]string{"a different CLI": strings.Repeat("0", 64), "the release's CLI": testCLISHA} {
+		h := newHarness()
+		f := installedFacts()
+		f.GlobalInstalled, f.ChainActive, f.CLISHA256 = false, false, cliSum
+		h.enroll.facts = map[string]Facts{ip1: f}
+		mustRun(t, h, h.opts(ip1))
+		staged := h.w.index("stage "+ip1) >= 0
+		if staged != (cliSum != testCLISHA) {
+			t.Errorf("%s: staged=%v: a copied manifest does not make a build, the binary beside it does:\n%s", name, staged, strings.Join(h.w.entries(), "\n"))
+		}
+	}
+}
+
+func TestRun_aChainThatCannotBePolledEndsTheWaitEarly(t *testing.T) {
+	h := newHarness()
+	h.enroll.state = ChainState{}
+	h.deps.Enroll = &pollBroken{fakeEnroller: h.enroll}
+	h.deps.Timing.SyncDeadline = 30 * 1_000_000_000
+	_, err := run(t, h, h.opts(ip1))
+	if err == nil || !strings.Contains(err.Error(), "could not be polled") || !strings.Contains(err.Error(), "ssh: handshake failed") {
+		t.Fatalf("got %v, want the poll error after a few in a row, not after the 30s deadline", err)
+	}
+}
+
+type pollBroken struct{ *fakeEnroller }
+
+func (p *pollBroken) Enroll(ctx context.Context, req MachineRequest) (Machine, error) {
+	m, err := p.fakeEnroller.Enroll(ctx, req)
+	if err == nil {
+		m.(*fakeMachine).stateErr = errors.New("ssh: handshake failed")
+	}
+	return m, err
+}
+
+func TestGlobalParallelism(t *testing.T) {
+	for size, want := range map[int]int{0: 1, 1: 1, 2: 1, 3: 1, 4: 1, 5: 2, 7: 3, 9: 4, 20: 4} {
+		if got := globalParallelism(size); got != want {
+			t.Errorf("a cluster of %d installs %d at a time, want %d", size, got, want)
+		}
+	}
+}
+
+func TestRun_aBudgetBeyondAnyRealNetworkIsRefusedBeforeASignature(t *testing.T) {
+	h := newHarness()
+	h.chain.params.BondPerGiB = new(big.Int).Mul(big.NewInt(10_000_000), big.NewInt(noramaPerOrama))
+	_, err := run(t, h, h.opts(ip1))
+	if err == nil || !strings.Contains(err.Error(), "over the") || !strings.Contains(err.Error(), "ORAMA setup will sign") {
+		t.Fatalf("got %v", err)
+	}
+	if h.w.index("tx ") >= 0 || h.w.index("faucet") >= 0 {
+		t.Error("nothing is signed or requested when the figures are not believable")
+	}
+}
+
+func TestRun_theBudgetIsPrintedBeforeAnythingIsSigned(t *testing.T) {
+	h := newHarness()
+	mustRun(t, h, h.opts(ip1))
+	if !strings.Contains(h.report.text(), "this setup bonds 10 ORAMA, self-bonds 1000 ORAMA") {
+		t.Errorf("lines:\n%s", h.report.text())
 	}
 }

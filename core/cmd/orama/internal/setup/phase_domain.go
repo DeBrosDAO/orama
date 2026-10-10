@@ -3,7 +3,6 @@ package setup
 import (
 	"context"
 	"fmt"
-	"strings"
 )
 
 // announceDomain prints the NS and glue records a private cluster's domain needs
@@ -35,7 +34,6 @@ func (r *runner) waitDomain(ctx context.Context) error {
 	err := r.d.Domain.Wait(ctx, r.plan.Env, r.opts.Domain, r.d.Timing.DNSPoll, r.d.Timing.DNSDeadline)
 	if err != nil {
 		r.emit("", StepDNS, StateFailed, err.Error())
-		r.res.Pending = append(r.res.Pending, "delegate "+r.opts.Domain+" (the records above), then run: "+r.resumeCommand())
 		return fmt.Errorf("%s is not delegated yet: %w\n  everything else is installed; create the records above, then run `%s`, which resumes at this step",
 			r.opts.Domain, err, r.resumeCommand())
 	}
@@ -45,15 +43,7 @@ func (r *runner) waitDomain(ctx context.Context) error {
 
 // resumeCommand is the command that runs the same setup again.
 func (r *runner) resumeCommand() string {
-	parts := []string{"orama setup", "--network " + r.plan.Network, "--domain " + r.opts.Domain, "--env " + r.plan.Env}
-	for _, n := range r.plan.Nodes {
-		parts = append(parts, "--ip "+n.IP)
-	}
-	if r.opts.Name != "" {
-		parts = append(parts, "--name "+r.opts.Name)
-	}
-	if r.opts.ClusterOnly {
-		parts = append(parts, "--cluster-only")
-	}
-	return strings.Join(parts, " ")
+	o := r.opts
+	o.Network, o.Env = r.plan.Network, r.plan.Env
+	return o.CommandLine()
 }

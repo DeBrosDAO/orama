@@ -23,6 +23,7 @@ const (
 	testRootSHA  = "aa11aa11aa11aa11aa11aa11aa11aa11aa11aa11aa11aa11aa11aa11aa11aa11"
 	testManifest = "bb22bb22bb22bb22bb22bb22bb22bb22bb22bb22bb22bb22bb22bb22bb22bb22"
 	testSeedHash = "cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33"
+	testCLISHA   = "dd44dd44dd44dd44dd44dd44dd44dd44dd44dd44dd44dd44dd44dd44dd44dd44"
 )
 
 // world is the shared state of the fakes: an ordered log of everything the run
@@ -127,6 +128,10 @@ func (m *fakeMachine) InstallGlobal(_ context.Context, in GlobalInstall) error {
 	m.w.add("global %s %s", m.ip, strings.Join(in.Node.ServiceNames(), ","))
 	return nil
 }
+func (m *fakeMachine) StartGlobal(_ context.Context, n NodePlan) error {
+	m.w.add("startglobal %s %s", m.ip, strings.Join(n.ServiceNames(), ","))
+	return nil
+}
 func (m *fakeMachine) ChainState(context.Context) (ChainState, error) {
 	m.w.add("chainstate %s", m.ip)
 	return m.state, m.stateErr
@@ -190,6 +195,11 @@ func (e *fakeEnroller) Enroll(_ context.Context, req MachineRequest) (Machine, e
 	return m, nil
 }
 
+func (e *fakeEnroller) Reach(ctx context.Context, ip, user string) (Machine, error) {
+	e.w.add("reach %s", ip)
+	return e.Enroll(ctx, MachineRequest{IP: ip, User: user})
+}
+
 type fakeNetworks struct {
 	w          *world
 	faucet     bool
@@ -210,7 +220,7 @@ type fakeReleases struct{ w *world }
 
 func (f fakeReleases) Fetch(_ context.Context, _ *netregistry.Network, arch string) (*Release, error) {
 	f.w.add("fetch release %s", arch)
-	return &Release{Version: "0.3.1", Arch: arch, ManifestSHA256: testManifest}, nil
+	return &Release{Version: "0.3.1", Arch: arch, ManifestSHA256: testManifest, CLISHA256: testCLISHA}, nil
 }
 
 type fakeTrust struct{ w *world }

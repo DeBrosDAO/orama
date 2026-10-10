@@ -32,8 +32,11 @@ func (i Inspection) Summary() string {
 }
 
 // Inspect reaches every machine of opts and reads its hardware, checking it
-// against the profile, and changes nothing on any of them. The wizard shows the
-// result before it asks to go ahead; Run does the same checks again.
+// against the profile, and installs nothing on any of them. Reaching a new
+// machine is the first step of the run, so it does leave what that step leaves:
+// the RootWallet's SSH key in the vault and on the machine, and its host key in
+// the CLI's known hosts. The wizard shows the result before it asks to go ahead;
+// Run reaches the machines and checks them again.
 func Inspect(ctx context.Context, opts Options, enroll Enroller) ([]Inspection, error) {
 	if err := opts.Normalize(); err != nil {
 		return nil, err

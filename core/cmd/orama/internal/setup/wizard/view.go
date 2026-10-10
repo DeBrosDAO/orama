@@ -28,7 +28,7 @@ func (m *Model) View() string {
 	b.WriteString(boldStyle.Render("orama setup") + "\n\n")
 	b.WriteString(m.body())
 	if m.err != "" {
-		b.WriteString("\n" + errStyle.Render(m.err) + "\n")
+		b.WriteString("\n" + errStyle.Render(setup.CleanTerminal(m.err)) + "\n")
 	}
 	b.WriteString("\n" + faint(m.hint()) + "\n")
 	return b.String()
@@ -222,16 +222,13 @@ func (m *Model) stepLine(ip string) string {
 
 func (m *Model) summary() string {
 	if m.runErr != nil {
-		return errStyle.Render("Setup stopped: "+m.runErr.Error()) + "\nRun the same command again: it resumes where it stopped."
+		return errStyle.Render("Setup stopped: "+setup.CleanTerminal(m.runErr.Error())) + "\nRun the same command again: it resumes where it stopped."
 	}
 	var b strings.Builder
 	b.WriteString(boldStyle.Render("Done.") + "\n")
 	if m.result != nil {
 		if m.result.Operator != "" {
 			b.WriteString("Operator account: " + m.result.Operator + "\n")
-		}
-		for _, p := range m.result.Pending {
-			b.WriteString("Still to do: " + p + "\n")
 		}
 	}
 	return b.String()

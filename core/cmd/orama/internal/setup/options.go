@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"net"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -33,6 +34,9 @@ const (
 	DefaultStorageGB uint64 = 50
 	// DefaultSSHUser is the login setup uses when --user is not given.
 	DefaultSSHUser = "root"
+	// MaxStorageGB bounds --storage-gb: a petabyte is a typo, and the byte counts
+	// derived from it must not overflow.
+	MaxStorageGB uint64 = 1_000_000
 	// MaxNodes bounds one run: a join mints an invite per node and the chain
 	// takes an operator's transactions one at a time.
 	MaxNodes = 20
@@ -46,6 +50,16 @@ var nameRE = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`)
 const (
 	nodeNameMin = 2
 	nodeNameMax = 32
+)
+
+var (
+	// sshUserRE is a POSIX login name: it goes into an ssh argument, where a
+	// leading '-' would be an option.
+	sshUserRE = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
+	// domainRE is a DNS name of at least two lowercase labels.
+	domainRE = regexp.MustCompile(`^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]([a-z0-9-]{0,61}[a-z0-9])?$`)
+	// envRE is the name of a CLI environment.
+	envRE = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 )
 
 // Options is everything the operator decided: the flags, or the answers of the
@@ -116,6 +130,12 @@ func (o *Options) Normalize() error {
 		return err
 	}
 	o.IPs = ips
+	if !sshUserRE.MatchString(o.User) {
+		return clierr.Usage("--user %q is not a login name", o.User)
+	}
+	if o.Env != "" && !envRE.MatchString(o.Env) {
+		return clierr.Usage("--env %q: use lowercase letters, digits, '.', '_' and '-'", o.Env)
+	}
 	if o.UsePassword && o.BootstrapKey != "" {
 		return clierr.Usage("--password and --bootstrap-key are alternatives; pass one")
 	}
@@ -127,7 +147,7 @@ func (o *Options) Normalize() error {
 	}
 	if o.Domain != "" {
 		o.Domain = strings.ToLower(strings.TrimSuffix(o.Domain, "."))
-		if net.ParseIP(o.Domain) != nil || !strings.Contains(o.Domain, ".") {
+		if !domainRE.MatchString(o.Domain) {
 			return clierr.Usage("--domain %q is not a DNS name such as cluster.example.org", o.Domain)
 		}
 	}
@@ -194,6 +214,9 @@ func (o *Options) checkProfile() error {
 		if o.StorageGB == 0 {
 			o.StorageGB = DefaultStorageGB
 		}
+		if o.StorageGB > MaxStorageGB {
+			return clierr.Usage("--storage-gb %d is more than the %d GB setup accepts", o.StorageGB, MaxStorageGB)
+		}
 		if err := ValidateNodeName(o.Name); err != nil {
 			return clierr.Usage("--name: %v (a full node's name is its id on the chain; --cluster-only needs none)", err)
 		}
@@ -243,11 +266,4 @@ func NodeNames(base string, n int) []string {
 	return names
 }
 
-func contains(list []string, s string) bool {
-	for _, v := range list {
-		if v == s {
-			return true
-		}
-	}
-	return false
-}
+func contains(list []string, s string) bool { return slices.Contains(list, s) }

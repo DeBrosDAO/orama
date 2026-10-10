@@ -139,3 +139,13 @@ func TestBuildPlan_noMachinesIsAnError(t *testing.T) {
 		t.Fatal("a plan with no network must be refused")
 	}
 }
+
+func TestBuildPlan_summaryWarnsWhenItAddsToACluster(t *testing.T) {
+	p := planFor(t, Options{IPs: []string{ip2}, Name: "alice"}, ip1)
+	if text := strings.Join(p.Summary(), "\n"); !strings.Contains(text, `adds to the cluster already recorded as "stagenet-alice"`) || !strings.Contains(text, "--env") {
+		t.Errorf("summary:\n%s", text)
+	}
+	if text := strings.Join(planFor(t, Options{IPs: []string{ip1}, Name: "alice"}).Summary(), "\n"); strings.Contains(text, "already recorded") {
+		t.Errorf("a new cluster is not an addition:\n%s", text)
+	}
+}

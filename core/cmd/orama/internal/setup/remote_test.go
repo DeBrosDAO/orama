@@ -345,3 +345,48 @@ func TestLineWriter_aMachineCannotDriveTheTerminal(t *testing.T) {
 		t.Errorf("got %q: control characters must be replaced, tabs kept", got)
 	}
 }
+
+func TestLineWriter_flushReportsTheUnfinishedLastLine(t *testing.T) {
+	r := &bufReporter{}
+	w := &lineWriter{prefix: ip1, report: r}
+	fmt.Fprint(w, "one\nlast without a newline")
+	w.Flush()
+	if got := r.text(); got != "  ["+ip1+"] one\n  ["+ip1+"] last without a newline" {
+		t.Errorf("got %q", got)
+	}
+	w.Flush()
+	if strings.Count(r.text(), "last") != 1 {
+		t.Error("a flushed line is not reported twice")
+	}
+}
+
+func TestLineWriter_aLineWithoutAnEndIsCutNotKeptForever(t *testing.T) {
+	r := &bufReporter{}
+	w := &lineWriter{prefix: ip1, report: r}
+	chunk := strings.Repeat("x", 1024)
+	for range maxLineBytes/1024 + 2 {
+		fmt.Fprint(w, chunk)
+	}
+	if len(w.buf) > maxLineBytes {
+		t.Errorf("%d bytes are being kept for a line that never ends", len(w.buf))
+	}
+	if r.text() == "" {
+		t.Error("the cut line is reported")
+	}
+}
+
+func TestCapped_refusesWhatPassesTheLimit(t *testing.T) {
+	var c capped
+	if _, err := c.Write(make([]byte, maxCaptureBytes)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Write([]byte("one more")); err == nil || !strings.Contains(err.Error(), "more than") {
+		t.Fatalf("got %v: a machine that prints without end must fail the command", err)
+	}
+}
+
+func TestTail_isCleaned(t *testing.T) {
+	if got := tail("bad\x1b[31m", 100); strings.ContainsRune(got, '\x1b') {
+		t.Errorf("got %q", got)
+	}
+}

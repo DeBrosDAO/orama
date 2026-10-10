@@ -73,6 +73,7 @@ func (m *Model) onDone(msg doneMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) record(e setup.Event) {
+	e.Detail = setup.CleanTerminal(e.Detail)
 	byStep := m.events[e.Node]
 	if byStep == nil {
 		byStep = map[setup.Step]setup.Event{}
@@ -82,7 +83,7 @@ func (m *Model) record(e setup.Event) {
 }
 
 func (m *Model) addLine(line string) {
-	m.lines = append(m.lines, line)
+	m.lines = append(m.lines, setup.CleanTerminal(line))
 	if len(m.lines) > maxLines {
 		m.lines = m.lines[len(m.lines)-maxLines:]
 	}

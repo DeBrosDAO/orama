@@ -112,8 +112,9 @@ func agreedHash(ctx context.Context, seeds []string, clients []Client, height in
 	return agreed, nil
 }
 
-// distinctHosts refuses two servers on one host: two names that resolve to the
-// same gateway are one witness, not two.
+// distinctHosts refuses two servers named by the same host. It compares names,
+// not addresses: two names that resolve to one gateway are still one witness,
+// which the manifest's seeds are trusted not to be.
 func distinctHosts(servers []string) error {
 	seen := map[string]bool{}
 	for _, s := range servers {

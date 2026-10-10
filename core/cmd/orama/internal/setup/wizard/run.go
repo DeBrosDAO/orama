@@ -27,10 +27,13 @@ func Start(ctx context.Context, svc Services, preset setup.Options) (Outcome, er
 	}
 	defer restore()
 	prog := tea.NewProgram(m, tea.WithOutput(realOut), tea.WithInput(os.Stdin))
-	if _, err := prog.Run(); err != nil {
+	_, err = prog.Run()
+	// Whatever ended the program, a run in flight is cancelled and awaited, so it
+	// closes its connections and removes its temporary files before the process exits.
+	m.finish()
+	if err != nil {
 		return Outcome{}, err
 	}
-	m.finish()
 	return m.Outcome(), nil
 }
 

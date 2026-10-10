@@ -539,3 +539,49 @@ func TestInput_editing(t *testing.T) {
 		t.Errorf("value %q", in.Value())
 	}
 }
+
+func TestWizard_withOneNetworkEscFromTheNextQuestionDoesNotBounceBack(t *testing.T) {
+	d := newDriver(t, newFake(), setup.Options{})
+	d.toOptions()
+	d.wantStep(stepOptions)
+	d.esc()
+	if d.m.step == stepOptions || d.m.step == stepNetwork {
+		t.Fatalf("on step %d: going back from the question after a one-choice step must not land on it again", d.m.step)
+	}
+	d.wantStep(stepHostKeys)
+}
+
+func TestWizard_aHostKeyAnswerForAnotherMachineIsIgnored(t *testing.T) {
+	d := newDriver(t, newFake(), setup.Options{})
+	d.text(ipA + " " + ipB)
+	d.enter()
+	d.enter()
+	d.enter()
+	d.wantStep(stepHostKeys)
+	d.apply(hostKeysMsg{ip: ipB, keys: []HostKey{{Type: "ed25519", Fingerprint: "SHA256:otherhost"}}})
+	d.press("1")
+	if got := d.m.opts.HostKeys[ipA]; got != "SHA256:edkey" {
+		t.Errorf("host key of %s = %q: a late answer for %s must not be pinned under it", ipA, got, ipB)
+	}
+}
+
+func TestWizard_whatAMachinePrintsCannotDriveTheScreen(t *testing.T) {
+	m := New(context.Background(), newFake().services(), setup.Options{})
+	m.addLine("ok\x1b[2J\x1b]52;c;ZXZpbA==\x07")
+	m.record(setup.Event{Node: ipA, Step: setup.StepCluster, State: setup.StateFailed, Detail: "bad\x1b[31m"})
+	m.err = "boom\x1b[2J"
+	m.runErr = errors.New("failed\x1b]0;x\x07")
+	m.step = stepDone
+	view := m.View()
+	if strings.ContainsAny(view, "\x1b\x07") && !strings.Contains(view, "\x1b[") {
+		t.Fatalf("raw control characters in the view: %q", view)
+	}
+	for _, raw := range []string{"\x1b[2J", "\x1b]52", "\x1b]0;x", "\x07"} {
+		if strings.Contains(m.lines[0], raw) || strings.Contains(m.events[ipA][setup.StepCluster].Detail, raw) {
+			t.Errorf("%q survived in the stored text", raw)
+		}
+		if strings.Contains(view, raw) {
+			t.Errorf("%q survived in the view", raw)
+		}
+	}
+}

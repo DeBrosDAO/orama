@@ -47,15 +47,26 @@ func (s sshShell) Upload(local, remote string) error {
 	return remotessh.UploadFile(s.node, local, remote)
 }
 
+// tail is the end of s, at most n bytes, cleaned for the terminal it will be
+// printed on.
 func tail(s string, n int) string {
 	s = strings.TrimSpace(s)
 	if len(s) > n {
-		return "..." + s[len(s)-n:]
+		s = "..." + s[len(s)-n:]
 	}
-	return s
+	return CleanTerminal(s)
 }
 
-// lineWriter turns the bytes a command prints into report lines.
+const (
+	// maxLineBytes bounds a line a machine prints: one with no newline is cut here
+	// instead of growing without end in the operator's memory.
+	maxLineBytes = 64 << 10
+	// maxCaptureBytes bounds what a command run for its output may print.
+	maxCaptureBytes = 4 << 20
+)
+
+// lineWriter turns the bytes a command prints into report lines, cleaned for the
+// terminal they reach.
 type lineWriter struct {
 	prefix string
 	report Reporter
@@ -66,26 +77,42 @@ func (w *lineWriter) Write(p []byte) (int, error) {
 	w.buf = append(w.buf, p...)
 	for {
 		i := bytes.IndexByte(w.buf, '\n')
-		if i < 0 {
+		switch {
+		case i >= 0:
+			w.emit(w.buf[:i])
+			w.buf = w.buf[i+1:]
+		case len(w.buf) > maxLineBytes:
+			w.emit(w.buf)
+			w.buf = nil
+		default:
 			return len(p), nil
 		}
-		if line := printable(strings.TrimRight(string(w.buf[:i]), "\r")); strings.TrimSpace(line) != "" {
-			w.report.Linef("  [%s] %s", w.prefix, line)
-		}
-		w.buf = w.buf[i+1:]
 	}
 }
 
-// printable replaces the control characters of a line a machine printed. What a
-// machine prints reaches the operator's terminal, and an escape sequence in it
-// could rewrite the screen; tabs stay.
-func printable(line string) string {
-	return strings.Map(func(r rune) rune {
-		if r != '\t' && (r < ' ' || r == 0x7f) {
-			return '?'
-		}
-		return r
-	}, line)
+// Flush reports what is left when the command ended without a final newline.
+func (w *lineWriter) Flush() {
+	w.emit(w.buf)
+	w.buf = nil
+}
+
+func (w *lineWriter) emit(raw []byte) {
+	if line := CleanTerminal(strings.TrimRight(string(raw), "\r")); strings.TrimSpace(line) != "" {
+		w.report.Linef("  [%s] %s", w.prefix, line)
+	}
+}
+
+// capped collects a command's output up to a limit; past it a write fails, which
+// ends the command, so a machine cannot fill the operator's memory.
+type capped struct {
+	bytes.Buffer
+}
+
+func (c *capped) Write(p []byte) (int, error) {
+	if c.Len()+len(p) > maxCaptureBytes {
+		return 0, fmt.Errorf("the command printed more than %d bytes", maxCaptureBytes)
+	}
+	return c.Buffer.Write(p)
 }
 
 // sshMachine is a VPS setup drives over SSH.
@@ -118,11 +145,17 @@ func (m *sshMachine) Close()       { m.close() }
 
 func (m *sshMachine) sudo() string { return remotessh.SudoPrefix(m.node) }
 
-func (m *sshMachine) logs() io.Writer { return &lineWriter{prefix: m.node.Host, report: m.report} }
+// stream runs command and reports what it prints as lines as it prints them.
+func (m *sshMachine) stream(ctx context.Context, command string, stdin io.Reader) error {
+	w := &lineWriter{prefix: m.node.Host, report: m.report}
+	err := m.sh.Run(ctx, command, stdin, w)
+	w.Flush()
+	return err
+}
 
 // capture runs command and returns its stdout.
 func (m *sshMachine) capture(ctx context.Context, command string, stdin io.Reader) (string, error) {
-	var out bytes.Buffer
+	var out capped
 	err := m.sh.Run(ctx, command, stdin, &out)
 	return out.String(), err
 }
@@ -158,7 +191,7 @@ func (m *sshMachine) InstallCluster(ctx context.Context, in ClusterInstall) erro
 	if len(secrets) > 0 {
 		stdin = bytes.NewReader(secrets)
 	}
-	return m.sh.Run(ctx, command, stdin, m.logs())
+	return m.stream(ctx, command, stdin)
 }
 
 // MintInvite mints an invite for a new node on this machine, which is in the
@@ -194,10 +227,23 @@ func (m *sshMachine) RestartNode(ctx context.Context, budget time.Duration, forc
 	if force {
 		command += " --force"
 	}
-	if err := m.sh.Run(ctx, command, nil, m.logs()); err != nil {
+	if err := m.stream(ctx, command, nil); err != nil {
 		return err
 	}
 	return m.WaitNode(ctx, budget)
+}
+
+// Reach opens a machine that an earlier run enrolled.
+func (e sshEnroller) Reach(ctx context.Context, ip, user string) (Machine, error) {
+	evm, err := e.wallet.EVMAddress(ctx)
+	if err != nil {
+		return nil, err
+	}
+	reached, err := psetup.Reach(ip, user)
+	if err != nil {
+		return nil, err
+	}
+	return newSSHMachine(reached, evm, e.report), nil
 }
 
 // sshEnroller reaches machines with the operator's RootWallet.

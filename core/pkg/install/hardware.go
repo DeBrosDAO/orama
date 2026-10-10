@@ -119,9 +119,14 @@ func ParseHardware(out string) (Hardware, error) {
 		values[key] = n
 	}
 	for _, key := range []string{"cpu", "ram_kb", "disk_kb"} {
-		if values[key] == 0 {
+		if _, ok := values[key]; !ok {
 			return Hardware{}, fmt.Errorf("hardware probe: no %s in %q", key, strings.TrimSpace(out))
 		}
+	}
+	// A machine with no CPU or no memory is a broken probe; a disk with no free
+	// space is a real answer, and one the floor refuses by name.
+	if values["cpu"] == 0 || values["ram_kb"] == 0 {
+		return Hardware{}, fmt.Errorf("hardware probe: cpu=%d ram_kb=%d in %q", values["cpu"], values["ram_kb"], strings.TrimSpace(out))
 	}
 	return Hardware{CPUCores: int(values["cpu"]), RAMBytes: values["ram_kb"] * 1024, FreeDiskBytes: values["disk_kb"] * 1024}, nil
 }

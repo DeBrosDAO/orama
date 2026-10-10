@@ -22,6 +22,12 @@ const (
 	// validator. The chain's base fee moves, so this is generous rather than exact.
 	feeReservePerNode  = 2 * noramaPerOrama
 	feeReserveOperator = 2 * noramaPerOrama
+	// maxBudgetORAMA is the most a run will bond and spend. The bond amounts come
+	// from the chain node setup just installed, before anything else has vouched
+	// for it; a figure beyond any real network's parameters is refused rather than
+	// signed. A run that needs more is a mistake or a lying node, and the operator
+	// reads the figures it printed.
+	maxBudgetORAMA = 1_000_000
 )
 
 // Budget is what a run bonds and spends on the chain.
@@ -67,6 +73,10 @@ func ComputeBudget(p *Plan, params ChainParams) (*Budget, error) {
 	}
 	b.Total.Add(b.Total, b.SelfBond)
 	b.Total.Add(b.Total, b.Reserve)
+	if limit := new(big.Int).Mul(big.NewInt(maxBudgetORAMA), big.NewInt(noramaPerOrama)); b.Total.Cmp(limit) > 0 {
+		return nil, fmt.Errorf("the chain's parameters make this setup cost %s ORAMA, over the %d ORAMA setup will sign: "+
+			"the node it read them from may be wrong; check the network's parameters before running again", Orama(b.Total), maxBudgetORAMA)
+	}
 	return b, nil
 }
 

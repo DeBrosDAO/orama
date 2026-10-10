@@ -26,6 +26,9 @@ func TestTunnelArgs_forwardsALoopbackPortUnderTheNodesHostKeyPolicy(t *testing.T
 	if !slices.Contains(args, "-N") {
 		t.Error("a tunnel runs no remote command")
 	}
+	if !strings.Contains(joined, "ForwardAgent=no") {
+		t.Error("the operator's agent is not forwarded to a machine being set up")
+	}
 }
 
 func TestStartTunnel_refusesANodeWithoutAKey(t *testing.T) {
@@ -48,7 +51,7 @@ func TestCommand_runsTheCommandUnderTheNodesKeyAndHostKeyPolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	joined := strings.Join(cmd.Args, " ")
-	for _, want := range []string{"ssh", "-i /tmp/key", "UserKnownHostsFile=/tmp/known", "StrictHostKeyChecking=yes", "ServerAliveInterval", "root@203.0.113.5 echo hi"} {
+	for _, want := range []string{"ssh", "-i /tmp/key", "UserKnownHostsFile=/tmp/known", "StrictHostKeyChecking=yes", "ServerAliveInterval", "ForwardAgent=no", "ClearAllForwardings=yes", "root@203.0.113.5 echo hi"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("args lack %q: %s", want, joined)
 		}

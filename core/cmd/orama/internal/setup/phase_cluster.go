@@ -40,12 +40,15 @@ func (r *runner) stageArch(ctx context.Context, arch string, nodes []*nodeRun) e
 		return fmt.Errorf("release of the %s channel for linux/%s: %w", r.net.Manifest.Channel, arch, err)
 	}
 	defer func() {
-		if rel.Remove != nil {
-			_ = rel.Remove()
+		if rel.Remove == nil {
+			return
+		}
+		if rmErr := rel.Remove(); rmErr != nil {
+			r.d.Report.Linef("could not remove the downloaded release: %v", rmErr)
 		}
 	}()
 	for _, n := range nodes {
-		if n.facts.ManifestSHA256 == rel.ManifestSHA256 {
+		if n.facts.ManifestSHA256 == rel.ManifestSHA256 && n.facts.CLISHA256 == rel.CLISHA256 {
 			r.skip(n.plan.IP, StepRelease, "already runs "+rel.Version)
 			continue
 		}
@@ -108,7 +111,7 @@ func (r *runner) openVia(ctx context.Context) error {
 		}
 	}
 	e := existing[0]
-	m, err := r.d.Enroll.Enroll(ctx, MachineRequest{IP: e.Host, User: e.User, Env: r.plan.Env})
+	m, err := r.d.Enroll.Reach(ctx, e.Host, e.User)
 	if err != nil {
 		return fmt.Errorf("reach %s, a node of the cluster %q, to mint invites on it: %w", e.Host, r.plan.Env, err)
 	}
@@ -120,7 +123,14 @@ func (r *runner) openVia(ctx context.Context) error {
 func (r *runner) installCluster(ctx context.Context, n *nodeRun) error {
 	ip := n.plan.IP
 	if n.facts.ClusterInstalled {
-		r.skip(ip, StepCluster, "orama-node is installed")
+		// The unit being there does not say the node is up: an earlier run may have
+		// stopped before the node came back. It is the machine invites are minted
+		// on, so it has to answer.
+		if err := n.m.WaitNode(ctx, r.d.Timing.ReadyBudget); err != nil {
+			r.emit(ip, StepCluster, StateFailed, err.Error())
+			return fmt.Errorf("machine %s has the cluster node installed, and it is not carrying its share of the cluster: %w", ip, err)
+		}
+		r.skip(ip, StepCluster, "orama-node is installed and answering")
 		return nil
 	}
 	r.emit(ip, StepCluster, StateRunning, string(n.plan.Cluster))

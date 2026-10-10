@@ -3,6 +3,7 @@ package setup
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -16,8 +17,8 @@ func (m *sshMachine) InstallGlobal(ctx context.Context, in GlobalInstall) (err e
 		return fmt.Errorf("make the directory for the genesis: %w", err)
 	}
 	defer func() {
-		if rmErr := m.sh.Run(context.WithoutCancel(ctx), removeGlobalStageCommand(), nil, nil); rmErr != nil && err == nil {
-			err = fmt.Errorf("remove %s: %w", globalStageDir, rmErr)
+		if rmErr := m.sh.Run(context.WithoutCancel(ctx), removeGlobalStageCommand(), nil, nil); rmErr != nil {
+			err = errors.Join(err, fmt.Errorf("remove %s: %w", globalStageDir, rmErr))
 		}
 	}()
 	if err := m.sh.Run(ctx, writeGenesisCommand(), bytes.NewReader(in.Genesis), nil); err != nil {
@@ -28,10 +29,15 @@ func (m *sshMachine) InstallGlobal(ctx context.Context, in GlobalInstall) (err e
 			return fmt.Errorf("put the Tor network file on the machine: %w", err)
 		}
 	}
-	if err := m.sh.Run(ctx, GlobalInstallCommand(in), nil, m.logs()); err != nil {
+	if err := m.stream(ctx, GlobalInstallCommand(in), nil); err != nil {
 		return fmt.Errorf("orama global install: %w", err)
 	}
-	if err := m.sh.Run(ctx, StartGlobalCommand(in.Node), nil, m.logs()); err != nil {
+	return m.StartGlobal(ctx, in.Node)
+}
+
+// StartGlobal starts the chain, the public IPFS and the relay.
+func (m *sshMachine) StartGlobal(ctx context.Context, node NodePlan) error {
+	if err := m.stream(ctx, StartGlobalCommand(node), nil); err != nil {
 		return fmt.Errorf("start the global services: %w", err)
 	}
 	return nil
@@ -57,7 +63,7 @@ func (m *sshMachine) Identity(ctx context.Context, in IdentityRequest) (NodeIden
 
 // StartServices writes the node id the provider reads and starts it.
 func (m *sshMachine) StartServices(ctx context.Context, nodeID string) error {
-	return m.sh.Run(ctx, bash(m.sudo(), startServicesScript()), strings.NewReader(nodeID), m.logs())
+	return m.stream(ctx, bash(m.sudo(), startServicesScript()), strings.NewReader(nodeID))
 }
 
 // OpenChain forwards a local port to the chain's REST API in the node's

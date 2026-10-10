@@ -176,7 +176,7 @@ func TestParseIdentity_refusals(t *testing.T) {
 
 func TestIdentityScript_neverPrintsAPrivateKey(t *testing.T) {
 	script := identityScript(IdentityRequest{ChainID: testChainID, Operator: testOperator})
-	for _, want := range []string{"comet show-node-id", "comet show-validator", "global bind --chain-id 'orama-stagenet-6' --operator '" + testOperator + "' --service hot-key", "--key-type secp256k1", "2>/dev/null"} {
+	for _, want := range []string{"comet show-node-id", "comet show-validator", "global bind --chain-id 'orama-stagenet-6' --operator '" + testOperator + "' --service hot-key", "--key-type secp256k1"} {
 		if !strings.Contains(script, want) {
 			t.Errorf("script lacks %q", want)
 		}

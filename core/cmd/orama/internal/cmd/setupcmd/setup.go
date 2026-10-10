@@ -173,9 +173,6 @@ func printSummary(out io.Writer, res *setup.Result) {
 	if res.Operator != "" {
 		fmt.Fprintf(out, "Operator account: %s\n", res.Operator)
 	}
-	for _, p := range res.Pending {
-		fmt.Fprintf(out, "Still to do: %s\n", p)
-	}
 	fmt.Fprintf(out, "See how it is doing with: orama status --env %s\n", res.Env)
 }
 

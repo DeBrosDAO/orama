@@ -56,7 +56,9 @@ type Client struct {
 }
 
 // NewHTTPClient is the client the seeds are asked with: bounded in time, and
-// refusing any redirect to a place that is not https.
+// following a redirect only to the same host over https. A seed that answers
+// from another host is not the seed the manifest named, and the two seeds'
+// agreement means something only if each answer is its own.
 func NewHTTPClient() *http.Client {
 	return &http.Client{
 		Timeout: requestTimeout,
@@ -66,6 +68,9 @@ func NewHTTPClient() *http.Client {
 			}
 			if req.URL.Scheme != "https" {
 				return fmt.Errorf("refusing a redirect to %s: only https is followed", req.URL.Redacted())
+			}
+			if req.URL.Host != via[0].URL.Host {
+				return fmt.Errorf("refusing a redirect from %s to %s: a seed answers for itself", via[0].URL.Host, req.URL.Host)
 			}
 			return nil
 		},

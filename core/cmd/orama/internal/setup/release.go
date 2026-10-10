@@ -4,10 +4,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/build"
@@ -82,6 +84,28 @@ func (f releaseFetcher) Fetch(ctx context.Context, n *netregistry.Network, arch 
 	if err != nil {
 		return nil, errors.Join(err, remove())
 	}
+	cli, err := cliChecksum(manifest)
+	if err != nil {
+		return nil, errors.Join(err, remove())
+	}
 	sum := sha256.Sum256(manifest)
-	return &Release{Version: rel.Version, Arch: arch, ArchivePath: endorsed, ManifestSHA256: hex.EncodeToString(sum[:]), Remove: remove}, nil
+	return &Release{Version: rel.Version, Arch: arch, ArchivePath: endorsed, ManifestSHA256: hex.EncodeToString(sum[:]), CLISHA256: cli, Remove: remove}, nil
 }
+
+// cliChecksum is the digest the manifest lists for bin/orama.
+func cliChecksum(manifest []byte) (string, error) {
+	var doc struct {
+		Checksums map[string]string `json:"checksums"`
+	}
+	if err := json.Unmarshal(manifest, &doc); err != nil {
+		return "", fmt.Errorf("the release manifest is not JSON: %w", err)
+	}
+	sum := strings.ToLower(doc.Checksums[archiveCLIName])
+	if !sha256Hex.MatchString(sum) {
+		return "", fmt.Errorf("the release manifest lists no SHA-256 for bin/%s", archiveCLIName)
+	}
+	return sum, nil
+}
+
+// archiveCLIName is the orama CLI in an archive's bin/.
+const archiveCLIName = "orama"

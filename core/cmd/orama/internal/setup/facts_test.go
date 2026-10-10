@@ -8,14 +8,14 @@ import (
 	"time"
 )
 
-const factsOutput = "cpu=4\nram_kb=8388608\ndisk_kb=104857600\narch=x86_64\ncluster=1\nglobal=0\nmanifest_sha=" + testManifest + "\n"
+const factsOutput = "cpu=4\nram_kb=8388608\ndisk_kb=104857600\narch=x86_64\ncluster=1\nglobal=0\nchain_active=0\nmanifest_sha=" + testManifest + "\ncli_sha=" + testCLISHA + "\nrestart_pending=1\n"
 
 func TestParseFacts(t *testing.T) {
 	f, err := ParseFacts(factsOutput)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if f.Arch != "amd64" || !f.ClusterInstalled || f.GlobalInstalled || f.ManifestSHA256 != testManifest {
+	if f.Arch != "amd64" || !f.ClusterInstalled || f.GlobalInstalled || f.ChainActive || f.ManifestSHA256 != testManifest || f.CLISHA256 != testCLISHA || !f.RestartPending {
 		t.Fatalf("%+v", f)
 	}
 	if f.Hardware.CPUCores != 4 || f.Hardware.RAMBytes != 8<<30 {
@@ -43,7 +43,7 @@ func TestParseFacts_refusals(t *testing.T) {
 }
 
 func TestProbeScript_readsTheUnitsAndFiles(t *testing.T) {
-	for _, want := range []string{"nproc", "/proc/meminfo", "orama-node.service", "orama-global-chain.service", "/opt/orama/manifest.json"} {
+	for _, want := range []string{"nproc", "/proc/meminfo", "orama-node.service", "orama-global-chain.service", "/opt/orama/manifest.json", "/opt/orama/bin/orama", "is-active", "ActiveEnterTimestamp", "restart_pending"} {
 		if !strings.Contains(probeScript, want) {
 			t.Errorf("the probe does not look at %s", want)
 		}

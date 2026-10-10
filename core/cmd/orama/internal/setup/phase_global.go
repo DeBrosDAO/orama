@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -11,17 +12,40 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/install"
 	"github.com/DeBrosOfficial/network/pkg/statesync"
+	"github.com/DeBrosOfficial/network/pkg/tornet"
 )
 
-// globalParallelism is how many machines install the global layer at once. The
-// installs are independent (each machine's own units and its own state-sync);
-// only the restart that follows and the chain transactions are one at a time.
-const globalParallelism = 4
+const (
+	// maxGlobalParallelism is the most machines that install the global layer at
+	// once. The installs are independent (each machine's own units and its own
+	// state-sync); only the restart that follows and the chain transactions are one
+	// at a time.
+	maxGlobalParallelism = 4
+	// syncStalls is how many polls in a row the chain unit may be down before the
+	// sync is given up: a unit restarting between two polls is not a failure, one
+	// that stays down is.
+	syncStalls = 3
+	// syncPollErrors is how many polls in a row may fail to reach the machine or
+	// to read its answer before the wait is given up.
+	syncPollErrors = 5
+	// minQuorumCluster is the smallest cluster that survives one voter restarting.
+	minQuorumCluster = 3
+)
 
-// syncStalls is how many polls in a row the chain unit may be down before the
-// sync is given up: a unit restarting between two polls is not a failure, one
-// that stays down is.
-const syncStalls = 3
+// globalParallelism is how many machines install at once on a cluster of size
+// nodes: at most as many as the cluster can lose and still hold its quorum, so
+// that heavy installs (a package install, units, firewall rules) never run on
+// every voter together, and never more than maxGlobalParallelism.
+func globalParallelism(size int) int {
+	spare := size - (size/2 + 1)
+	switch {
+	case spare < 1:
+		return 1
+	case spare > maxGlobalParallelism:
+		return maxGlobalParallelism
+	}
+	return spare
+}
 
 func (r *runner) fullRuns() []*nodeRun {
 	var out []*nodeRun
@@ -33,35 +57,54 @@ func (r *runner) fullRuns() []*nodeRun {
 	return out
 }
 
-// globalPhase installs the global layer on every full machine that lacks it and
-// waits until each chain node has caught up.
+// globalPhase installs the global layer on every full machine that lacks it, and
+// on every one waits until its chain has caught up. A machine that has the layer
+// but whose chain is not running (a run stopped between the install and the start)
+// is started; one that is running goes straight to the wait, which returns at its
+// first poll when the chain is synced.
 func (r *runner) globalPhase(ctx context.Context) error {
-	var todo []*nodeRun
+	var fresh []*nodeRun
 	for _, n := range r.fullRuns() {
-		if n.facts.GlobalInstalled {
-			r.skip(n.plan.IP, StepGlobal, "the chain unit is installed")
-			r.skip(n.plan.IP, StepSync, "")
+		if !n.facts.GlobalInstalled {
+			fresh = append(fresh, n)
 			continue
 		}
-		todo = append(todo, n)
+		if err := r.resumeGlobal(ctx, n); err != nil {
+			return err
+		}
 	}
-	if len(todo) == 0 {
+	if len(fresh) > 0 {
+		trust, err := r.d.Trust.TrustPoint(ctx, r.net)
+		if err != nil {
+			return fmt.Errorf("find a block to start the chain from: %w", err)
+		}
+		r.d.Report.Linef("chain starts from block %d (%s), agreed by %d seeds", trust.Height, trust.Hash, len(trust.Servers))
+		if err := r.parallel(fresh, func(n *nodeRun) error { return r.installGlobal(ctx, n, trust) }); err != nil {
+			return err
+		}
+	}
+	return r.parallel(r.fullRuns(), func(n *nodeRun) error { return r.waitSynced(ctx, n) })
+}
+
+// resumeGlobal makes sure the services of a machine that has the global layer are
+// running.
+func (r *runner) resumeGlobal(ctx context.Context, n *nodeRun) error {
+	if n.facts.ChainActive {
+		r.skip(n.plan.IP, StepGlobal, "installed and the chain is running")
 		return nil
 	}
-	trust, err := r.d.Trust.TrustPoint(ctx, r.net)
-	if err != nil {
-		return fmt.Errorf("find a block to start the chain from: %w", err)
+	r.emit(n.plan.IP, StepGlobal, StateRunning, "installed, starting the services")
+	if err := n.m.StartGlobal(ctx, n.plan); err != nil {
+		r.emit(n.plan.IP, StepGlobal, StateFailed, err.Error())
+		return fmt.Errorf("machine %s: %w", n.plan.IP, err)
 	}
-	r.d.Report.Linef("chain starts from block %d (%s), agreed by %d seeds", trust.Height, trust.Hash, len(trust.Servers))
-	if err := r.parallel(todo, func(n *nodeRun) error { return r.installGlobal(ctx, n, trust) }); err != nil {
-		return err
-	}
-	return r.parallel(todo, func(n *nodeRun) error { return r.waitSynced(ctx, n) })
+	r.emit(n.plan.IP, StepGlobal, StateDone, "started")
+	return nil
 }
 
 func (r *runner) parallel(nodes []*nodeRun, fn func(*nodeRun) error) error {
 	var g errgroup.Group
-	g.SetLimit(globalParallelism)
+	g.SetLimit(globalParallelism(r.clusterSize))
 	for _, n := range nodes {
 		g.Go(func() error { return fn(n) })
 	}
@@ -76,9 +119,9 @@ func (r *runner) installGlobal(ctx context.Context, n *nodeRun, trust *statesync
 		Trust: trust, Contact: r.contact(),
 	}
 	if n.plan.HasService(install.GlobalServiceRelay) {
-		tor, err := os.ReadFile(r.opts.TorNetwork)
+		tor, err := readTorNetwork(r.opts.TorNetwork)
 		if err != nil {
-			return fmt.Errorf("read --tor-network: %w", err)
+			return err
 		}
 		in.TorNetwork = tor
 	}
@@ -89,6 +132,23 @@ func (r *runner) installGlobal(ctx context.Context, n *nodeRun, trust *statesync
 	n.globalNew = true
 	r.emit(ip, StepGlobal, StateDone, "")
 	return nil
+}
+
+// readTorNetwork reads the Tor network file, at most tornet.NetworkFileLimit bytes.
+func readTorNetwork(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("read --tor-network: %w", err)
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, tornet.NetworkFileLimit+1))
+	if err != nil {
+		return nil, fmt.Errorf("read --tor-network %s: %w", path, err)
+	}
+	if len(data) > tornet.NetworkFileLimit {
+		return nil, fmt.Errorf("--tor-network %s is larger than the %d bytes a Tor network file can be", path, tornet.NetworkFileLimit)
+	}
+	return data, nil
 }
 
 // contact is where an abuse complaint about a relay goes: the operator's
@@ -104,7 +164,7 @@ func (r *runner) contact() string {
 // up, or the deadline passes. The chain unit being down for several polls in a
 // row ends the wait at once, with the end of its log.
 func (r *runner) waitSynced(ctx context.Context, n *nodeRun) error {
-	ip, down := n.plan.IP, 0
+	ip, down, failed := n.plan.IP, 0, 0
 	var lastErr error
 	r.emit(ip, StepSync, StateRunning, "restoring a snapshot")
 	t := r.d.Timing
@@ -112,10 +172,14 @@ func (r *runner) waitSynced(ctx context.Context, n *nodeRun) error {
 		st, err := n.m.ChainState(ctx)
 		if err != nil {
 			// A poll that cannot reach the node is not an answer; the last one
-			// is part of the message if the wait runs out.
+			// is part of the message if the wait ends, and several in a row end it.
 			lastErr = err
+			if failed++; failed >= syncPollErrors {
+				return false, fmt.Errorf("the chain on %s could not be polled %d times in a row: %w", ip, failed, err)
+			}
 			return false, nil
 		}
+		failed = 0
 		if !st.Running {
 			if down++; down >= syncStalls {
 				return false, fmt.Errorf("the chain unit on %s is not running (%d polls in a row); the end of its log:\n%s\n"+
@@ -141,8 +205,8 @@ func (r *runner) waitSynced(ctx context.Context, n *nodeRun) error {
 // next begins, so two RQLite voters are never down together.
 func (r *runner) restartPhase(ctx context.Context) error {
 	for _, n := range r.fullRuns() {
-		if !n.globalNew {
-			r.skip(n.plan.IP, StepRestart, "")
+		if !n.globalNew && !n.facts.RestartPending {
+			r.skip(n.plan.IP, StepRestart, "the cluster node started after the chain was installed")
 			continue
 		}
 		r.emit(n.plan.IP, StepRestart, StateRunning, "")
@@ -161,6 +225,3 @@ func (r *runner) restartPhase(ctx context.Context) error {
 func (r *runner) clusterTooSmallForQuorum() bool {
 	return r.clusterSize < minQuorumCluster
 }
-
-// minQuorumCluster is the smallest cluster that survives one voter restarting.
-const minQuorumCluster = 3

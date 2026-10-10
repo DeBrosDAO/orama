@@ -32,6 +32,9 @@ type Machine interface {
 	// InstallGlobal installs the global services beside the cluster node, writes
 	// the chain config and starts them.
 	InstallGlobal(ctx context.Context, in GlobalInstall) error
+	// StartGlobal starts the services of a node that do not need it registered
+	// (the chain, the public IPFS, a relay); starting what runs is a no-op.
+	StartGlobal(ctx context.Context, node NodePlan) error
 	// ChainState is one poll of the chain node's sync state.
 	ChainState(ctx context.Context) (ChainState, error)
 	// Identity reads, and creates where missing, the node keys the registration
@@ -54,7 +57,11 @@ type Machine interface {
 
 // Enroller reaches a machine over SSH with the operator's RootWallet key.
 type Enroller interface {
+	// Enroll gives the RootWallet a key on a new machine, pinning its host key.
 	Enroll(ctx context.Context, req MachineRequest) (Machine, error)
+	// Reach opens a machine enrolled before, asking nothing: its key is in the
+	// vault and its host key in the CLI's known hosts, or it is refused.
+	Reach(ctx context.Context, ip, user string) (Machine, error)
 }
 
 // MachineRequest is one machine to reach.
@@ -71,9 +78,10 @@ type Release struct {
 	// ArchivePath is the archive to put on the node: the verified release with
 	// the release root in its manifest, signed by the operator's wallet.
 	ArchivePath string
-	// ManifestSHA256 is the digest of the manifest inside the archive: a node
-	// whose /opt/orama/manifest.json has it already runs this build.
+	// ManifestSHA256 and CLISHA256 are the digests of the manifest inside the
+	// archive and of its bin/orama: a node that has both already runs this build.
 	ManifestSHA256 string
+	CLISHA256      string
 	Remove         func() error
 }
 

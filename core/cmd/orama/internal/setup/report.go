@@ -3,7 +3,9 @@ package setup
 import (
 	"fmt"
 	"io"
+	"strings"
 	"sync"
+	"unicode"
 )
 
 // Step is one thing a run does to a machine, in the order it does them.
@@ -53,6 +55,30 @@ type Reporter interface {
 	Linef(format string, args ...any)
 }
 
+// CleanTerminal replaces what could drive the operator's terminal in text a
+// machine, a seed or a chain node produced: control characters (an escape
+// sequence can rewrite the screen, set the window title or write the
+// clipboard), the C1 controls, the bidirectional overrides that make a line read
+// differently from how it is stored, and bytes that are not UTF-8. Line feeds and
+// tabs stay.
+func CleanTerminal(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r == '\n' || r == '\t':
+			return r
+		case unicode.IsControl(r), r >= bidiFirst && r <= bidiLast, r >= isolateFirst && r <= isolateLast, r == unicode.ReplacementChar:
+			return '?'
+		}
+		return r
+	}, s)
+}
+
+// The bidirectional embeddings, overrides and isolates (U+202A-U+202E, U+2066-U+2069).
+const (
+	bidiFirst, bidiLast       = '\u202a', '\u202e'
+	isolateFirst, isolateLast = '\u2066', '\u2069'
+)
+
 // TextReporter prints a run as lines.
 type TextReporter struct {
 	mu  sync.Mutex
@@ -72,7 +98,7 @@ func (t *TextReporter) Emit(e Event) {
 	}
 	suffix := ""
 	if e.Detail != "" {
-		suffix = ": " + e.Detail
+		suffix = ": " + CleanTerminal(e.Detail)
 	}
 	fmt.Fprintf(t.Out, "[%s] %s %s%s\n", where, e.Step, e.State, suffix)
 }
@@ -81,5 +107,5 @@ func (t *TextReporter) Emit(e Event) {
 func (t *TextReporter) Linef(format string, args ...any) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	fmt.Fprintf(t.Out, format+"\n", args...)
+	fmt.Fprintln(t.Out, CleanTerminal(fmt.Sprintf(format, args...)))
 }

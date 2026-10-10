@@ -203,10 +203,29 @@ func TestClient_aGatewayAnswering500(t *testing.T) {
 func TestNewHTTPClient_refusesARedirectToHTTP(t *testing.T) {
 	c := NewHTTPClient()
 	req, _ := http.NewRequest(http.MethodGet, "http://example.org/", nil)
-	if err := c.CheckRedirect(req, nil); err == nil {
+	first, _ := http.NewRequest(http.MethodPost, "https://example.org/v1/chain/light", nil)
+	if err := c.CheckRedirect(req, []*http.Request{first}); err == nil {
 		t.Fatal("a redirect to http must be refused")
 	}
-	if err := c.CheckRedirect(req, make([]*http.Request, maxRedirects)); err == nil {
+	bounded := make([]*http.Request, maxRedirects)
+	for i := range bounded {
+		bounded[i] = first
+	}
+	same, _ := http.NewRequest(http.MethodPost, "https://example.org/other", nil)
+	if err := c.CheckRedirect(same, bounded); err == nil {
 		t.Fatal("redirects must be bounded")
+	}
+}
+
+func TestNewHTTPClient_followsOnlyARedirectOnTheSameHost(t *testing.T) {
+	c := NewHTTPClient()
+	first, _ := http.NewRequest(http.MethodPost, "https://seed1.example.org/v1/chain/light", nil)
+	same, _ := http.NewRequest(http.MethodPost, "https://seed1.example.org/v1/chain/light/", nil)
+	other, _ := http.NewRequest(http.MethodPost, "https://seed2.example.org/v1/chain/light", nil)
+	if err := c.CheckRedirect(same, []*http.Request{first}); err != nil {
+		t.Errorf("a redirect on the same host is followed: %v", err)
+	}
+	if err := c.CheckRedirect(other, []*http.Request{first}); err == nil || !strings.Contains(err.Error(), "answers for itself") {
+		t.Errorf("a redirect to another host is a different witness: %v", err)
 	}
 }

@@ -1,11 +1,14 @@
 package remotessh
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net"
 	"os/exec"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/inspector"
@@ -28,6 +31,9 @@ func tunnelArgs(node inspector.Node, localPort int, remote string) []string {
 	args := append(node.HostKeyOptions(), baseSSHOptions()...)
 	args = append(args,
 		"-o", "ExitOnForwardFailure=yes",
+		// The operator's ssh_config may forward an agent; this machine has just been
+		// installed and is not given one.
+		"-o", "ForwardAgent=no",
 		"-i", node.SSHKey, "-N",
 		"-L", net.JoinHostPort(tunnelLoopback, strconv.Itoa(localPort))+":"+remote,
 		fmt.Sprintf("%s@%s", node.User, node.Host))
@@ -48,14 +54,19 @@ func StartTunnel(ctx context.Context, node inspector.Node, remote string) (local
 		return "", nil, fmt.Errorf("find a free local port for the tunnel: %w", err)
 	}
 	cmd := exec.Command("ssh", tunnelArgs(node, port, remote)...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
 		return "", nil, fmt.Errorf("start the SSH tunnel to %s: %w", node.Host, err)
 	}
 	exited := make(chan error, 1)
 	go func() { exited <- cmd.Wait() }()
+	var once sync.Once
 	stop = func() {
-		_ = cmd.Process.Kill()
-		<-exited
+		once.Do(func() {
+			_ = cmd.Process.Kill()
+			<-exited
+		})
 	}
 	local = net.JoinHostPort(tunnelLoopback, strconv.Itoa(port))
 	ctx, cancel := context.WithTimeout(ctx, tunnelReadyBudget)
@@ -70,7 +81,7 @@ func StartTunnel(ctx context.Context, node inspector.Node, remote string) (local
 		}
 		select {
 		case waitErr := <-exited:
-			return "", nil, fmt.Errorf("the SSH tunnel to %s ended before it was ready: %v", node.Host, waitErr)
+			return "", nil, fmt.Errorf("the SSH tunnel to %s ended before it was ready: %v: %s", node.Host, waitErr, strings.TrimSpace(stderr.String()))
 		case <-ctx.Done():
 			stop()
 			return "", nil, fmt.Errorf("the SSH tunnel to %s (%s) did not accept connections within %s", node.Host, remote, tunnelReadyBudget)
