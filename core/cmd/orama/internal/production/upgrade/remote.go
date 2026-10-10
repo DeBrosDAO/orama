@@ -19,6 +19,11 @@ import (
 // RemoteUpgrader handles rolling upgrades across remote nodes.
 type RemoteUpgrader struct {
 	flags *Flags
+
+	// AfterUpgrade runs on a node after its cluster services are upgraded and
+	// before the gate that waits for it to rejoin. `orama upgrade` uses it for
+	// the co-located global layer.
+	AfterUpgrade func(node inspector.Node) error
 }
 
 // NewRemoteUpgrader creates a new remote upgrader.
@@ -26,45 +31,69 @@ func NewRemoteUpgrader(flags *Flags) *RemoteUpgrader {
 	return &RemoteUpgrader{flags: flags}
 }
 
-// Execute runs the remote rolling upgrade.
+// Execute runs the remote rolling upgrade: it reads the cluster, prints the
+// plan, and with --yes restarts the nodes one at a time.
 func (r *RemoteUpgrader) Execute() error {
-	nodes, err := noderesolver.ResolveNodes(r.flags.Env)
-	if err != nil {
-		return err
-	}
-
-	// A named node is checked before anything is resolved or read, so a typo
-	// fails at once instead of after every node has been probed.
-	if r.flags.NodeFilter != "" && len(remotessh.FilterByIP(nodes, r.flags.NodeFilter)) == 0 {
-		return fmt.Errorf("node %s not found in %s environment", r.flags.NodeFilter, r.flags.Env)
-	}
-
-	// Keys for every node, --node or not: the safety preconditions below read
-	// every node's raft state.
-	cleanup, err := remotessh.PrepareNodeKeys(nodes)
+	nodes, cleanup, err := r.Connect()
 	if err != nil {
 		return err
 	}
 	defer cleanup()
 
-	// Build the plan from what the cluster is actually doing, not from the
-	// order nodes happen to appear in nodes.conf. Restarting the leader first
-	// costs an election on every node after it; restarting two nameservers back
-	// to back takes the zone offline.
-	fmt.Printf("Reading cluster state from %d nodes...\n", len(nodes))
-	roles := rollout.ReadRoles(nodes, rollout.DefaultRunner)
-
-	plan, err := planRollout(nodes, roles, r.flags.NodeFilter)
+	plan, err := r.Plan(nodes)
 	if err != nil {
-		return fmt.Errorf("cannot plan a rolling upgrade of %s: %w", r.flags.Env, err)
+		return err
 	}
-
 	fmt.Printf("\n%s\n", plan)
 
 	if !r.flags.Yes {
 		return fmt.Errorf("re-run with --yes to execute this plan")
 	}
+	return r.Roll(plan)
+}
 
+// Connect resolves the environment's nodes, checks a named node is among them
+// and prepares the SSH keys for every node. cleanup removes the keys.
+func (r *RemoteUpgrader) Connect() (nodes []inspector.Node, cleanup func(), err error) {
+	nodes, err = noderesolver.ResolveNodes(r.flags.Env)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// A named node is checked before anything is resolved or read, so a typo
+	// fails at once instead of after every node has been probed.
+	if r.flags.NodeFilter != "" && len(remotessh.FilterByIP(nodes, r.flags.NodeFilter)) == 0 {
+		return nil, nil, fmt.Errorf("node %s not found in %s environment", r.flags.NodeFilter, r.flags.Env)
+	}
+
+	// Keys for every node, --node or not: the safety preconditions below read
+	// every node's raft state.
+	cleanup, err = remotessh.PrepareNodeKeys(nodes)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nodes, cleanup, nil
+}
+
+// Plan reads the raft state of every node and builds the rollout from what the
+// cluster is actually doing, not from the order nodes happen to appear in
+// nodes.conf. Restarting the leader first costs an election on every node
+// after it; restarting two nameservers back to back takes the zone offline.
+func (r *RemoteUpgrader) Plan(nodes []inspector.Node) (*rollout.Plan, error) {
+	fmt.Printf("Reading cluster state from %d nodes...\n", len(nodes))
+	roles := rollout.ReadRoles(nodes, rollout.DefaultRunner)
+
+	plan, err := planRollout(nodes, roles, r.flags.NodeFilter)
+	if err != nil {
+		return nil, fmt.Errorf("cannot plan a rolling upgrade of %s: %w", r.flags.Env, err)
+	}
+	return plan, nil
+}
+
+// Roll upgrades the plan's nodes one at a time. AfterUpgrade, when set, runs on
+// each node once its cluster services are upgraded and before the gate that
+// waits for it to carry its share again; its error stops the rollout.
+func (r *RemoteUpgrader) Roll(plan *rollout.Plan) error {
 	for i, step := range plan.Steps {
 		fmt.Printf("[%d/%d] Upgrading %s (%s, %s)...\n",
 			i+1, len(plan.Steps), step.Node.Host, step.Node.Role, step.Role)
@@ -74,6 +103,13 @@ func (r *RemoteUpgrader) Execute() error {
 				step.Node.Host, err, len(plan.Steps)-i-1)
 		}
 		fmt.Printf("  ✓ %s upgraded\n", step.Node.Host)
+
+		if r.AfterUpgrade != nil {
+			if err := r.AfterUpgrade(step.Node); err != nil {
+				return fmt.Errorf("%w\nStopping rollout — %d node(s) not upgraded",
+					err, len(plan.Steps)-i-1)
+			}
+		}
 
 		// Gate on the node actually rejoining, not on a fixed sleep. A sleep
 		// cannot tell a node that came back in 20 seconds from one that never
@@ -168,7 +204,14 @@ var nodeStagedPaths = stagedPaths{
 // else, and not symlinks — a CLI anyone but root could have replaced is not
 // run as root. The script travels base64-encoded into `bash -s`.
 func upgradeCommand(sudo string, flags *Flags) string {
-	script := upgradeScript(nodeStagedPaths, upgradeArgs(flags))
+	return StagedCLICommand(sudo, upgradeArgs(flags))
+}
+
+// StagedCLICommand runs the staged CLI (/opt/orama/bin/orama) with args, as
+// root, behind the guard above: only a build that a push or a release stage
+// verified, in a tree only root can change, is run.
+func StagedCLICommand(sudo, args string) string {
+	script := upgradeScript(nodeStagedPaths, args)
 	// The shell has to decode it. Piping the encoded text to bash runs the
 	// base64 itself as a command, and the node never starts the upgrade.
 	return "printf %s " + base64.StdEncoding.EncodeToString([]byte(script)) + " | base64 -d | " + sudo + "bash -s"
