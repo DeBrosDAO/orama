@@ -171,3 +171,67 @@ func TestServeLight_busyGatewayAnswers503(t *testing.T) {
 		t.Fatalf("status %d headers %v", rr.Code, rr.Header())
 	}
 }
+
+const cometStatus = `{"node_info":{"protocol_version":{"p2p":"8","block":"11","app":"0"},"id":"` +
+	"0123456789abcdef0123456789abcdef01234567" + `","listen_addr":"tcp://10.0.0.7:31000","network":"orama-stagenet-7","version":"0.39.4",` +
+	`"channels":"40202122233038606100","moniker":"alice","other":{"tx_index":"on","rpc_address":"tcp://127.0.0.1:31001"}},` +
+	`"sync_info":{"latest_block_hash":"AB","latest_block_height":"4900","catching_up":false},"validator_info":{"address":"CD"}}`
+
+// A status answer names the node's internal listeners. The route is public and a light client needs
+// none of them: it reads the chain id, the node id and sync_info.
+func TestServeLight_statusNamesNoListenerOfTheNode(t *testing.T) {
+	rr := postLight(lightProxy(t, &lightStub{result: cometStatus}), `{"jsonrpc":"2.0","id":3,"method":"status"}`)
+	a := decodeLight(t, rr)
+	body := string(a.Result)
+	for _, leaked := range []string{"listen_addr", "rpc_address", "10.0.0.7", "127.0.0.1", "31001", "31000"} {
+		if strings.Contains(body, leaked) {
+			t.Errorf("the status answer still carries %q: %s", leaked, body)
+		}
+	}
+	var doc struct {
+		NodeInfo struct {
+			ID      string            `json:"id"`
+			Network string            `json:"network"`
+			Version string            `json:"version"`
+			Other   map[string]string `json:"other"`
+		} `json:"node_info"`
+		SyncInfo struct {
+			LatestBlockHeight string `json:"latest_block_height"`
+			CatchingUp        bool   `json:"catching_up"`
+		} `json:"sync_info"`
+	}
+	if err := json.Unmarshal(a.Result, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.NodeInfo.ID != "0123456789abcdef0123456789abcdef01234567" || doc.NodeInfo.Network != "orama-stagenet-7" || doc.NodeInfo.Version != "0.39.4" ||
+		doc.SyncInfo.LatestBlockHeight != "4900" || doc.NodeInfo.Other["tx_index"] != "on" {
+		t.Errorf("a field a light client reads was removed: %+v", doc)
+	}
+}
+
+// Only status is cleaned: the other answers carry no node address and pass as they are.
+func TestServeLight_otherMethodsPassUnchanged(t *testing.T) {
+	const commit = `{"signed_header":{"header":{"height":"5"},"listen_addr":"kept"}}`
+	a := decodeLight(t, postLight(lightProxy(t, &lightStub{result: commit}), `{"jsonrpc":"2.0","id":1,"method":"commit","params":{"height":"5"}}`))
+	if string(a.Result) != commit {
+		t.Errorf("a commit answer was changed: %s", a.Result)
+	}
+}
+
+func TestServeLight_aStatusWithoutNodeInfoOrWithOddShapesIsHandled(t *testing.T) {
+	for name, result := range map[string]string{
+		"no node_info":     `{"sync_info":{"latest_block_height":"1"}}`,
+		"no other section": `{"node_info":{"id":"x","listen_addr":"tcp://10.0.0.7:1"}}`,
+	} {
+		a := decodeLight(t, postLight(lightProxy(t, &lightStub{result: result}), `{"jsonrpc":"2.0","id":1,"method":"status"}`))
+		if strings.Contains(string(a.Result), "listen_addr") {
+			t.Errorf("%s: %s", name, a.Result)
+		}
+	}
+	for name, result := range map[string]string{"node_info not an object": `{"node_info":"x"}`, "other not an object": `{"node_info":{"other":3}}`, "result not an object": `[1]`} {
+		rr := postLight(lightProxy(t, &lightStub{result: result}), `{"jsonrpc":"2.0","id":1,"method":"status"}`)
+		if rr.Code != http.StatusBadGateway {
+			t.Errorf("%s: status %d, want 502 and nothing sent: %s", name, rr.Code, rr.Body)
+		}
+	}
+}

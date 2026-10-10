@@ -100,8 +100,52 @@ func (p *Proxy) serveLight(w http.ResponseWriter, r *http.Request) {
 			Code: jsonRPCInternal, Message: sanitizeLog(rpcErr.Message), Data: sanitizeLog(rpcErr.Data),
 		}})
 	default:
+		if req.Method == "status" {
+			var cleaned bool
+			if result, cleaned = withoutNodeAddresses(result); !cleaned {
+				writeErr(w, http.StatusBadGateway, "chain answered a status that is not readable")
+				return
+			}
+		}
 		writeJSON(w, http.StatusOK, lightAnswer{JSONRPC: "2.0", ID: id, Result: result})
 	}
+}
+
+// withoutNodeAddresses removes the addresses a node's status reports about itself
+// (node_info.listen_addr and node_info.other.rpc_address): this route is public, and they name the
+// node's internal listeners. A light client reads the chain id, the node id and sync_info, which
+// stay. It reports false for a result it cannot read, which is then not sent.
+func withoutNodeAddresses(result json.RawMessage) (json.RawMessage, bool) {
+	var status map[string]json.RawMessage
+	if json.Unmarshal(result, &status) != nil {
+		return nil, false
+	}
+	if raw, ok := status["node_info"]; ok {
+		var info map[string]json.RawMessage
+		if json.Unmarshal(raw, &info) != nil {
+			return nil, false
+		}
+		delete(info, "listen_addr")
+		if rawOther, ok := info["other"]; ok {
+			var other map[string]json.RawMessage
+			if json.Unmarshal(rawOther, &other) != nil {
+				return nil, false
+			}
+			delete(other, "rpc_address")
+			cleanedOther, err := json.Marshal(other)
+			if err != nil {
+				return nil, false
+			}
+			info["other"] = cleanedOther
+		}
+		cleanedInfo, err := json.Marshal(info)
+		if err != nil {
+			return nil, false
+		}
+		status["node_info"] = cleanedInfo
+	}
+	cleaned, err := json.Marshal(status)
+	return cleaned, err == nil
 }
 
 // readLightRequest reads one JSON-RPC request. A body that is not one, or whose id is not a short
