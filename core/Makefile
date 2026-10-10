@@ -164,6 +164,20 @@ rollout-testnet:
 docs:
 	go test -count=1 ./cmd/orama -run TestCLIReference -update-cli-reference
 
+# Rewrite the embedded network registry (pkg/netregistry/embedded) from the
+# repository's networks/ directory. Go cannot embed a file outside the module, so
+# the binary carries a build copy of each network's manifest and release root;
+# `go test ./pkg/netregistry` fails when the copy and networks/ differ.
+.PHONY: sync-networks
+sync-networks:
+	find pkg/netregistry/embedded -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} +
+	@for dir in ../networks/*/; do \
+		[ -d "$$dir" ] || continue; \
+		name=$$(basename "$$dir"); \
+		mkdir -p "pkg/netregistry/embedded/$$name"; \
+		cp "$$dir/manifest.json" "$$dir/release-root.json" "pkg/netregistry/embedded/$$name/"; \
+	done
+
 # The run-your-own-cluster guide (docs/RUN_YOUR_OWN_CLUSTER.md) executed step by
 # step against machines you provide. It installs Orama on real servers, so it
 # never runs from `make test`: see docs/DEV_DEPLOY.md, "Cluster guide e2e".

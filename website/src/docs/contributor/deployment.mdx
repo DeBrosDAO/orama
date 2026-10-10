@@ -65,6 +65,15 @@ Proceed only when both pass. `orama rollout` gates on the same signals itself an
 - Do not stop `orama-node` on several nodes at once; it takes the index services with it.
 - Do not fix a node by hand. Fix in source, test, then roll out.
 
+## Published networks
+
+`networks/<name>/` in the repository is what a joining operator trusts: `manifest.json` (chain id, the digest of the genesis, seed DNS names, release channel, minimum version, release repository, the digest of the release root and whether the network has a faucet), `genesis.json` and `release-root.json`. A deploy writes it; nobody edits it by hand.
+
+- **Every reset of a network gets a new chain id** (`orama-stagenet-5` becomes `orama-stagenet-6`). Publishing refuses to give an already published chain id a different genesis.
+- **The binary carries a copy.** Go cannot embed a file outside the `core` module, so `make -C core sync-networks` copies each network's manifest and release root into `core/pkg/netregistry/embedded/`. `go test ./pkg/netregistry` fails when that copy and `networks/` differ. Genesis files are not embedded: they are fetched and checked against the manifest's digest.
+- **The website serves it.** `pnpm build` copies `networks/` to `https://orama.network/networks/<name>/` and fails if a copy differs from the source, or if a manifest's digests do not match its files.
+- **A manifest can be out before its genesis.** The CLI says so ("the network has no genesis published yet") instead of guessing.
+
 ## Environments
 
 An environment is just a name for a cluster in your CLI. Promotion is rolling the same archive to the next one (`orama push --env <next> --archive <same path>`), which the nodes verify against their own trust anchor. Pushing the same archive to several clusters works only if each trusts the signer.
