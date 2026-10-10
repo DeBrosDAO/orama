@@ -38,6 +38,8 @@ type fakeChain struct {
 func (f *fakeChain) Account(context.Context, string) (clusterreg.Account, error) {
 	return clusterreg.Account{Number: 1, Sequence: 2}, nil
 }
+func (f *fakeChain) LatestHeight(context.Context) (uint64, error) { return 1000, nil }
+
 func (f *fakeChain) BaseFee(context.Context) (string, error) {
 	if f.baseFeeNorama != "" {
 		return f.baseFeeNorama, nil

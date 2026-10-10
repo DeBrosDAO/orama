@@ -19,6 +19,8 @@ func TestREST_sendsATransactionThroughTheNodesEndpoints(t *testing.T) {
 		switch r.URL.Path {
 		case "/cosmos/auth/v1beta1/accounts/" + testOperator:
 			_, _ = w.Write([]byte(`{"account":{"account_number":"42","sequence":"7"}}`))
+		case "/cosmos/base/tendermint/v1beta1/blocks/latest":
+			_, _ = w.Write([]byte(`{"block":{"header":{"height":"1000"}}}`))
 		case "/orama/fees/v1/base-fee":
 			_, _ = w.Write([]byte(`{"base_fee":"10"}`))
 		case "/cosmos/tx/v1beta1/simulate":
@@ -27,7 +29,7 @@ func TestREST_sendsATransactionThroughTheNodesEndpoints(t *testing.T) {
 			hash = postedHash(t, r)
 			_, _ = w.Write([]byte(`{"tx_response":{"code":0,"txhash":"` + hash + `"}}`))
 		case "/cosmos/tx/v1beta1/txs/" + hash:
-			_, _ = w.Write([]byte(`{"tx_response":{"height":"88","code":0}}`))
+			_, _ = w.Write([]byte(`{"tx_response":{"txhash":"` + hash + `","height":"88","code":0}}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -47,6 +49,7 @@ func TestREST_sendsATransactionThroughTheNodesEndpoints(t *testing.T) {
 	}
 	want := []string{
 		"GET /cosmos/auth/v1beta1/accounts/" + testOperator,
+		"GET /cosmos/base/tendermint/v1beta1/blocks/latest",
 		"POST /cosmos/tx/v1beta1/simulate",
 		"GET /orama/fees/v1/base-fee",
 		"POST /cosmos/tx/v1beta1/txs",
@@ -78,6 +81,8 @@ func TestREST_aNodeThatAnswersAnotherHashIsRefused(t *testing.T) {
 		switch r.URL.Path {
 		case "/cosmos/auth/v1beta1/accounts/" + testOperator:
 			_, _ = w.Write([]byte(`{"account":{"account_number":"42","sequence":"7"}}`))
+		case "/cosmos/base/tendermint/v1beta1/blocks/latest":
+			_, _ = w.Write([]byte(`{"block":{"header":{"height":"1000"}}}`))
 		case "/orama/fees/v1/base-fee":
 			_, _ = w.Write([]byte(`{"base_fee":"10"}`))
 		case "/cosmos/tx/v1beta1/simulate":

@@ -20,6 +20,9 @@ import (
 type Chain interface {
 	// Account reads an account's number and sequence.
 	Account(ctx context.Context, address string) (clusterreg.Account, error)
+	// LatestHeight reads the height of the newest block, from which a transaction's timeout
+	// height is counted.
+	LatestHeight(ctx context.Context) (uint64, error)
 	// BaseFee reads x/fees' base fee, norama per unit of gas.
 	BaseFee(ctx context.Context) (string, error)
 	// SimulateGas runs a transaction without including it and returns its gas.
@@ -48,6 +51,10 @@ type REST struct{ Base string }
 
 func (r REST) Account(ctx context.Context, address string) (clusterreg.Account, error) {
 	return clusterreg.FetchAccount(ctx, r.Base, address)
+}
+
+func (r REST) LatestHeight(ctx context.Context) (uint64, error) {
+	return clusterreg.FetchLatestHeight(ctx, r.Base)
 }
 
 func (r REST) BaseFee(ctx context.Context) (string, error) {

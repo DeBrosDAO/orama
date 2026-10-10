@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/chainread"
@@ -86,6 +87,39 @@ func statusAsClusterreg(err error) error {
 		return fmt.Errorf("%w: %w", &clusterreg.StatusError{Code: status.Code}, err)
 	}
 	return err
+}
+
+// LatestHeight reads the newest block's height from the gateway's chain status.
+func (g Gateway) LatestHeight(ctx context.Context) (uint64, error) {
+	raw, err := g.Reader.GatewayGet(ctx, "status")
+	if err != nil {
+		return 0, fmt.Errorf("read the chain status from the gateway: %w", err)
+	}
+	var resp struct {
+		SyncInfo *struct {
+			Height string `json:"latest_block_height"`
+		} `json:"sync_info"`
+		Result *struct {
+			SyncInfo *struct {
+				Height string `json:"latest_block_height"`
+			} `json:"sync_info"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return 0, fmt.Errorf("the gateway answered a chain status that is not JSON: %w", err)
+	}
+	height := ""
+	switch {
+	case resp.SyncInfo != nil:
+		height = resp.SyncInfo.Height
+	case resp.Result != nil && resp.Result.SyncInfo != nil:
+		height = resp.Result.SyncInfo.Height
+	}
+	n, err := strconv.ParseUint(height, 10, 64)
+	if err != nil || n == 0 {
+		return 0, fmt.Errorf("the gateway's chain status has no usable latest_block_height (%q)", httputil.PrintableMax(height, 24))
+	}
+	return n, nil
 }
 
 func (g Gateway) BaseFee(ctx context.Context) (string, error) {
@@ -172,6 +206,7 @@ func (g Gateway) txResult(ctx context.Context, hash string) (height int64, found
 	}
 	var resp struct {
 		Result struct {
+			Hash     string `json:"hash"`
 			Height   string `json:"height"`
 			TxResult struct {
 				Code uint32 `json:"code"`
@@ -181,6 +216,11 @@ func (g Gateway) txResult(ctx context.Context, hash string) (height int64, found
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return 0, false, fmt.Errorf("the gateway answered a transaction result that is not JSON: %w", err)
+	}
+	// The answer must be about the transaction asked for: another one's block and result would
+	// have this one reported as included, or as failed, on the gateway's word.
+	if !strings.EqualFold(resp.Result.Hash, hash) {
+		return 0, false, fmt.Errorf("asked for transaction %s and the gateway answered the result of %q; refusing to report it", hash, httputil.PrintableMax(resp.Result.Hash, 80))
 	}
 	height, err = strconv.ParseInt(resp.Result.Height, 10, 64)
 	if err != nil || height <= 0 {

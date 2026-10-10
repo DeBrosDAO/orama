@@ -335,3 +335,40 @@ func TestSend_aSimulationThatUsedNoGasIsRefused(t *testing.T) {
 		t.Fatal("a zero gas limit was signed")
 	}
 }
+
+// The signed body carries a timeout height: the newest block plus the margin. A node that holds
+// the transaction cannot release it after that block.
+func TestSend_theSignedBodyCarriesATimeoutHeight(t *testing.T) {
+	chain, signer := newFakeChain(), newSigner()
+	chain.latest = 4321
+	p, err := newClient(t, chain, signer).prepare(context.Background(), clusterreg.RegisterOperatorTypeURL, []byte{1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := uint64(4321 + TimeoutHeightMargin); p.tx.TimeoutHeight != want {
+		t.Fatalf("timeout height %d, want %d", p.tx.TimeoutHeight, want)
+	}
+	if _, err := p.Submit(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	body := field(t, signer.signed[0], 1)
+	if got := varint(t, body, 3); got != 4321+TimeoutHeightMargin {
+		t.Fatalf("the signed body's timeout_height = %d, want %d", got, 4321+TimeoutHeightMargin)
+	}
+	// The simulation prices the transaction that will be signed, timeout included.
+	if got := varint(t, field(t, chain.simulated[0], 1), 3); got != 4321+TimeoutHeightMargin {
+		t.Fatalf("the simulated body's timeout_height = %d", got)
+	}
+}
+
+func TestSend_aTimeoutHeightThatCannotBeReadSignsNothing(t *testing.T) {
+	chain, signer := newFakeChain(), newSigner()
+	chain.latestErr = errors.New("no height")
+	_, err := newClient(t, chain, signer).RegisterOperator(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "timeout height") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(signer.signed) != 0 || len(chain.sent) != 0 || len(chain.simulated) != 0 {
+		t.Fatal("a transaction with no timeout height went on")
+	}
+}

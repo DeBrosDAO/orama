@@ -49,7 +49,7 @@ func WaitIncluded(ctx context.Context, base, hash string, timeout, poll time.Dur
 	defer tick.Stop()
 	url := strings.TrimRight(base, "/") + "/cosmos/tx/v1beta1/txs/" + hash
 	for {
-		height, found, err := txResult(ctx, url)
+		height, found, err := txResult(ctx, url, hash)
 		if ctx.Err() != nil {
 			// The wait ended while a lookup was in flight: that is the deadline or the caller's
 			// cancellation, not a failed lookup.
@@ -74,7 +74,7 @@ func waitEnded(ctx context.Context, timeout time.Duration, hash string) error {
 }
 
 // txResult reads one transaction result. found is false while the chain does not have it.
-func txResult(ctx context.Context, url string) (int64, bool, error) {
+func txResult(ctx context.Context, url, hash string) (int64, bool, error) {
 	body, err := getJSON(ctx, url)
 	var status *StatusError
 	switch {
@@ -86,12 +86,18 @@ func txResult(ctx context.Context, url string) (int64, bool, error) {
 	var resp struct {
 		TxResponse struct {
 			Height string `json:"height"`
+			TxHash string `json:"txhash"`
 			Code   uint32 `json:"code"`
 			RawLog string `json:"raw_log"`
 		} `json:"tx_response"`
 	}
 	if err := json.Unmarshal(body, &resp); err != nil {
 		return 0, false, fmt.Errorf("transaction result is not JSON")
+	}
+	// The answer must be about the transaction asked for: a node that answers another one's block
+	// and result would have this one reported as included, or as failed, on that word.
+	if !strings.EqualFold(resp.TxResponse.TxHash, hash) {
+		return 0, false, fmt.Errorf("asked for transaction %s and the node answered the result of %q; refusing to report it", hash, printable(resp.TxResponse.TxHash))
 	}
 	height, err := strconv.ParseInt(resp.TxResponse.Height, 10, 64)
 	if err != nil || height <= 0 {

@@ -34,7 +34,7 @@ func chainAPI(t *testing.T, result string) *httptest.Server {
 // The storage smoke on stagenet printed "opened deal" for a transaction that was only in the
 // mempool. Admission is not success: the block's verdict is.
 func TestBroadcastAndWait_aTransactionItsBlockRefusesIsAFailure(t *testing.T) {
-	srv := chainAPI(t, `{"tx_response":{"height":"9","code":5,"raw_log":"insufficient funds"}}`)
+	srv := chainAPI(t, `{"tx_response":{"txhash":"`+testTxHash+`","height":"9","code":5,"raw_log":"insufficient funds"}}`)
 	err := broadcastAndWait(context.Background(), srv.URL, []byte{1}, "opened deal")
 	if err == nil || !strings.Contains(err.Error(), testTxHash) || !strings.Contains(err.Error(), "insufficient funds") {
 		t.Fatalf("err = %v, want the block's refusal naming the hash", err)
@@ -42,7 +42,7 @@ func TestBroadcastAndWait_aTransactionItsBlockRefusesIsAFailure(t *testing.T) {
 }
 
 func TestBroadcastAndWait_succeedsOnceInABlock(t *testing.T) {
-	srv := chainAPI(t, `{"tx_response":{"height":"9","code":0}}`)
+	srv := chainAPI(t, `{"tx_response":{"txhash":"`+testTxHash+`","height":"9","code":0}}`)
 	if err := broadcastAndWait(context.Background(), srv.URL, []byte{1}, "opened deal"); err != nil {
 		t.Fatal(err)
 	}

@@ -46,6 +46,12 @@ const (
 	// maxChainIDLen is the longest chain id the client accepts.
 	maxChainIDLen = 64
 
+	// TimeoutHeightMargin is how many blocks past the newest one a transaction may still be
+	// included in. The chain refuses it after that, so a node that holds it cannot release it
+	// later. It is far longer than the two-minute wait for inclusion at any block time the
+	// networks run, and short enough that a lost transaction is dead within the hour.
+	TimeoutHeightMargin = 200
+
 	// simulationGasLimit and simulationFee fill the gas and fee fields of the
 	// transaction that is simulated: the chain does not check either in a
 	// simulation, and the builder needs both positive.
@@ -172,9 +178,13 @@ func (c *Client) prepare(ctx context.Context, typeURL string, msg []byte) (*Prep
 	if len(acct.PubKey) != 0 && !bytes.Equal(acct.PubKey, id.PubKey) {
 		return nil, fmt.Errorf("account %s is known to the chain under another public key than the RootWallet's", id.Address)
 	}
+	latest, err := c.chain.LatestHeight(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read the newest block's height for the timeout height: %w", err)
+	}
 	tx := clusterreg.Direct{
 		TypeURL: typeURL, Msg: msg, PubKey: id.PubKey, Sequence: acct.Sequence,
-		ChainID: c.chainID, AccountNumber: acct.Number,
+		ChainID: c.chainID, AccountNumber: acct.Number, TimeoutHeight: latest + TimeoutHeightMargin,
 	}
 	if tx.Gas, err = c.gasFor(ctx, tx); err != nil {
 		return nil, err

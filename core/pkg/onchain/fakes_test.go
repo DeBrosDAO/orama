@@ -35,6 +35,9 @@ type fakeChain struct {
 	// answerHash replaces the hash the chain answers to a broadcast (default: the real hash).
 	answerHash string
 	waited     []string
+	// latest is the newest block's height (default 1000); latestErr fails reading it.
+	latest    uint64
+	latestErr error
 
 	simulated [][]byte
 	sent      [][]byte
@@ -42,6 +45,12 @@ type fakeChain struct {
 
 func (f *fakeChain) Account(context.Context, string) (clusterreg.Account, error) {
 	return f.account, f.accountErr
+}
+func (f *fakeChain) LatestHeight(context.Context) (uint64, error) {
+	if f.latest == 0 {
+		return 1000, f.latestErr
+	}
+	return f.latest, f.latestErr
 }
 func (f *fakeChain) BaseFee(context.Context) (string, error) { return f.baseFee, nil }
 func (f *fakeChain) SimulateGas(_ context.Context, tx []byte) (uint64, error) {
