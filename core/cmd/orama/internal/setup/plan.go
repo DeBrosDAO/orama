@@ -66,6 +66,10 @@ type Plan struct {
 	// Notes are things the operator is told before confirming: a role that was
 	// left out and why.
 	Notes []string
+	// QuorumLossVoters is how many voters the cluster has once the run is done when that
+	// is fewer than three and the run restarts a cluster node: each restart then takes
+	// the quorum down. Zero when it cannot.
+	QuorumLossVoters int
 }
 
 // PlanInput is what the plan is a function of.
@@ -117,10 +121,24 @@ func BuildPlan(in PlanInput) (*Plan, error) {
 		}
 		p.Nodes = append(p.Nodes, n)
 	}
+	if size := clusterSize(in.ExistingHosts, o.IPs); !o.ClusterOnly && size < minQuorumCluster {
+		p.QuorumLossVoters = size
+	}
 	if !o.ClusterOnly && !relay {
 		p.Notes = append(p.Notes, noRelayNote(o, in.Network))
 	}
 	return p, nil
+}
+
+// clusterSize is how many nodes the cluster has once ips are added to the hosts it already has.
+func clusterSize(existing, ips []string) int {
+	size := len(existing)
+	for _, ip := range ips {
+		if !slices.Contains(existing, ip) {
+			size++
+		}
+	}
+	return size
 }
 
 // planNames names every IP: the one name for a single full node, name-N for
@@ -202,6 +220,10 @@ func (p *Plan) Summary() []string {
 	}
 	for _, n := range p.Nodes {
 		lines = append(lines, nodeSummary(n))
+	}
+	if p.QuorumLossVoters > 0 {
+		lines = append(lines, fmt.Sprintf("restarting a node loses quorum on a cluster of %d voter(s): the global layer needs one restart of each cluster node, "+
+			"and the cluster is unavailable while it is away; the run does that only with --allow-quorum-loss or a yes to this plan", p.QuorumLossVoters))
 	}
 	return append(lines, p.Notes...)
 }

@@ -3,13 +3,16 @@ package setup
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/big"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/production/lifecycle"
 	"github.com/DeBrosOfficial/network/pkg/clusterreg"
 	"github.com/DeBrosOfficial/network/pkg/netregistry"
 )
@@ -127,10 +130,12 @@ func TestRun_aRelayWithNeitherAPinNorAFileIsAnErrorNotAnEmptyNetwork(t *testing.
 	}
 }
 
-func TestRun_aClusterWithFewerThanThreeVotersIsForcedOnlyWhenTheNodeSaysSo(t *testing.T) {
+func TestRun_aClusterWithFewerThanThreeVotersIsForcedOnlyWhenTheNodeSaysSoAndTheOperatorAllowedIt(t *testing.T) {
 	small := newHarness()
 	small.enroll.quorumRefusal = quorumBreak(2)
-	mustRun(t, small, small.opts(ip1, ip2))
+	opts := small.opts(ip1, ip2)
+	opts.AllowQuorumLoss = true
+	mustRun(t, small, opts)
 	first, forced := small.w.index("restart-force=false "+ip1), small.w.index("restart-force=true "+ip1)
 	if first < 0 || forced < 0 || first > forced {
 		t.Errorf("the node is asked first, then forced:\n%s", strings.Join(small.w.entries(), "\n"))
@@ -140,9 +145,50 @@ func TestRun_aClusterWithFewerThanThreeVotersIsForcedOnlyWhenTheNodeSaysSo(t *te
 	}
 
 	willing := newHarness()
-	mustRun(t, willing, willing.opts(ip1, ip2))
+	opts = willing.opts(ip1, ip2)
+	opts.AllowQuorumLoss = true
+	mustRun(t, willing, opts)
 	if willing.w.index("restart-force=true") >= 0 {
 		t.Errorf("a node that does not refuse is never forced:\n%s", strings.Join(willing.w.entries(), "\n"))
+	}
+}
+
+func TestRun_aSmallClusterIsNeverForcedSilently(t *testing.T) {
+	h := newHarness()
+	h.enroll.quorumRefusal = quorumBreak(2)
+	_, err := run(t, h, h.opts(ip1, ip2))
+	if err == nil || !strings.Contains(err.Error(), "--allow-quorum-loss") || !strings.Contains(err.Error(), "2 voter(s)") {
+		t.Fatalf("got %v: the run names the flag that allows the loss", err)
+	}
+	if h.w.index("restart-force=true") >= 0 {
+		t.Errorf("a cluster of two was forced without being allowed:\n%s", strings.Join(h.w.entries(), "\n"))
+	}
+	if !strings.Contains(h.report.text(), "restarting a node loses quorum on a cluster of 2 voter(s)") {
+		t.Errorf("the plan does not show the loss of quorum:\n%s", h.report.text())
+	}
+}
+
+func TestRun_aYesToThePlanThatShowsTheQuorumLossAllowsIt(t *testing.T) {
+	h := newHarness()
+	h.enroll.quorumRefusal = quorumBreak(2)
+	var shown *Plan
+	h.deps.Confirm = func(p *Plan) (bool, error) { shown = p; return true, nil }
+	opts := h.opts(ip1, ip2)
+	opts.Yes = false
+	mustRun(t, h, opts)
+	if shown == nil || shown.QuorumLossVoters != 2 {
+		t.Errorf("the plan the operator confirmed carries the loss: %+v", shown)
+	}
+	if h.w.index("restart-force=true "+ip1) < 0 {
+		t.Errorf("a confirmed plan allows the forced restart:\n%s", strings.Join(h.w.entries(), "\n"))
+	}
+}
+
+func TestRun_aPlanOfThreeVotersShowsNoQuorumLoss(t *testing.T) {
+	h := newHarness()
+	mustRun(t, h, h.opts(ip1, ip2, ip3))
+	if strings.Contains(h.report.text(), "loses quorum") {
+		t.Errorf("a cluster of three keeps its quorum through a restart:\n%s", h.report.text())
 	}
 }
 
@@ -183,6 +229,16 @@ func TestRun_aClusterOfThreeIsNeverForced(t *testing.T) {
 	}
 	if h.w.count("restart-force=false") != 1 {
 		t.Errorf("the next machine is not touched after a refusal, got %d restarts", h.w.count("restart-force=false"))
+	}
+}
+
+func TestQuorumRefusalPattern_matchesWhatTheNodePrints(t *testing.T) {
+	for _, voters := range []int{1, 2, 3, 5} {
+		msg := fmt.Sprintf(lifecycle.QuorumRefusalFormat, "the LEADER", voters-1, voters, voters/2+1)
+		m := quorumRefusal.FindStringSubmatch(msg)
+		if m == nil || m[1] != strconv.Itoa(voters) {
+			t.Errorf("%d voters: the node's own refusal %q is not read (got %v)", voters, msg, m)
+		}
 	}
 }
 
@@ -537,6 +593,26 @@ func TestRun_eachFullNodeClaimsItsOwnNameAfterItIsRegistered(t *testing.T) {
 	if !h.report.has(ip1, StepName, StateDone) {
 		t.Error("the claim is reported done")
 	}
+}
+
+func TestRun_aNameAnotherOperatorHoldsStopsTheRunBeforeAnySignature(t *testing.T) {
+	h := newHarness()
+	h.w.foreignNames = map[string]NameHolder{"alice-2": {NodeID: "someone-else", Operator: "orama1other"}}
+	_, err := run(t, h, h.opts(ip1, ip2))
+	if err == nil || !strings.Contains(err.Error(), `"alice-2" is held by node "someone-else"`) {
+		t.Fatalf("got %v", err)
+	}
+	for _, sent := range []string{"tx ", "faucet ", "claim "} {
+		if h.w.count(sent) != 0 {
+			t.Errorf("%q was sent before the names were checked: %v", sent, h.w.entries())
+		}
+	}
+}
+
+func TestRun_aNameThisNodeHoldsDoesNotStopTheRun(t *testing.T) {
+	h := newHarness()
+	h.w.names["alice"] = "alice"
+	mustRun(t, h, h.opts(ip1))
 }
 
 func TestRun_aClusterOnlyRunClaimsNoName(t *testing.T) {

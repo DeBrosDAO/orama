@@ -119,6 +119,11 @@ type Options struct {
 	TorNetwork string
 	// NoRelay leaves the relay out though the network pins a Tor network.
 	NoRelay bool
+	// AllowQuorumLoss lets the run restart a cluster node with --force when the cluster
+	// has fewer than three voters, so the restart takes its quorum down for as long as
+	// the node is away. Without it (or a yes to the plan that shows it) that restart
+	// stops the run.
+	AllowQuorumLoss bool
 	// NoValidator skips creating the validator (and the 1,000 ORAMA self-bond).
 	NoValidator bool
 	// Create, when set, makes the run create the network instead of joining one:

@@ -292,3 +292,18 @@ func (s *restSession) NodeName(ctx context.Context, nodeID string) (string, erro
 	}
 	return doc.Name.Name, nil
 }
+
+// NameHolder reads who holds name; nil when the name is free.
+func (s *restSession) NameHolder(ctx context.Context, name string) (*NameHolder, error) {
+	var doc struct {
+		Node struct {
+			NodeID   string `json:"node_id"`
+			Operator string `json:"operator"`
+		} `json:"node"`
+	}
+	found, err := s.get(ctx, "/orama/nodes/v1/node-by-name/"+url.PathEscape(name), &doc)
+	if err != nil || !found {
+		return nil, err
+	}
+	return &NameHolder{NodeID: doc.Node.NodeID, Operator: doc.Node.Operator}, nil
+}

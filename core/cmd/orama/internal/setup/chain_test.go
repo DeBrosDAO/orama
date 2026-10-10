@@ -251,3 +251,20 @@ func TestRestSession_nodeNameIsReadOrEmpty(t *testing.T) {
 		t.Error("an answer that is not the JSON expected is an error")
 	}
 }
+
+func TestRestSession_nameHolderIsReadOrNilWhenFree(t *testing.T) {
+	s := chainServer(t, map[string]func(http.ResponseWriter){
+		"/orama/nodes/v1/node-by-name/alpha-one": jsonBody(`{"node":{"name":"alpha-one","node_id":"alice","operator":"` + testOperator + `","ips":[]}}`),
+		"/orama/nodes/v1/node-by-name/bad":       jsonBody(`<html>`),
+	})
+	got, err := s.NameHolder(context.Background(), "alpha-one")
+	if err != nil || got == nil || got.NodeID != "alice" || got.Operator != testOperator {
+		t.Errorf("a held name: %+v, %v", got, err)
+	}
+	if got, err := s.NameHolder(context.Background(), "free-name"); err != nil || got != nil {
+		t.Errorf("a free name is nil, not an error: %+v, %v", got, err)
+	}
+	if _, err := s.NameHolder(context.Background(), "bad"); err == nil {
+		t.Error("an answer that is not the JSON expected is an error")
+	}
+}

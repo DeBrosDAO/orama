@@ -12,6 +12,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/production/lifecycle"
 	"github.com/DeBrosOfficial/network/pkg/install"
 	"github.com/DeBrosOfficial/network/pkg/statesync"
 	"github.com/DeBrosOfficial/network/pkg/tornet"
@@ -81,11 +82,11 @@ func (r *runner) globalPhase(ctx context.Context) error {
 			return fmt.Errorf("find a block to start the chain from: %w", err)
 		}
 		r.d.Report.Linef("chain starts from block %d (%s), agreed by %d seeds", trust.Height, trust.Hash, len(trust.Servers))
-		if err := r.parallel(fresh, func(n *nodeRun) error { return r.installGlobal(ctx, n, trust) }); err != nil {
+		if err := r.parallel(ctx, fresh, func(ctx context.Context, n *nodeRun) error { return r.installGlobal(ctx, n, trust) }); err != nil {
 			return err
 		}
 	}
-	return r.parallel(r.fullRuns(), func(n *nodeRun) error { return r.waitSynced(ctx, n) })
+	return r.parallel(ctx, r.fullRuns(), func(ctx context.Context, n *nodeRun) error { return r.waitSynced(ctx, n) })
 }
 
 // resumeGlobal makes sure the services of a machine that has the global layer are
@@ -104,11 +105,21 @@ func (r *runner) resumeGlobal(ctx context.Context, n *nodeRun) error {
 	return nil
 }
 
-func (r *runner) parallel(nodes []*nodeRun, fn func(*nodeRun) error) error {
-	var g errgroup.Group
+// parallel runs fn on every node, at most globalParallelism at once. The first failure cancels
+// the context the others run with, and a machine still queued behind it is not started.
+func (r *runner) parallel(ctx context.Context, nodes []*nodeRun, fn func(context.Context, *nodeRun) error) error {
+	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(globalParallelism(r.clusterSize))
 	for _, n := range nodes {
-		g.Go(func() error { return fn(n) })
+		if gctx.Err() != nil {
+			break
+		}
+		g.Go(func() error {
+			if err := gctx.Err(); err != nil {
+				return err
+			}
+			return fn(gctx, n)
+		})
 	}
 	return g.Wait()
 }
@@ -247,9 +258,11 @@ func quoteLog(log string) string {
 // restartNode restarts the cluster node under the node's own quorum check. When
 // that check refuses because the cluster has fewer than three voters (so no
 // restart can keep a quorum), the refusal says so with the voter count the node
-// itself read, and only then is the node restarted again with --force. A refusal
-// that does not count voters (the check could not read its status or the member
-// list), or one on three or more voters, is the answer and is returned.
+// itself read. The node is restarted again with --force only when the operator
+// allowed the loss of quorum (--allow-quorum-loss, or answering yes to the plan
+// that showed it); otherwise the run stops and says so. A refusal that does not
+// count voters (the check could not read its status or the member list), or one on
+// three or more voters, is the answer and is returned.
 func (r *runner) restartNode(ctx context.Context, n *nodeRun) error {
 	budget := r.d.Timing.RestartBudget
 	err := n.m.RestartNode(ctx, budget, false)
@@ -260,14 +273,29 @@ func (r *runner) restartNode(ctx context.Context, n *nodeRun) error {
 	if !ok {
 		return err
 	}
-	r.d.Report.Linef("the cluster has %d voter(s), too few to keep a quorum through a restart: restarting %s with --force", voters, n.plan.IP)
+	if !r.quorumLossAllowed {
+		return fmt.Errorf("restarting %s loses quorum on a cluster of %d voter(s) and the run was not told to allow that: "+
+			"pass --allow-quorum-loss (the cluster is unavailable while the node restarts), or answer yes to the plan: %w", n.plan.IP, voters, err)
+	}
+	r.d.Report.Linef("the cluster has %d voter(s), too few to keep a quorum through a restart: restarting %s with --force (--allow-quorum-loss)", voters, n.plan.IP)
 	return n.m.RestartNode(ctx, budget, true)
 }
 
-// quorumRefusal matches the refusal of `orama node restart` that counts voters
-// (core/cmd/orama/internal/production/lifecycle/quorum.go:evaluateQuorumSafety):
-// "would break RQLite quorum: R of N configured voters would remain reachable".
-var quorumRefusal = regexp.MustCompile(`would break RQLite quorum: \d+ of (\d+) configured voters`)
+// quorumRefusal matches the refusal of `orama node restart` that counts voters,
+// built from the format the node prints (lifecycle.QuorumRefusalFormat).
+var quorumRefusal = regexp.MustCompile(quorumRefusalPattern())
+
+// quorumRefusalPattern turns lifecycle.QuorumRefusalFormat into a pattern: the role is
+// any text, the voters that remain and the voters needed are numbers, and the configured
+// voters are captured.
+func quorumRefusalPattern() string {
+	pattern := regexp.QuoteMeta(lifecycle.QuorumRefusalFormat)
+	pattern = strings.Replace(pattern, "%s", `[^)]+`, 1)
+	for _, group := range []string{`\d+`, `(\d+)`, `\d+`} {
+		pattern = strings.Replace(pattern, "%d", group, 1)
+	}
+	return pattern
+}
 
 // refusedForTooFewVoters reports whether err is that refusal on fewer than
 // minQuorumCluster voters, and how many the node counted.

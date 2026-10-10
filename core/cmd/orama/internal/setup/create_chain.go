@@ -38,7 +38,7 @@ func (r *runner) chainStartPhase(ctx context.Context) error {
 		}
 		todo = append(todo, n)
 	}
-	if err := r.parallel(todo, func(n *nodeRun) error { return r.wireChain(ctx, n) }); err != nil {
+	if err := r.parallel(ctx, todo, func(ctx context.Context, n *nodeRun) error { return r.wireChain(ctx, n) }); err != nil {
 		return err
 	}
 	for _, n := range todo {
@@ -46,7 +46,7 @@ func (r *runner) chainStartPhase(ctx context.Context) error {
 			return err
 		}
 	}
-	return r.parallel(nodes, func(n *nodeRun) error { return r.waitBlocks(ctx, n) })
+	return r.parallel(ctx, nodes, func(ctx context.Context, n *nodeRun) error { return r.waitBlocks(ctx, n) })
 }
 
 // peersOf are the persistent peers of n: every other seat, by node id and public

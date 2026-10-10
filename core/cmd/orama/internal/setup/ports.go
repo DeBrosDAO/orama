@@ -213,7 +213,12 @@ type ChainReader interface {
 	ValidatorExists(ctx context.Context, operator string) (bool, error)
 	// NodeName is the name the node holds on the chain, or "" when it holds none.
 	NodeName(ctx context.Context, nodeID string) (string, error)
+	// NameHolder is the node and operator that hold name, or nil when the name is free.
+	NameHolder(ctx context.Context, name string) (*NameHolder, error)
 }
+
+// NameHolder is who holds a node name on the chain.
+type NameHolder struct{ NodeID, Operator string }
 
 // ChainParams are the x/nodes parameters the budget needs.
 type ChainParams struct {

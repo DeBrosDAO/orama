@@ -92,7 +92,7 @@ machine until every machine passes.`,
 var flags struct {
 	network, name, user, bootstrapKey, domain, acmeCA, env, contact, torNetwork string
 	ips, hostKeys                                                               []string
-	clusterOnly, exit, yes, password, noValidator, noRelay                      bool
+	clusterOnly, exit, yes, password, noValidator, noRelay, allowQuorumLoss     bool
 	storageGB                                                                   uint64
 	asn                                                                         uint32
 	create                                                                      createFlags
@@ -119,6 +119,7 @@ func init() {
 	f.StringVar(&flags.torNetwork, "tor-network", "", "A tor-network.json to give the relays instead of the one the network pins (a network that pins none runs a relay only with it)")
 	f.BoolVar(&flags.noRelay, "no-relay", false, "Run no relay though the network pins a Tor network file")
 	f.BoolVar(&flags.noValidator, "no-validator", false, "Do not create a validator (and do not bond the 1,000 ORAMA self-bond)")
+	f.BoolVar(&flags.allowQuorumLoss, "allow-quorum-loss", false, "Restart a cluster of fewer than three voters with --force when the global layer is installed: the cluster is unavailable while the node restarts (without it, a run with --yes stops there)")
 	flags.create.bind(f)
 }
 

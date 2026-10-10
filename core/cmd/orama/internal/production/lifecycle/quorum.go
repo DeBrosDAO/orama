@@ -13,6 +13,12 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 )
 
+// QuorumRefusalFormat is the refusal of a stop or restart that would break the RQLite
+// quorum, with the node's role, the voters that would remain reachable, the configured
+// voters and the voters needed. `orama setup` reads the voter count out of it
+// (setup.refusedForTooFewVoters), so a change to this text is a change to that parser.
+const QuorumRefusalFormat = "Stopping this node (%s, voter) would break RQLite quorum: %d of %d configured voters would remain reachable, need %d."
+
 // indexRQLiteUnit is the systemd unit backing the index RQLite on this node.
 const indexRQLiteUnit = "orama-namespace-rqlite@index"
 
@@ -166,9 +172,7 @@ func evaluateQuorumSafety(in quorumInputs) string {
 		if role == "Leader" {
 			role = "the LEADER"
 		}
-		return fmt.Sprintf(
-			"Stopping this node (%s, voter) would break RQLite quorum: %d of %d configured voters would remain reachable, need %d.",
-			role, remainingVoters, totalVoters, quorumNeeded)
+		return fmt.Sprintf(QuorumRefusalFormat, role, remainingVoters, totalVoters, quorumNeeded)
 	}
 
 	if raft.State == "Leader" {

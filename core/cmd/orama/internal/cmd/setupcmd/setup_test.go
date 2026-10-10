@@ -25,6 +25,7 @@ func resetFlags(t *testing.T) {
 	flags.acmeCA, flags.env, flags.contact, flags.torNetwork = "", "", "", ""
 	flags.ips, flags.hostKeys = nil, nil
 	flags.clusterOnly, flags.exit, flags.yes, flags.password, flags.noValidator = false, false, false, false, false
+	flags.allowQuorumLoss = false
 	flags.storageGB, flags.asn = 0, 0
 	flags.create = createFlags{}
 	Cmd.Flags().VisitAll(func(f *pflag.Flag) { f.Changed = false })

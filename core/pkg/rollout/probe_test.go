@@ -1,6 +1,7 @@
 package rollout
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -223,5 +224,33 @@ func TestProbeCommand_reachesRQLiteThroughNodeConfig(t *testing.T) {
 	}
 	if root := probeCommand(inspector.Node{User: "root", Host: "203.0.113.7"}); strings.Contains(root, "sudo ") {
 		t.Errorf("root probe uses sudo:\n%s", root)
+	}
+}
+
+func TestWaitReadyContext_aCancelledContextStopsTheWaitAtOnce(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	probes := 0
+	run := func(inspector.Node, string) (string, error) { probes++; return "", errors.New("not up") }
+	start := time.Now()
+	err := WaitReadyContext(ctx, inspector.Node{Host: "203.0.113.9"}, run, time.Hour)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if probes != 0 || time.Since(start) > time.Second {
+		t.Errorf("a cancelled wait probed %d times and took %s", probes, time.Since(start))
+	}
+}
+
+func TestWaitReadyContext_cancelDuringThePauseBetweenProbesStopsTheWait(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	run := func(inspector.Node, string) (string, error) { cancel(); return "", errors.New("not up") }
+	start := time.Now()
+	err := WaitReadyContext(ctx, inspector.Node{Host: "203.0.113.9"}, run, time.Hour)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if time.Since(start) >= GatePollInterval {
+		t.Errorf("the wait slept out the poll interval (%s) after it was cancelled", time.Since(start))
 	}
 }

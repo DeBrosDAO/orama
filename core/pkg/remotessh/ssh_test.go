@@ -1,6 +1,8 @@
 package remotessh
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,5 +63,15 @@ func TestBaseSSHOptions_aDeadSessionFails(t *testing.T) {
 	}
 	if sshServerAliveInterval*sshServerAliveCountMax > 120 {
 		t.Errorf("a dead session is detected after %ds; keep it within two minutes", sshServerAliveInterval*sshServerAliveCountMax)
+	}
+}
+
+func TestUploadFileContext_aCancelledContextEndsTheCopy(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	node := inspector.Node{Host: "203.0.113.9", User: "root", SSHKey: "/nonexistent/key"}
+	err := UploadFileContext(ctx, node, "/nonexistent/archive.tar.gz", "/tmp/archive.tar.gz")
+	if err == nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want it to wrap context.Canceled", err)
 	}
 }

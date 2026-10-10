@@ -1,6 +1,7 @@
 package rollout
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -73,6 +74,12 @@ func ReadRoles(nodes []inspector.Node, run SSHRunner) map[string]RaftRole {
 // rollout restarted the next voter either way — which is how a rolling upgrade
 // takes out a quorum.
 func WaitReady(node inspector.Node, run SSHRunner, budget time.Duration) error {
+	return WaitReadyContext(context.Background(), node, run, budget)
+}
+
+// WaitReadyContext is WaitReady that stops waiting when ctx is done: it is checked before
+// every probe and during the pause between two.
+func WaitReadyContext(ctx context.Context, node inspector.Node, run SSHRunner, budget time.Duration) error {
 	if budget == 0 {
 		budget = GateBudget
 	}
@@ -81,6 +88,9 @@ func WaitReady(node inspector.Node, run SSHRunner, budget time.Duration) error {
 	deadline := time.Now().Add(budget)
 	var last error
 	for {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("stopped waiting for %s: %w", node.Host, err)
+		}
 		st, err := observe(node, run)
 		if err == nil {
 			last = st.Ready(opts)
@@ -94,7 +104,11 @@ func WaitReady(node inspector.Node, run SSHRunner, budget time.Duration) error {
 		if time.Now().After(deadline) {
 			return fmt.Errorf("%s did not come back within %s: %w", node.Host, budget, last)
 		}
-		time.Sleep(GatePollInterval)
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("stopped waiting for %s: %w", node.Host, ctx.Err())
+		case <-time.After(GatePollInterval):
+		}
 	}
 }
 

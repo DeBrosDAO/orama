@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/production/dnsdelegation"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/production/lifecycle"
 	"github.com/DeBrosOfficial/network/pkg/clusterreg"
 	"github.com/DeBrosOfficial/network/pkg/globalbind"
 	"github.com/DeBrosOfficial/network/pkg/install"
@@ -40,10 +41,12 @@ type world struct {
 	nodes              map[string]*RegisteredNode
 	validator          bool
 	// names is the name each node holds, by node id.
-	names       map[string]string
-	balance     *big.Int
-	faucetPays  *big.Int
-	faucetCalls int
+	names map[string]string
+	// foreignNames are names held by someone else, by name.
+	foreignNames map[string]NameHolder
+	balance      *big.Int
+	faucetPays   *big.Int
+	faucetCalls  int
 	// faucetLag is how many balance reads pass before a drip is visible through the session, as a
 	// node that is a block behind the seed that paid shows it.
 	faucetLag int
@@ -256,8 +259,8 @@ func (e *fakeEnroller) Reach(ctx context.Context, ip, user string) (Machine, err
 // voters (core/cmd/orama/internal/production/lifecycle/quorum.go), with the hint
 // every refusal ends with.
 func quorumBreak(voters int) string {
-	return fmt.Sprintf("Stopping this node (Follower, voter) would break RQLite quorum: %d of %d configured voters would remain reachable, need %d.\n"+
-		"  Use 'orama node restart --force' to proceed anyway.", voters-1, voters, voters/2+1)
+	return fmt.Sprintf(lifecycle.QuorumRefusalFormat, "Follower", voters-1, voters, voters/2+1) +
+		"\n  Use 'orama node restart --force' to proceed anyway."
 }
 
 const quorumUnreadable = "Cannot verify quorum safety: this node is a Follower VOTER but the cluster member list could not be read (timeout).\n" +
@@ -379,6 +382,19 @@ func (s *fakeSession) NodeName(_ context.Context, id string) (string, error) {
 	s.w.mu.Lock()
 	defer s.w.mu.Unlock()
 	return s.w.names[id], nil
+}
+func (s *fakeSession) NameHolder(_ context.Context, name string) (*NameHolder, error) {
+	s.w.mu.Lock()
+	defer s.w.mu.Unlock()
+	if h, ok := s.w.foreignNames[name]; ok {
+		return &h, nil
+	}
+	for id, held := range s.w.names {
+		if held == name {
+			return &NameHolder{NodeID: id, Operator: testOperator}, nil
+		}
+	}
+	return nil, nil
 }
 func (s *fakeSession) ClaimNodeName(context.Context, string, string) (*onchain.Receipt, error) {
 	return &onchain.Receipt{}, nil

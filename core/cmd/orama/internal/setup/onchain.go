@@ -25,6 +25,9 @@ func (r *runner) onchainPhase(ctx context.Context) error {
 		return fmt.Errorf("reach the chain through %s: %w", full[0].plan.IP, err)
 	}
 	defer sess.Close()
+	if err := r.checkNamesFree(ctx, sess, full); err != nil {
+		return err
+	}
 	budget, err := r.fund(ctx, sess)
 	if err != nil {
 		return err
@@ -39,6 +42,23 @@ func (r *runner) onchainPhase(ctx context.Context) error {
 		}
 		if err := r.claimName(ctx, sess, n); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// checkNamesFree asks the chain, before the run signs or spends anything, who holds each
+// node's name. A name another node or operator holds would be refused at the end of the run,
+// after the registrations and the bonds; a name this node of this operator holds is done.
+func (r *runner) checkNamesFree(ctx context.Context, sess ChainSession, full []*nodeRun) error {
+	for _, n := range full {
+		holder, err := sess.NameHolder(ctx, n.plan.Name)
+		if err != nil {
+			return fmt.Errorf("check who holds the name %q: %w", n.plan.Name, err)
+		}
+		if holder != nil && (holder.NodeID != n.plan.Name || holder.Operator != r.oper) {
+			return fmt.Errorf("machine %s: the name %q is held by node %q of operator %s, not by this node of %s: choose another --name (nothing was sent)",
+				n.plan.IP, n.plan.Name, holder.NodeID, holder.Operator, r.oper)
 		}
 	}
 	return nil

@@ -25,7 +25,7 @@ type shell interface {
 	// discards it). A non-zero exit is an error carrying the end of stderr.
 	Run(ctx context.Context, command string, stdin io.Reader, out io.Writer) error
 	// Upload copies a local file to a path on the machine.
-	Upload(local, remote string) error
+	Upload(ctx context.Context, local, remote string) error
 }
 
 // sshShell is a machine reached with the operator's RootWallet key.
@@ -62,8 +62,8 @@ func (t *tailBuffer) Write(p []byte) (int, error) {
 
 func (t *tailBuffer) String() string { return string(t.buf) }
 
-func (s sshShell) Upload(local, remote string) error {
-	return remotessh.UploadFile(s.node, local, remote)
+func (s sshShell) Upload(ctx context.Context, local, remote string) error {
+	return remotessh.UploadFileContext(ctx, s.node, local, remote)
 }
 
 // tail is the end of s, at most n bytes, on one line and cleaned for the terminal
@@ -143,8 +143,8 @@ type sshMachine struct {
 	close  func()
 
 	// Seams for tests.
-	ensureArchive func(node inspector.Node, archive string, trusted []string) error
-	waitReady     func(node inspector.Node, budget time.Duration) error
+	ensureArchive func(ctx context.Context, node inspector.Node, archive string, trusted []string) error
+	waitReady     func(ctx context.Context, node inspector.Node, budget time.Duration) error
 	startTunnel   func(ctx context.Context, node inspector.Node, remote string) (string, func(), error)
 	query         func(node inspector.Node, stmt string) ([]byte, error)
 }
@@ -152,9 +152,9 @@ type sshMachine struct {
 func newSSHMachine(e *psetup.Enrolled, wallet string, report Reporter) *sshMachine {
 	return &sshMachine{
 		sh: sshShell{node: e.Node}, node: e.Node, wallet: wallet, report: report, close: e.Close,
-		ensureArchive: psetup.EnsureArchive,
-		waitReady: func(node inspector.Node, budget time.Duration) error {
-			return rollout.WaitReady(node, rollout.DefaultRunner, budget)
+		ensureArchive: psetup.EnsureArchiveContext,
+		waitReady: func(ctx context.Context, node inspector.Node, budget time.Duration) error {
+			return rollout.WaitReadyContext(ctx, node, rollout.DefaultRunner, budget)
 		},
 		startTunnel: remotessh.StartTunnel,
 		query:       clusterops.QuerySQL,
@@ -192,8 +192,8 @@ func (m *sshMachine) Probe(ctx context.Context) (Facts, error) {
 
 // StageRelease verifies the endorsed release against the operator's wallet,
 // uploads it and puts it in place at /opt/orama, the way `orama node setup` does.
-func (m *sshMachine) StageRelease(_ context.Context, rel *Release) error {
-	return m.ensureArchive(m.node, rel.ArchivePath, []string{m.wallet})
+func (m *sshMachine) StageRelease(ctx context.Context, rel *Release) error {
+	return m.ensureArchive(ctx, m.node, rel.ArchivePath, []string{m.wallet})
 }
 
 // InstallCluster runs `orama node install` for the cluster node.
@@ -238,8 +238,8 @@ func (m *sshMachine) MintInvite(ctx context.Context) (string, []string, error) {
 }
 
 // WaitNode waits until the cluster node carries its share of the cluster.
-func (m *sshMachine) WaitNode(_ context.Context, budget time.Duration) error {
-	return m.waitReady(m.node, budget)
+func (m *sshMachine) WaitNode(ctx context.Context, budget time.Duration) error {
+	return m.waitReady(ctx, m.node, budget)
 }
 
 // RestartNode restarts the cluster node and waits for it.

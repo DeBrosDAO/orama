@@ -755,13 +755,22 @@ func mintInviteThroughGateway(gatewayURL string) (string, error) {
 // It is skipped only when the node already has exactly this manifest and a CLI
 // matching its checksum; comparing manifests alone let a replaced binary run.
 func EnsureArchive(node inspector.Node, archivePath string, trusted []string) error {
-	return EnsureArchives([]inspector.Node{node}, archivePath, trusted)
+	return EnsureArchiveContext(context.Background(), node, archivePath, trusted)
+}
+
+// EnsureArchiveContext is EnsureArchive that stops, and ends the upload in flight, when ctx is done.
+func EnsureArchiveContext(ctx context.Context, node inspector.Node, archivePath string, trusted []string) error {
+	return ensureArchives(ctx, []inspector.Node{node}, archivePath, trusted)
 }
 
 // EnsureArchives is EnsureArchive for several nodes: the archive is verified
 // and re-packed once, then put on each node in turn, stopping at the first
 // node that fails.
-func EnsureArchives(nodes []inspector.Node, archivePath string, trusted []string) (err error) {
+func EnsureArchives(nodes []inspector.Node, archivePath string, trusted []string) error {
+	return ensureArchives(context.Background(), nodes, archivePath, trusted)
+}
+
+func ensureArchives(ctx context.Context, nodes []inspector.Node, archivePath string, trusted []string) (err error) {
 	if archivePath == "" {
 		// /tmp is shared: its newest archive can be another checkout's build.
 		return clierr.Usage("--archive is required: the path `orama maint build` printed")
@@ -781,7 +790,7 @@ func EnsureArchives(nodes []inspector.Node, archivePath string, trusted []string
 		return fmt.Errorf("the verified archive has no %s binary to install with", archiveCLIName)
 	}
 	for _, node := range nodes {
-		if err := ensureVerifiedArchive(node, upload.Path, m.Arch, cliSum, trusted); err != nil {
+		if err := ensureVerifiedArchive(ctx, node, upload.Path, m.Arch, cliSum, trusted); err != nil {
 			return fmt.Errorf("node %s: %w", node.Host, err)
 		}
 	}
@@ -790,7 +799,10 @@ func EnsureArchives(nodes []inspector.Node, archivePath string, trusted []string
 
 // ensureVerifiedArchive puts the verified, re-packed archive on node unless it
 // already runs exactly that build.
-func ensureVerifiedArchive(node inspector.Node, archive, arch, cliSum string, trusted []string) error {
+func ensureVerifiedArchive(ctx context.Context, node inspector.Node, archive, arch, cliSum string, trusted []string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := checkNodeArch(node, arch); err != nil {
 		return err
 	}
@@ -802,7 +814,7 @@ func ensureVerifiedArchive(node inspector.Node, archive, arch, cliSum string, tr
 		fmt.Printf("  %s already runs this build\n", node.Host)
 		return nil
 	}
-	return uploadAndStage(node, archive, cliSum, trusted)
+	return uploadAndStage(ctx, node, archive, cliSum, trusted)
 }
 
 // archiveCLIName is the orama CLI in an archive's bin/.
@@ -856,7 +868,7 @@ func checkNodeArch(node inspector.Node, arch string) error {
 
 // uploadAndStage uploads the verified archive into a private directory on the
 // node and stages it there. The directory is removed however that ends.
-func uploadAndStage(node inspector.Node, archive, cliSum string, trusted []string) error {
+func uploadAndStage(ctx context.Context, node inspector.Node, archive, cliSum string, trusted []string) error {
 	dir, err := remotessh.RunSSHOutput(node, "mktemp -d /tmp/orama-archive.XXXXXXXX")
 	if err != nil {
 		return fmt.Errorf("create an upload directory on the node: %w", err)
@@ -866,9 +878,12 @@ func uploadAndStage(node inspector.Node, archive, cliSum string, trusted []strin
 		return fmt.Errorf("unexpected upload directory %q from mktemp", dir)
 	}
 	fmt.Printf("  Uploading the verified archive...\n")
-	if err := remotessh.UploadFile(node, archive, dir+"/archive.tar.gz"); err != nil {
+	if err := remotessh.UploadFileContext(ctx, node, archive, dir+"/archive.tar.gz"); err != nil {
 		rmErr := remotessh.RunSSHStreaming(node, "rm -rf "+dir)
 		return errors.Join(fmt.Errorf("failed to upload archive: %w", err), rmErr)
+	}
+	if err := ctx.Err(); err != nil {
+		return errors.Join(err, remotessh.RunSSHStreaming(node, "rm -rf "+dir))
 	}
 	if err := remotessh.RunSSHStreaming(node, stageArchiveCommand(dir, cliSum, trusted)); err != nil {
 		return fmt.Errorf("failed to stage the archive on the node: %w", err)

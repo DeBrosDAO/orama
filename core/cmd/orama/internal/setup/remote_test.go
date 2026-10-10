@@ -46,7 +46,7 @@ func (r *recShell) Run(_ context.Context, command string, stdin io.Reader, out i
 	return nil
 }
 
-func (r *recShell) Upload(local, remote string) error {
+func (r *recShell) Upload(_ context.Context, local, remote string) error {
 	r.uploads = append(r.uploads, local+" -> "+remote)
 	return nil
 }
@@ -64,8 +64,8 @@ func testMachine(sh *recShell) (*sshMachine, *bufReporter) {
 	report := &bufReporter{}
 	m := &sshMachine{
 		sh: sh, node: inspector.Node{Host: ip1, User: "root"}, wallet: testEVM, report: report, close: func() {},
-		ensureArchive: func(inspector.Node, string, []string) error { return nil },
-		waitReady:     func(inspector.Node, time.Duration) error { return nil },
+		ensureArchive: func(context.Context, inspector.Node, string, []string) error { return nil },
+		waitReady:     func(context.Context, inspector.Node, time.Duration) error { return nil },
 		startTunnel: func(_ context.Context, _ inspector.Node, remote string) (string, func(), error) {
 			return "127.0.0.1:40000", func() {}, nil
 		},
@@ -97,7 +97,7 @@ func TestSSHMachine_stageReleaseVerifiesAgainstTheOperatorsWallet(t *testing.T) 
 	m, _ := testMachine(&recShell{})
 	var gotArchive string
 	var gotTrusted []string
-	m.ensureArchive = func(_ inspector.Node, archive string, trusted []string) error {
+	m.ensureArchive = func(_ context.Context, _ inspector.Node, archive string, trusted []string) error {
 		gotArchive, gotTrusted = archive, trusted
 		return nil
 	}
@@ -281,7 +281,7 @@ func TestSSHMachine_restartForceOnlyWhenAsked(t *testing.T) {
 		sh := &recShell{}
 		m, _ := testMachine(sh)
 		waited := false
-		m.waitReady = func(inspector.Node, time.Duration) error { waited = true; return nil }
+		m.waitReady = func(context.Context, inspector.Node, time.Duration) error { waited = true; return nil }
 		if err := m.RestartNode(context.Background(), time.Minute, force); err != nil {
 			t.Fatal(err)
 		}
@@ -296,7 +296,9 @@ func TestSSHMachine_restartForceOnlyWhenAsked(t *testing.T) {
 
 func TestSSHMachine_restartThatNeverComesBackIsAnError(t *testing.T) {
 	m, _ := testMachine(&recShell{})
-	m.waitReady = func(inspector.Node, time.Duration) error { return errors.New("did not come back within 1m") }
+	m.waitReady = func(context.Context, inspector.Node, time.Duration) error {
+		return errors.New("did not come back within 1m")
+	}
 	if err := m.RestartNode(context.Background(), time.Minute, false); err == nil || !strings.Contains(err.Error(), "did not come back") {
 		t.Fatalf("got %v", err)
 	}
@@ -439,5 +441,23 @@ func TestTailBuffer_keepsOnlyTheEnd(t *testing.T) {
 func TestTail_isOneLine(t *testing.T) {
 	if got := tail("one\n[203.0.113.9] cluster done", 100); strings.Contains(got, "\n") {
 		t.Errorf("got %q: stderr of a machine cannot start a line of its own", got)
+	}
+}
+
+func TestSSHMachine_stageReleaseAndWaitNodeHandTheContextToTheirWork(t *testing.T) {
+	type ctxKey struct{}
+	ctx := context.WithValue(context.Background(), ctxKey{}, "run")
+	m, _ := testMachine(&recShell{})
+	var staged, waited context.Context
+	m.ensureArchive = func(c context.Context, _ inspector.Node, _ string, _ []string) error { staged = c; return nil }
+	m.waitReady = func(c context.Context, _ inspector.Node, _ time.Duration) error { waited = c; return nil }
+	if err := m.StageRelease(ctx, &Release{ArchivePath: "/tmp/a.tar.gz"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.WaitNode(ctx, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if staged == nil || staged.Value(ctxKey{}) != "run" || waited == nil || waited.Value(ctxKey{}) != "run" {
+		t.Errorf("the run's context did not reach the upload (%v) or the wait (%v)", staged, waited)
 	}
 }

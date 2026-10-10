@@ -29,10 +29,10 @@ func (r *runner) chainInitPhase(ctx context.Context) error {
 		}
 		todo = append(todo, n)
 	}
-	if err := r.parallel(todo, func(n *nodeRun) error { return r.initChain(ctx, n) }); err != nil {
+	if err := r.parallel(ctx, todo, func(ctx context.Context, n *nodeRun) error { return r.initChain(ctx, n) }); err != nil {
 		return err
 	}
-	if err := r.parallel(nodes, func(n *nodeRun) error { return r.readSeat(ctx, n) }); err != nil {
+	if err := r.parallel(ctx, nodes, func(ctx context.Context, n *nodeRun) error { return r.readSeat(ctx, n) }); err != nil {
 		return err
 	}
 	return checkSeatsDistinct(r.committee())
@@ -215,7 +215,7 @@ func (r *runner) publish(genesis []byte) error {
 // checks, on each, that the file there is the one given.
 func (r *runner) distributeGenesis(ctx context.Context, nodes []*nodeRun, genesis []byte) error {
 	want := netregistry.Digest(genesis)
-	return r.parallel(nodes, func(n *nodeRun) error {
+	return r.parallel(ctx, nodes, func(ctx context.Context, n *nodeRun) error {
 		if r.create.homes[n].SHA256 == want {
 			return nil
 		}

@@ -34,6 +34,11 @@ func WithStdin(r io.Reader) SSHOption {
 // UploadFile copies a local file to a remote host via SCP.
 // Requires node.SSHKey to be set (via PrepareNodeKeys).
 func UploadFile(node inspector.Node, localPath, remotePath string, opts ...SSHOption) error {
+	return UploadFileContext(context.Background(), node, localPath, remotePath, opts...)
+}
+
+// UploadFileContext is UploadFile that ends the copy when ctx is done.
+func UploadFileContext(ctx context.Context, node inspector.Node, localPath, remotePath string, opts ...SSHOption) error {
 	if node.SSHKey == "" {
 		return fmt.Errorf("no SSH key for %s (call PrepareNodeKeys first)", node.Name())
 	}
@@ -53,7 +58,7 @@ func UploadFile(node inspector.Node, localPath, remotePath string, opts ...SSHOp
 	}
 	args = append(args, localPath, dest)
 
-	cmd := exec.Command("scp", args...)
+	cmd := exec.CommandContext(ctx, "scp", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 

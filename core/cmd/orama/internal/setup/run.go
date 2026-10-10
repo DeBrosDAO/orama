@@ -69,6 +69,9 @@ type runner struct {
 	// via is a machine already in the cluster, where invites are minted.
 	via     Machine
 	closers []func()
+	// quorumLossAllowed says the operator accepted a restart that takes a small
+	// cluster's quorum down: --allow-quorum-loss, or a yes to the plan that shows it.
+	quorumLossAllowed bool
 	// clusterSize is how many nodes the cluster has once this run is done.
 	clusterSize int
 	res         *Result
@@ -234,6 +237,7 @@ func (r *runner) confirm() error {
 	if r.opts.Exit {
 		r.d.Report.Linef("  ! %s", ExitWarning)
 	}
+	r.quorumLossAllowed = r.opts.AllowQuorumLoss
 	if r.opts.Yes || r.d.Confirm == nil {
 		return nil
 	}
@@ -244,6 +248,7 @@ func (r *runner) confirm() error {
 	if !ok {
 		return clierr.Aborted("not confirmed: nothing was changed")
 	}
+	r.quorumLossAllowed = true
 	return nil
 }
 
