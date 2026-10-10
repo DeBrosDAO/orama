@@ -33,16 +33,16 @@ func BuildCreatePlan(o Options, m *netregistry.Manifest, env string) (*Plan, err
 		p.Nodes[i].Validator = false
 		p.Nodes[i].BindConsensus = p.Nodes[i].Full()
 	}
-	p.Notes = append(p.Notes, createNotes(o.Create, m, len(p.Nodes))...)
+	p.Notes = append(p.Notes, createNotes(o.Create, m, len(p.Nodes), o.Domain)...)
 	return p, nil
 }
 
 // createNotes tell the operator what a creation does beyond a join.
-func createNotes(c *CreateOptions, m *netregistry.Manifest, machines int) []string {
+func createNotes(c *CreateOptions, m *netregistry.Manifest, machines int, domain string) []string {
 	notes := []string{
 		fmt.Sprintf("CREATES the network %s (chain %s): the %d machines are its bootstrap committee, validators from block 1 with no self-bond", m.Name, m.ChainID, machines),
 		fmt.Sprintf("release %s: repository %s, root %s", m.Channel, m.ReleaseRepo, m.ReleaseRootSHA256),
-		"seeds: " + strings.Join(m.Seeds, ", ") + " (they must resolve to these machines before anyone can join)",
+		seedsNote(m.Seeds, domain),
 		fmt.Sprintf("writes %s/%s/ (manifest, genesis, release root) for you to publish", c.PublishDir, m.Name),
 		"each seat's account is a key in oramad's test keyring on its machine (unencrypted, never copied off it)",
 	}
@@ -59,6 +59,15 @@ func createNotes(c *CreateOptions, m *netregistry.Manifest, machines int) []stri
 	return append(notes, fmt.Sprintf("test network: epochs of %s or %d blocks, %s", testEpochDuration, testMinBlocksPerEpoch, faucet))
 }
 
+// seedsNote says where the seeds must resolve: the cluster's own nameservers when it
+// serves a domain, else the names the maintainer publishes.
+func seedsNote(seeds []string, domain string) string {
+	if domain != "" {
+		return "seeds: " + strings.Join(seeds, ", ") + " (nameservers of " + domain + ": they resolve once the domain is delegated to the cluster)"
+	}
+	return "seeds: " + strings.Join(seeds, ", ") + " (they must resolve to these machines before anyone can join)"
+}
+
 // createNetwork is the network a creation will publish, as far as it is known
 // before the genesis exists, and the CLI environment the cluster is recorded
 // under: the network's name unless --env says otherwise, which is where the
@@ -69,7 +78,7 @@ func createNetwork(opts Options) (*netregistry.Network, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	m, err := c.manifest(netregistry.Digest(root), len(opts.IPs))
+	m, err := c.manifest(netregistry.Digest(root), len(opts.IPs), opts.Domain)
 	if err != nil {
 		return nil, "", err
 	}

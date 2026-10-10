@@ -3,11 +3,11 @@
   "chain_id": "orama-stagenet-6",
   "genesis_sha256": "",
   "seeds": [
-    "seed1.stagenet.orama.network",
-    "seed2.stagenet.orama.network",
-    "seed3.stagenet.orama.network",
-    "seed4.stagenet.orama.network",
-    "seed5.stagenet.orama.network"
+    "ns1.stagenet.orama.network",
+    "ns2.stagenet.orama.network",
+    "ns3.stagenet.orama.network",
+    "ns4.stagenet.orama.network",
+    "ns5.stagenet.orama.network"
   ],
   "channel": "nightly",
   "min_version": "0.3.0",

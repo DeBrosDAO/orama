@@ -104,7 +104,7 @@ func TestWizard_theFinishedCreationShowsHowToPublish(t *testing.T) {
 	m := New(context.Background(), newFake().services(), setup.Options{})
 	m.step = stepDone
 	m.result = &setup.Result{Created: &setup.CreatedNetwork{
-		Manifest: &netregistry.Manifest{Name: "stagenet", ChainID: "orama-stagenet-7", Seeds: []string{"seed1.stagenet.orama.network"}},
+		Manifest: &netregistry.Manifest{Name: "stagenet", ChainID: "orama-stagenet-7", Seeds: []string{"ns1.stagenet.orama.network"}},
 		Dir:      "networks/stagenet", Machines: []string{ipA},
 	}}
 	view := m.View()

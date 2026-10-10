@@ -26,7 +26,7 @@ func (c *createFlags) bind(f *pflag.FlagSet) {
 	f.StringVar(&c.releaseRepo, "release-repo", "", "With --create-network: the https base URL of the release repository (default "+setup.DefaultReleaseRepo+")")
 	f.StringVar(&c.channel, "channel", "", "With --create-network: the release channel, nightly, main or dev/<branch> (default nightly, main for a production chain id)")
 	f.StringVar(&c.minVersion, "min-version", "", "With --create-network: the oldest orama version that may join, X.Y.Z (default: this CLI's version)")
-	f.StringArrayVar(&c.seeds, "seed", nil, "With --create-network: a seed DNS name (repeatable; default seed1.<name>.orama.network, one per machine)")
+	f.StringArrayVar(&c.seeds, "seed", nil, "With --create-network: a seed DNS name (repeatable; default ns1.<name>.orama.network ..., one per machine; with --domain, the cluster's nameservers ns<N>.<domain>, one per machine up to 13)")
 	f.StringVar(&c.publishDir, "publish-dir", "", "With --create-network: where networks/<name>/ is written (default ./"+setup.DefaultPublishDir+")")
 	f.BoolVar(&c.forceNewGenesis, "force-new-genesis", false, "With --create-network: build a new genesis although the machines carry one. Refused once a chain has run")
 	f.BoolVar(&c.noFaucet, "no-faucet", false, "With --create-network: leave the test-network faucet out of the genesis")

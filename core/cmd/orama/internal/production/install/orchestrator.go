@@ -49,6 +49,7 @@ func NewOrchestrator(flags *Flags) (*Orchestrator, error) {
 	setup := oramainstall.NewProductionSetup(oramaHome, os.Stdout, flags.Force, flags.SkipChecks)
 	setup.SetNameserver(flags.Nameserver)
 	setup.SetACMECA(flags.ACMECA)
+	setup.SetNodeNamesZone(flags.NodeNamesZone)
 	setup.SetPublicIP(flags.VpsIP)
 
 	// Set operator metadata (from orama node setup)

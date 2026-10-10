@@ -345,11 +345,11 @@ func TestPrintSummary_aCreationSaysHowToPublish(t *testing.T) {
 	var out bytes.Buffer
 	plan := &setup.Plan{Nodes: []setup.NodePlan{{IP: "203.0.113.10"}}}
 	created := &setup.CreatedNetwork{
-		Manifest: &netregistry.Manifest{Name: "stagenet", ChainID: "orama-stagenet-7", Seeds: []string{"seed1.stagenet.orama.network"}},
+		Manifest: &netregistry.Manifest{Name: "stagenet", ChainID: "orama-stagenet-7", Seeds: []string{"ns1.stagenet.orama.network"}},
 		Dir:      "networks/stagenet", Machines: []string{"203.0.113.10"},
 	}
 	printSummary(&out, &setup.Result{Plan: plan, Env: "stagenet", Created: created})
-	for _, want := range []string{"make -C core sync-networks", "orama network add https://orama.network/networks/stagenet/manifest.json", "seed1.stagenet.orama.network."} {
+	for _, want := range []string{"make -C core sync-networks", "orama network add https://orama.network/networks/stagenet/manifest.json", "ns1.stagenet.orama.network."} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("summary lacks %q:\n%s", want, out.String())
 		}

@@ -154,6 +154,12 @@ func (o *Options) Normalize() error {
 	if err := o.checkHostKeys(); err != nil {
 		return err
 	}
+	if o.Domain != "" {
+		o.Domain = strings.ToLower(strings.TrimSuffix(o.Domain, "."))
+		if !domainRE.MatchString(o.Domain) {
+			return clierr.Usage("--domain %q is not a DNS name such as cluster.example.org", o.Domain)
+		}
+	}
 	if o.Create != nil {
 		if err := o.prepareCreate(); err != nil {
 			return err
@@ -161,12 +167,6 @@ func (o *Options) Normalize() error {
 	}
 	if err := o.checkProfile(); err != nil {
 		return err
-	}
-	if o.Domain != "" {
-		o.Domain = strings.ToLower(strings.TrimSuffix(o.Domain, "."))
-		if !domainRE.MatchString(o.Domain) {
-			return clierr.Usage("--domain %q is not a DNS name such as cluster.example.org", o.Domain)
-		}
 	}
 	return nil
 }

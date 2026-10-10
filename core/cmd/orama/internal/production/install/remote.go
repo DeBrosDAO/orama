@@ -187,6 +187,7 @@ func remoteInstallArgs(flags *Flags) []string {
 		{"operator-wallet", flags.OperatorWallet},
 		{"expect-archive-signers", flags.ExpectArchiveSigners},
 		{"acme-ca", flags.ACMECA},
+		{"node-names-zone", flags.NodeNamesZone},
 		{"peers", flags.PeersStr},
 		{"ipfs-peer", flags.IPFSPeerID},
 		{"ipfs-addrs", flags.IPFSAddrs},

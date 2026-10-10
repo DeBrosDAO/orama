@@ -30,7 +30,7 @@ Three mechanisms turn failure into DNS change, and they overlap on purpose. A no
 
 ### Node names
 
-With `dns.node_names_zone` set to a sub-zone, each node copies the chain's claimed names into tagged `A` and `AAAA` rows every minute.
+With `dns.node_names_zone` set to a sub-zone (install flag `--node-names-zone`), each node copies the chain's claimed names into tagged `A` and `AAAA` rows every minute.
 
 ### Slots and delegation
 

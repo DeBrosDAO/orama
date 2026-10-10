@@ -5,6 +5,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/pkg/archivetrust"
+	"github.com/DeBrosOfficial/network/pkg/config/validate"
 	oramainstall "github.com/DeBrosOfficial/network/pkg/install"
 )
 
@@ -60,6 +61,11 @@ type Flags struct {
 	// or letsencrypt-staging. Empty keeps Let's Encrypt production.
 	ACMECA string
 
+	// NodeNamesZone is the zone this node publishes node identification names under
+	// (dns.node_names_zone), strictly below the base domain. Empty keeps the zone
+	// node.yaml carries, if any.
+	NodeNamesZone string
+
 	// ExpectArchiveSigners (comma-separated) is the archive signer list a
 	// joining node expects the cluster to send: the join response must name
 	// exactly these, and the archive is verified against them before the join
@@ -86,6 +92,22 @@ func (f *Flags) resolveACMECA() error {
 		return clierr.Usage("--acme-ca: %v", err)
 	}
 	f.ACMECA = url
+	return nil
+}
+
+// validateNodeNamesZone refuses a --node-names-zone the node would not start with, before anything
+// is changed: a malformed zone, or one that is not strictly below --base-domain.
+func (f *Flags) validateNodeNamesZone() error {
+	if f.NodeNamesZone == "" {
+		return nil
+	}
+	if err := validate.ValidateZone(f.NodeNamesZone); err != nil {
+		return clierr.Usage("--node-names-zone: %v", err)
+	}
+	if f.BaseDomain != "" && !validate.ZoneServedBy(f.NodeNamesZone, f.BaseDomain) {
+		return clierr.Usage("--node-names-zone %q is not a sub-zone below --base-domain %q: use a dedicated subdomain such as nodes.%s",
+			f.NodeNamesZone, f.BaseDomain, f.BaseDomain)
+	}
 	return nil
 }
 

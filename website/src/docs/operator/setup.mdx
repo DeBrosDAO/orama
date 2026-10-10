@@ -44,7 +44,7 @@ orama setup --network stagenet --name alice --yes \
 1. **Preflight, nothing changed.** The RootWallet agent is checked, the network's manifest is loaded (an announced network is refused here: it has no genesis) and its genesis is fetched and checked against the digest the manifest pins, and the plan is built and shown (and confirmed, unless `--yes`).
 2. **Enrol and check every machine.** For each address: an SSH key in your vault, the host key pinned, the key installed over the credential you named, the architecture, hardware and what is already installed read. A machine below its floor stops the run here.
 3. **The release.** The newest release of the network's channel is fetched from the manifest's release repository and verified against the TUF root the network pins (the root built into your CLI, followed through the repository's rotations), then your RootWallet signs it as the build your cluster runs, and each machine verifies it again before it is put under `/opt/orama`. A machine that already runs exactly that build is left alone.
-4. **The cluster.** The first machine creates the cluster, the others join it, one after another; each invite is minted over SSH on a node that is already in. With `--domain`, the nodes are nameservers of that domain. After each machine the cluster and its nodes are recorded in your CLI configuration under the environment (`--env`, else the active environment on this network, else `<network>-<name>`).
+4. **The cluster.** The first machine creates the cluster, the others join it, one after another; each invite is minted over SSH on a node that is already in. With `--domain`, the nodes are nameservers of that domain; on a network you create, the cluster also serves the network's node identification names under `nodes.<domain>` (`--node-names-zone`). After each machine the cluster and its nodes are recorded in your CLI configuration under the environment (`--env`, else the active environment on this network, else `<network>-<name>`).
 5. **The global layer** (full profile), on several machines at once: as many as the cluster could lose and still hold its Raft quorum (one on a cluster of three, two on five), never more than four:
    - the trust point is read through two of the network's seeds: the newest block both serve less 100 blocks, which must have the same hash on both (seeds that disagree stop the run);
    - `orama global install --colocated` installs the services; the chain home is created from the network's genesis, and the chain's configuration is written by the installer: the address it announces (your public IP, port 31000), no peer exchange, Prometheus on loopback, custom pruning, a snapshot every 1,000 blocks (two kept), and the state-sync block with the two seeds, the trusted block and a 7-day trust period;
@@ -99,7 +99,8 @@ The nodes are named `--name` (default `founder`), `founder-2`, and so on, in the
 | `--release-repo <url>` | The release repository (default `https://releases.orama.network`) |
 | `--channel <channel>` | `nightly`, `main` or `dev/<branch>` |
 | `--min-version <X.Y.Z>` | The oldest orama version that may join (default: this CLI's version) |
-| `--seed <name>` | A seed DNS name, repeatable (default `seed1.<name>.orama.network`, one per machine) |
+| `--seed <name>` | A seed DNS name, repeatable (default `ns1.<name>.orama.network` ... one per machine; with `--domain`, the cluster's own nameservers `ns<N>.<domain>`) |
+| `--domain <domain>` | The domain the created cluster serves. Its nodes are nameservers, its seeds are `ns1.<domain>` to `ns<N>.<domain>` (at most 13, one per machine), and every node is installed with `--node-names-zone nodes.<domain>` so the cluster serves the network's node identification names |
 | `--publish-dir <dir>` | Where `networks/<name>/` is written (default `./networks`) |
 | `--no-faucet` | Leave the test-network faucet out of the genesis |
 | `--force-new-genesis` | Build a new genesis although the machines carry one; refused once a chain has run |
@@ -111,11 +112,11 @@ A network can be announced before it exists. A maintainer writes `networks/<name
 ```bash
 orama maint network announce --name stagenet --chain-id orama-stagenet-7 \
   --release-repo https://releases.orama.network --release-root ./release-root.json \
-  --channel nightly --faucet --seed seed1.stagenet.orama.network
+  --channel nightly --faucet --seed ns1.stagenet.orama.network --seed ns2.stagenet.orama.network
 make -C core sync-networks
 ```
 
-`--min-version` defaults to this CLI's version, `--seed` is repeatable and may be left out (the creator then gets `seed<N>.<name>.orama.network`), and `--faucet` is refused for a production chain id. Commit `networks/` and `core/pkg/netregistry/embedded/` together. Announcing again replaces the announcement; a network that is already created is refused, because a reset gets its new chain id from the creation, not from a new announcement.
+`--min-version` defaults to this CLI's version, `--seed` is repeatable and may be left out (the creator then gets `ns<N>.<name>.orama.network`), and `--faucet` is refused for a production chain id. Commit `networks/` and `core/pkg/netregistry/embedded/` together. Announcing again replaces the announcement; a network that is already created is refused, because a reset gets its new chain id from the creation, not from a new announcement.
 
 `--create-network <name>` reads the announcement of that name and takes from it what no flag sets: the chain id, the release repository, the channel, the minimum version, the seeds, the faucet (an announcement without `--faucet` creates a network without one, and `--no-faucet` turns an announced faucet off) and the release root. A flag overrides the announcement, and the plan says that the values came from it. When the genesis is built, setup writes the full manifest over the announcement for the same chain id (the chain id may be overridden by `--chain-id`), keeping what the announcement says that setup does not set. `networks/<name>/` then replaces the announcement in the repository exactly as it does for any new network (see Publish it below).
 
@@ -141,7 +142,7 @@ Every step first asks the machines what they have. A machine with a chain home k
 
 Setup ends by printing what makes the network joinable:
 
-1. **DNS.** A joiner reaches the chain through the seeds, which are DNS names. Create the A records setup prints (`seed1.<name>.orama.network` to the first machine, and so on).
+1. **DNS.** A joiner reaches the chain through the seeds, which are DNS names. Without `--domain`, create the A records setup prints (`ns1.<name>.orama.network` to the first machine, and so on). With `--domain`, the seeds are the nameservers of the created cluster, `ns<N>.<domain>`, which the cluster publishes itself with glue: delegate the domain to the cluster (the NS and glue records setup printed while it ran) and nothing else is needed. A seed, from `--seed` or from the announcement, that is not one of those names is refused before any machine is touched, because a joiner would resolve nothing.
 2. **In the repository.** Copy `networks/<name>/` to the repository's `networks/` (over the announcement, if there was one), run `make -C core sync-networks`, and commit `networks/` and `core/pkg/netregistry/embedded/` together. The next CLI release knows the network by name.
 3. **The website.** `website/deploy.sh` serves `networks/` at `https://orama.network/networks/<name>/`.
 

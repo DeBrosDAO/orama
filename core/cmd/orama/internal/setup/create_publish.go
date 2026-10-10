@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"path/filepath"
+	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/netregistry"
 )
@@ -20,6 +21,10 @@ type CreatedNetwork struct {
 	// Announced says the network was announced in the registry, so the files
 	// written replace its announcement.
 	Announced bool
+	// Domain is the base domain the created cluster serves (--domain). When it is set
+	// the seeds are the cluster's own nameservers, which the cluster publishes itself
+	// once the domain is delegated to it.
+	Domain string
 }
 
 // ManifestURL is where the website serves the manifest once the network is
@@ -61,10 +66,17 @@ func (c *CreatedNetwork) NextSteps() []string {
 	steps := []string{
 		fmt.Sprintf("The network %s (chain %s) is running, and its description is written to %s/.", m.Name, m.ChainID, c.Dir),
 		"To make it joinable:",
-		"  1. Create these DNS records (a joiner reaches the chain through the seeds):",
 	}
-	for _, r := range c.SeedRecords() {
-		steps = append(steps, "       "+r)
+	if c.Domain != "" {
+		steps = append(steps,
+			fmt.Sprintf("  1. Delegate %s to the cluster (the NS and glue records this run printed): the seeds are its nameservers, and the cluster publishes", c.Domain),
+			"     them itself once it is delegated:",
+			"       "+strings.Join(m.Seeds, " "))
+	} else {
+		steps = append(steps, "  1. Create these DNS records (a joiner reaches the chain through the seeds):")
+		for _, r := range c.SeedRecords() {
+			steps = append(steps, "       "+r)
+		}
 	}
 	steps = append(steps,
 		fmt.Sprintf("  2. In the repository: copy %s to networks/%s/%s, run `make -C core sync-networks`, and commit networks/ and core/pkg/netregistry/embedded/.", filepath.Clean(c.Dir), m.Name, c.replaces()),

@@ -42,6 +42,9 @@ type ConfigGenerator struct {
 	// acmeCA is the ACME directory set for this install; empty carries the
 	// existing node.yaml's value forward (see ACMECA).
 	acmeCA string
+	// nodeNamesZone is the node names zone set for this install; empty carries
+	// the existing node.yaml's value forward (see NodeNamesZone).
+	nodeNamesZone string
 	// publicIP is this node's public address; empty carries the existing
 	// node.yaml's value forward.
 	publicIP string
@@ -421,12 +424,22 @@ func (cg *ConfigGenerator) ACMECA() (string, error) {
 	return parsed.TLS.ACMECA, nil
 }
 
-// NodeNamesZone is the node names zone the existing node.yaml carries (dns.node_names_zone), or ""
-// (no names published) when there is none. An operator writes it into node.yaml and every
-// regeneration keeps it. An unreadable node.yaml is an error and not a silent default: dropping
+// SetNodeNamesZone sets the node names zone for this install (--node-names-zone). The zone is
+// checked against the base domain when node.yaml is generated.
+func (cg *ConfigGenerator) SetNodeNamesZone(zone string) { cg.nodeNamesZone = zone }
+
+// NodeNamesZone is the node names zone this node publishes under: the one set for this run
+// (--node-names-zone), else the one the existing node.yaml carries (dns.node_names_zone), or ""
+// (no names published) when there is none. Install writes it and every regeneration keeps it. An unreadable node.yaml is an error and not a silent default: dropping
 // the zone on a regeneration would take the network's node names out of DNS on the next upgrade.
 // The value is checked again rather than trusted for having been checked when it was written.
 func (cg *ConfigGenerator) NodeNamesZone() (string, error) {
+	if cg.nodeNamesZone != "" {
+		if err := validate.ValidateZone(cg.nodeNamesZone); err != nil {
+			return "", fmt.Errorf("--node-names-zone: %w", err)
+		}
+		return cg.nodeNamesZone, nil
+	}
 	raw, err := cg.readNodeConfig()
 	if errors.Is(err, fs.ErrNotExist) {
 		return "", nil

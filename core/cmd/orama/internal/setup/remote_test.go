@@ -158,6 +158,25 @@ func TestSSHMachine_domainClusterNodesAreNameservers(t *testing.T) {
 	}
 }
 
+func TestSSHMachine_nodeNamesZoneReachesTheInstall(t *testing.T) {
+	sh := &recShell{}
+	m, _ := testMachine(sh)
+	in := ClusterInstall{Create: true, IP: ip1, User: "root", Env: "e", Wallet: testEVM, Domain: "cluster.example.org", NodeNamesZone: "nodes.cluster.example.org"}
+	if err := m.InstallCluster(context.Background(), in); err != nil {
+		t.Fatal(err)
+	}
+	if cmd := sh.calls[0]; !strings.Contains(cmd, "--node-names-zone 'nodes.cluster.example.org'") {
+		t.Errorf("command: %s", cmd)
+	}
+	in.NodeNamesZone = ""
+	if err := m.InstallCluster(context.Background(), in); err != nil {
+		t.Fatal(err)
+	}
+	if cmd := sh.calls[1]; strings.Contains(cmd, "node-names-zone") {
+		t.Errorf("a cluster with no zone passes one: %s", cmd)
+	}
+}
+
 func realInvite(t *testing.T) string {
 	t.Helper()
 	inv, err := invite.Encode(invite.Invite{JoinURL: "https://" + ip1, Token: strings.Repeat("ab", 32)})

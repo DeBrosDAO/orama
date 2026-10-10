@@ -95,6 +95,17 @@ func (r *runner) clusterRole() string {
 	return "node"
 }
 
+// nodeNamesZone is the zone the cluster publishes node identification names under:
+// nodes.<domain> for the cluster a creation makes at --domain, which is the network's
+// own cluster and serves its names. A joining operator's private cluster serves none,
+// and neither does a creation with no domain.
+func (r *runner) nodeNamesZone() string {
+	if r.opts.Create == nil || r.opts.Domain == "" {
+		return ""
+	}
+	return nodeNamesLabel + "." + r.opts.Domain
+}
+
 // openVia reaches a node of a cluster that already exists, to mint invites on.
 // A cluster created by this run has none until its first machine is installed.
 func (r *runner) openVia(ctx context.Context) error {
@@ -136,7 +147,7 @@ func (r *runner) installCluster(ctx context.Context, n *nodeRun) error {
 	r.emit(ip, StepCluster, StateRunning, string(n.plan.Cluster))
 	in := ClusterInstall{
 		Create: n.plan.Cluster == ClusterCreate, Name: n.plan.Name, IP: ip, User: r.opts.User, Env: r.plan.Env,
-		Domain: r.opts.Domain, ACMECA: r.opts.ACMECA, Wallet: r.evm,
+		Domain: r.opts.Domain, ACMECA: r.opts.ACMECA, Wallet: r.evm, NodeNamesZone: r.nodeNamesZone(),
 	}
 	if !in.Create {
 		if r.via == nil {

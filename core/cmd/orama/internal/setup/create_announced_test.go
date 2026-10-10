@@ -81,7 +81,7 @@ func TestRunCreate_theFullManifestIsPublishedOverTheAnnouncement(t *testing.T) {
 	}
 	if _, err := netregistry.Announce(netregistry.AnnounceInput{
 		Dir: h.publishDir, Name: "stagenet", ChainID: testChainID, ReleaseRoot: root, Channel: "nightly", MinVersion: "0.3.0",
-		ReleaseRepo: announcedRepo, Seeds: []string{"seed1.stagenet.orama.network"}, Faucet: true,
+		ReleaseRepo: announcedRepo, Seeds: []string{"ns1.stagenet.orama.network"}, Faucet: true,
 	}); err != nil {
 		t.Fatal(err)
 	}

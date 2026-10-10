@@ -95,3 +95,42 @@ func TestGenerateNodeConfig_refusesAZoneTheNodeWouldNotStartWith(t *testing.T) {
 		t.Fatalf("a sub-zone below the base domain was refused: %v", err)
 	}
 }
+
+// --node-names-zone writes the zone into a fresh node.yaml, and it wins over the one an earlier
+// node.yaml carried.
+func TestSetNodeNamesZone_isRenderedIntoNodeYAML(t *testing.T) {
+	const base = "stagenet.orama.network"
+	cg := NewConfigGenerator(t.TempDir())
+	cg.SetNodeNamesZone("nodes." + base)
+	rendered, err := cg.GenerateNodeConfig(nil, "10.0.0.5", "", base, base, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg config.Config
+	dec := yaml.NewDecoder(strings.NewReader(rendered))
+	dec.KnownFields(true)
+	if err := dec.Decode(&cfg); err != nil || cfg.DNS.NodeNamesZone != "nodes."+base {
+		t.Fatalf("zone %q, err %v\n%s", cfg.DNS.NodeNamesZone, err, rendered)
+	}
+
+	dir := t.TempDir()
+	writeACMENodeYAML(t, dir, "dns:\n  node_names_zone: \"old.stagenet.orama.network\"\n")
+	cg = NewConfigGenerator(dir)
+	cg.SetNodeNamesZone("nodes." + base)
+	if got, err := cg.NodeNamesZone(); err != nil || got != "nodes."+base {
+		t.Fatalf("the flag lost to node.yaml: %q, %v", got, err)
+	}
+}
+
+// A zone the node would not start with is refused at install, naming the flag or the key, and
+// nothing is rendered.
+func TestSetNodeNamesZone_refusesAZoneOutsideTheBaseDomain(t *testing.T) {
+	const base = "stagenet.orama.network"
+	for _, zone := range []string{base, "nodes.testnet.orama.network", "orama.network", "Nodes." + base, "nodes..stagenet"} {
+		cg := NewConfigGenerator(t.TempDir())
+		cg.SetNodeNamesZone(zone)
+		if _, err := cg.GenerateNodeConfig(nil, "10.0.0.5", "", base, base, false); err == nil {
+			t.Errorf("zone %q was accepted", zone)
+		}
+	}
+}

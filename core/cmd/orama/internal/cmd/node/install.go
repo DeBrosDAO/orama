@@ -58,6 +58,8 @@ func init() {
 	f.StringVar(&installFlags.OperatorWallet, "operator-wallet", "", "Operator wallet address")
 	f.StringVar(&installFlags.JoinSNI, "join-sni", "", "Server name to present to --join; the invite carries it, so it is only needed to override it")
 	f.StringVar(&installFlags.ACMECA, "acme-ca", "", "ACME directory for TLS certificates: letsencrypt (production, the default), letsencrypt-staging (clusters rebuilt many times a week) or an https URL")
+	f.StringVar(&installFlags.NodeNamesZone, "node-names-zone", "",
+		"Zone this node's cluster publishes node identification names under, strictly below --base-domain (for example nodes.<base-domain>); omit to keep the zone node.yaml carries")
 
 	// Peering details the invite token now carries. Kept for the manual join
 	// path and for clusters mid-upgrade.

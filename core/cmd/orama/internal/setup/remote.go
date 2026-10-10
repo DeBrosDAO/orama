@@ -202,7 +202,7 @@ func (m *sshMachine) InstallCluster(ctx context.Context, in ClusterInstall) erro
 	if in.Domain != "" {
 		role = "nameserver"
 	}
-	opts := psetup.Options{IP: in.IP, Env: in.Env, Role: role, User: in.User, BaseDomain: in.Domain, Genesis: in.Create, ACMECA: in.ACMECA}
+	opts := psetup.Options{IP: in.IP, Env: in.Env, Role: role, User: in.User, BaseDomain: in.Domain, Genesis: in.Create, ACMECA: in.ACMECA, NodeNamesZone: in.NodeNamesZone}
 	command := psetup.InstallCommand(opts, in.Wallet, in.Signers, in.Invite)
 	secrets, err := psetup.InstallSecrets(in.Invite)
 	if err != nil {

@@ -123,7 +123,7 @@ func checkPublished(t *testing.T, h *createHarness, res *Result) {
 	if err := m.VerifyGenesis(genesis); err != nil {
 		t.Errorf("the manifest does not pin the genesis written: %v", err)
 	}
-	if m.ChainID != "orama-stagenet-6" || !m.Faucet || m.Channel != "nightly" || len(m.Seeds) != 5 || m.Seeds[0] != "seed1.stagenet.orama.network" {
+	if m.ChainID != "orama-stagenet-6" || !m.Faucet || m.Channel != "nightly" || len(m.Seeds) != 5 || m.Seeds[0] != "ns1.stagenet.orama.network" {
 		t.Errorf("manifest = %+v", m)
 	}
 	if res.Created == nil || res.Created.Dir != dir || res.Created.Manifest.GenesisSHA256 != m.GenesisSHA256 {
@@ -261,7 +261,7 @@ func TestRunCreate_aPublishedChainIdKeepsItsGenesisAndNoChainStarts(t *testing.T
 	other := []byte(`{"chain_id":"orama-stagenet-6","other":true}`)
 	if _, err := netregistry.Publish(netregistry.PublishInput{
 		Dir: h.publishDir, Name: "stagenet", ChainID: "orama-stagenet-6", Genesis: other, ReleaseRoot: []byte(`{"a":1}`),
-		Seeds: []string{"seed1.stagenet.orama.network"}, Channel: "nightly", MinVersion: "0.3.0", ReleaseRepo: "https://releases.example",
+		Seeds: []string{"ns1.stagenet.orama.network"}, Channel: "nightly", MinVersion: "0.3.0", ReleaseRepo: "https://releases.example",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -271,5 +271,49 @@ func TestRunCreate_aPublishedChainIdKeepsItsGenesisAndNoChainStarts(t *testing.T
 	}
 	if h.w.count("wire ") != 0 || h.w.count("startglobal ") != 0 {
 		t.Errorf("the chain was set up although the network cannot be published:\n%s", strings.Join(h.w.entries(), "\n"))
+	}
+}
+
+// The network's own cluster serves node identification names under nodes.<domain>, and every
+// machine is installed with that zone; the manifest's seeds are the nameservers it publishes.
+func TestRunCreate_withADomainEveryNodeGetsTheNodeNamesZoneAndTheSeedsAreNameservers(t *testing.T) {
+	h := newCreateHarness(t)
+	h.deps.Domain = fakeDomain{w: h.w}
+	opts := h.createOpts(fiveIPs...)
+	opts.Domain = "stagenet.orama.network"
+	res := h.mustCreate(t, opts)
+	for _, ip := range fiveIPs {
+		if got := h.enroll.created[ip].installed.NodeNamesZone; got != "nodes.stagenet.orama.network" {
+			t.Errorf("%s installed with zone %q", ip, got)
+		}
+	}
+	want := "ns1.stagenet.orama.network ns2.stagenet.orama.network ns3.stagenet.orama.network ns4.stagenet.orama.network ns5.stagenet.orama.network"
+	if got := strings.Join(res.Created.Manifest.Seeds, " "); got != want {
+		t.Errorf("seeds = %s", got)
+	}
+	if res.Created.Domain != "stagenet.orama.network" {
+		t.Errorf("Created.Domain = %q", res.Created.Domain)
+	}
+}
+
+func TestRunCreate_withoutADomainNoNodeNamesZone(t *testing.T) {
+	h := newCreateHarness(t)
+	h.mustCreate(t, h.createOpts(fiveIPs...))
+	for _, ip := range fiveIPs {
+		if got := h.enroll.created[ip].installed.NodeNamesZone; got != "" {
+			t.Errorf("%s installed with zone %q", ip, got)
+		}
+	}
+}
+
+// A joining operator's private cluster does not serve the network's names.
+func TestRun_aJoinersDomainClusterPublishesNoNodeNames(t *testing.T) {
+	h := newHarness()
+	h.deps.Domain = fakeDomain{w: h.w}
+	opts := h.opts(ip1)
+	opts.Domain, opts.ClusterOnly, opts.StorageGB = "cluster.example.org", true, 0
+	mustRun(t, h, opts)
+	if got := h.enroll.created[ip1].installed.NodeNamesZone; got != "" {
+		t.Errorf("zone %q", got)
 	}
 }

@@ -38,6 +38,9 @@ func Run(flags *Flags) error {
 	if err := flags.resolveBaseDomain(); err != nil {
 		return err
 	}
+	if err := flags.validateNodeNamesZone(); err != nil {
+		return err
+	}
 
 	if flags.Remote {
 		remote, err := NewRemoteOrchestrator(flags)

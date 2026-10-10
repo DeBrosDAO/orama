@@ -102,6 +102,10 @@ func (ps *ProductionSetup) SetACMECA(url string) { ps.configGenerator.SetACMECA(
 // production).
 func (ps *ProductionSetup) ACMECA() (string, error) { return ps.configGenerator.ACMECA() }
 
+// SetNodeNamesZone sets the zone this node publishes node identification names under
+// (dns.node_names_zone); it must be strictly below the base domain.
+func (ps *ProductionSetup) SetNodeNamesZone(zone string) { ps.configGenerator.SetNodeNamesZone(zone) }
+
 // SetNameserver sets whether this node is a nameserver (runs CoreDNS + Caddy).
 func (ps *ProductionSetup) SetNameserver(isNameserver bool) {
 	ps.isNameserver = isNameserver

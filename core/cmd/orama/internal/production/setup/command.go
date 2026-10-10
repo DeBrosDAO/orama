@@ -66,6 +66,9 @@ type Options struct {
 	Archive string
 	// ACMECA is passed to `orama maint node install --acme-ca`.
 	ACMECA string
+	// NodeNamesZone is passed to `orama maint node install --node-names-zone`: the
+	// zone the cluster publishes node identification names under.
+	NodeNamesZone string
 	// Release installs a published release instead of an archive built here:
 	// the version to fetch from ReleaseRepo on Channel, verified against the
 	// root in ReleaseRoot, then signed by the operator's wallet (build
@@ -525,6 +528,9 @@ func InstallCommand(opts Options, wallet string, expected []string, token string
 	}
 	if opts.ACMECA != "" {
 		flag("--acme-ca", opts.ACMECA)
+	}
+	if opts.NodeNamesZone != "" {
+		flag("--node-names-zone", opts.NodeNamesZone)
 	}
 
 	flag("--operator-wallet", wallet)

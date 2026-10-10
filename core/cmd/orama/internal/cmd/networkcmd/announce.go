@@ -41,7 +41,7 @@ Afterwards run 'make -C core sync-networks' so the binary embeds the manifest, a
 commit networks/ and core/pkg/netregistry/embedded/ together.`,
 		Example: `  orama maint network announce --name stagenet --chain-id orama-stagenet-7 \
     --release-repo https://releases.orama.network --release-root release-root.json \
-    --channel nightly --faucet --seed seed1.stagenet.orama.network`,
+    --channel nightly --faucet --seed ns1.stagenet.orama.network`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if faucet && netclass.IsProduction(chainID) {
@@ -76,7 +76,7 @@ commit networks/ and core/pkg/netregistry/embedded/ together.`,
 	f.StringVar(&rootFile, "release-root", "", "The release-root.json file its releases are verified against [required]")
 	f.StringVar(&channel, "channel", "", "Release channel: nightly, main or dev/<branch> [required]")
 	f.StringVar(&minVersion, "min-version", version.Current, "Oldest orama version that may join, X.Y.Z")
-	f.StringArrayVar(&seeds, "seed", nil, "A seed DNS name (repeatable; default: the creator's seed<N>.<name>.orama.network)")
+	f.StringArrayVar(&seeds, "seed", nil, "A seed DNS name (repeatable; default: the creator's ns<N>.<name>.orama.network)")
 	f.BoolVar(&faucet, "faucet", false, "The network funds new operators from a faucet")
 	for _, required := range []string{"name", "chain-id", "release-repo", "release-root", "channel"} {
 		_ = cmd.MarkFlagRequired(required)

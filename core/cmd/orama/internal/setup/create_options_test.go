@@ -32,8 +32,8 @@ func TestNormalize_createDefaults(t *testing.T) {
 	if o.Name != "founder" || c.ReleaseRepo != DefaultReleaseRepo || c.PublishDir != "networks" || c.Channel != "nightly" || c.MinVersion != version.Current {
 		t.Errorf("defaults: name %q, %+v", o.Name, c)
 	}
-	if got := c.seedNames(3); strings.Join(got, " ") != "seed1.stagenet.orama.network seed2.stagenet.orama.network seed3.stagenet.orama.network" {
-		t.Errorf("seeds = %v", got)
+	if got, err := c.seedNames(3, ""); err != nil || strings.Join(got, " ") != "ns1.stagenet.orama.network ns2.stagenet.orama.network ns3.stagenet.orama.network" {
+		t.Errorf("seeds = %v, %v", got, err)
 	}
 	if !c.Faucet() || c.Production() {
 		t.Error("a stagenet has the faucet")
@@ -55,7 +55,7 @@ func TestNormalize_createKeepsWhatWasGiven(t *testing.T) {
 	if o.Name != "alice" || c.Channel != "dev/feature" || c.PublishDir != "/tmp/out" || c.ReleaseRepo != "https://r.example.org" || c.MinVersion != "1.2.3" || c.Faucet() {
 		t.Errorf("options = %q %+v", o.Name, c)
 	}
-	if got := c.seedNames(2); len(got) != 1 || got[0] != "seed.example.org" {
+	if got, _ := c.seedNames(2, ""); len(got) != 1 || got[0] != "seed.example.org" {
 		t.Errorf("seeds = %v", got)
 	}
 }
@@ -154,7 +154,7 @@ func TestBuildCreatePlan_everyMachineIsASeat(t *testing.T) {
 	if err := o.Normalize(); err != nil {
 		t.Fatal(err)
 	}
-	m, err := o.Create.manifest(strings.Repeat("a", 64), 5)
+	m, err := o.Create.manifest(strings.Repeat("a", 64), 5, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +181,7 @@ func TestBuildCreatePlan_everyMachineIsASeat(t *testing.T) {
 		t.Errorf("names = %q .. %q", p.Nodes[0].Name, p.Nodes[4].Name)
 	}
 	notes := strings.Join(p.Notes, "\n")
-	for _, want := range []string{"CREATES the network stagenet (chain orama-stagenet-6)", "5 machines are its bootstrap committee", "seed1.stagenet.orama.network", "networks/stagenet/", "faucet on", "test keyring"} {
+	for _, want := range []string{"CREATES the network stagenet (chain orama-stagenet-6)", "5 machines are its bootstrap committee", "ns1.stagenet.orama.network", "networks/stagenet/", "faucet on", "test keyring"} {
 		if !strings.Contains(notes, want) {
 			t.Errorf("notes lack %q:\n%s", want, notes)
 		}
@@ -196,7 +196,7 @@ func TestBuildCreatePlan_notACreation(t *testing.T) {
 
 func TestBuildCreatePlan_productionNotes(t *testing.T) {
 	c := CreateOptions{Name: "main", ChainID: "orama-1", PublishDir: "networks"}
-	notes := strings.Join(createNotes(&c, &netregistry.Manifest{Name: "main", ChainID: "orama-1", Channel: "main", Seeds: []string{"a.b"}}, 30), "\n")
+	notes := strings.Join(createNotes(&c, &netregistry.Manifest{Name: "main", ChainID: "orama-1", Channel: "main", Seeds: []string{"a.b"}}, 30, ""), "\n")
 	if !strings.Contains(notes, "production chain id") || strings.Contains(notes, "faucet on") {
 		t.Errorf("notes = %s", notes)
 	}
@@ -210,5 +210,86 @@ func TestCreate_productionFloorIsBeyondOneRun(t *testing.T) {
 	if MaxNodes >= netclass.ProductionMinCommittee {
 		t.Fatalf("one run takes %d machines and a production committee is %d: a production network would now be created with seat keys in oramad's test keyring; "+
 			"hold the seat keys elsewhere before this limit is raised", MaxNodes, netclass.ProductionMinCommittee)
+	}
+}
+
+// The seeds of a network created at --domain are the nameservers the cluster publishes
+// with glue (ns<N>.<domain>), whatever the announcement said by default.
+func TestSeedNames_withADomainAreTheClustersNameservers(t *testing.T) {
+	c := CreateOptions{Name: "stagenet"}
+	got, err := c.seedNames(3, "stagenet.orama.network")
+	if err != nil || strings.Join(got, " ") != "ns1.stagenet.orama.network ns2.stagenet.orama.network ns3.stagenet.orama.network" {
+		t.Fatalf("seeds = %v, %v", got, err)
+	}
+	got, err = c.seedNames(2, "cluster.example.org")
+	if err != nil || strings.Join(got, " ") != "ns1.cluster.example.org ns2.cluster.example.org" {
+		t.Fatalf("seeds = %v, %v", got, err)
+	}
+}
+
+func TestSeedNames_aDomainClusterHasAtMostThirteenNameservers(t *testing.T) {
+	got, err := CreateOptions{Name: "stagenet"}.seedNames(20, "stagenet.orama.network")
+	if err != nil || len(got) != 13 || got[12] != "ns13.stagenet.orama.network" {
+		t.Fatalf("seeds = %v, %v", got, err)
+	}
+}
+
+// A seed that the created cluster does not publish is refused: a joiner would resolve nothing.
+func TestSeedNames_refusesASeedTheClusterDoesNotPublish(t *testing.T) {
+	for _, seed := range []string{"seed1.stagenet.orama.network", "ns1.other.example.org", "ns4.stagenet.orama.network", "stagenet.orama.network"} {
+		_, err := CreateOptions{Name: "stagenet", Seeds: []string{"ns1.stagenet.orama.network", seed}}.seedNames(3, "stagenet.orama.network")
+		if err == nil || !strings.Contains(err.Error(), seed) || !strings.Contains(err.Error(), "ns1.stagenet.orama.network, ns2.stagenet.orama.network, ns3.stagenet.orama.network") {
+			t.Errorf("seed %q: err = %v", seed, err)
+		}
+	}
+	// A subset of the nameservers is a valid choice.
+	got, err := CreateOptions{Name: "stagenet", Seeds: []string{"ns2.stagenet.orama.network"}}.seedNames(3, "stagenet.orama.network")
+	if err != nil || len(got) != 1 {
+		t.Fatalf("a subset was refused: %v, %v", got, err)
+	}
+}
+
+// Without a domain nothing is published by the cluster, so the given seeds stand.
+func TestSeedNames_withoutADomainTheGivenSeedsStand(t *testing.T) {
+	got, err := CreateOptions{Name: "stagenet", Seeds: []string{"seed.example.org"}}.seedNames(3, "")
+	if err != nil || len(got) != 1 || got[0] != "seed.example.org" {
+		t.Fatalf("seeds = %v, %v", got, err)
+	}
+}
+
+func TestNormalize_createWithADomainChecksTheAnnouncedSeeds(t *testing.T) {
+	o := createOptions(nIPs(5)...)
+	o.Domain = "Stagenet.Orama.Network."
+	o.Create.Seeds = []string{"ns1.stagenet.orama.network", "ns5.stagenet.orama.network"}
+	if err := o.Normalize(); err != nil {
+		t.Fatalf("seeds that are nameservers of the (normalized) domain were refused: %v", err)
+	}
+	o = createOptions(nIPs(5)...)
+	o.Domain = "other.example.org"
+	o.Create.Seeds = []string{"ns1.stagenet.orama.network"}
+	if err := o.Normalize(); err == nil || !strings.Contains(err.Error(), "ns1.other.example.org") {
+		t.Fatalf("a seed outside the domain was accepted: %v", err)
+	}
+}
+
+func TestBuildCreatePlan_notesNameTheSeedsAsNameservers(t *testing.T) {
+	o := createOptions(nIPs(5)...)
+	o.Domain = "stagenet.orama.network"
+	if err := o.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	m, err := o.Create.manifest(strings.Repeat("a", 64), len(o.IPs), o.Domain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := BuildCreatePlan(o, m, "stagenet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	notes := strings.Join(p.Notes, "\n")
+	for _, want := range []string{"ns1.stagenet.orama.network, ns2.stagenet.orama.network", "ns5.stagenet.orama.network (nameservers of stagenet.orama.network"} {
+		if !strings.Contains(notes, want) {
+			t.Errorf("notes lack %q:\n%s", want, notes)
+		}
 	}
 }

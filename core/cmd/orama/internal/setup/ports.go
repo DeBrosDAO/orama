@@ -125,7 +125,10 @@ type ClusterInstall struct {
 	Env    string
 	Domain string
 	ACMECA string
-	Wallet string
+	// NodeNamesZone is the zone the node publishes node identification names under;
+	// empty publishes none.
+	NodeNamesZone string
+	Wallet        string
 	// Invite and Signers are what a joiner needs.
 	Invite  string
 	Signers []string

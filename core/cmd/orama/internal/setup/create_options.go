@@ -2,6 +2,7 @@ package setup
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
@@ -12,7 +13,7 @@ import (
 
 const (
 	// DefaultCreateNodeName is the base of the committee nodes' names when
-	// --name is not given: founder, founder-2, ... (not seed: the chain keeps seed<N> for the labels the zone publishes itself).
+	// --name is not given: founder, founder-2, ... (not seed: the chain keeps seed<N> and ns<N> for the labels the zone publishes itself).
 	DefaultCreateNodeName = "founder"
 	// DefaultReleaseRepo is the release repository a new network takes its
 	// software from unless --release-repo says otherwise
@@ -21,8 +22,12 @@ const (
 	// DefaultPublishDir is where the new network's manifest and genesis are
 	// written: the repository's networks directory, from where `make` runs.
 	DefaultPublishDir = "networks"
+	// nodeNamesLabel is the label of the zone a created network's cluster publishes
+	// node identification names under: nodes.<domain>, strictly below the base domain
+	// (dns.node_names_zone).
+	nodeNamesLabel = "nodes"
 	// seedDomain is the zone the default seed names live in:
-	// seed<N>.<network>.orama.network.
+	// ns<N>.<network>.orama.network.
 	seedDomain = "orama.network"
 )
 
@@ -49,8 +54,9 @@ type CreateOptions struct {
 	ReleaseRepo string
 	Channel     string
 	MinVersion  string
-	// Seeds are the DNS names joiners reach the chain through; the default is
-	// seed1.<name>.orama.network, one per machine.
+	// Seeds are the DNS names joiners reach the chain through. The default is
+	// ns<N>.<name>.orama.network, one per machine; with --domain they are the
+	// cluster's own nameservers, ns<N>.<domain>.
 	Seeds []string
 	// PublishDir receives networks/<name>/ (manifest, genesis, release root).
 	PublishDir string
@@ -68,26 +74,57 @@ func (c CreateOptions) Production() bool { return netclass.IsProduction(c.ChainI
 // network, unless --no-faucet. A production chain refuses a faucet.
 func (c CreateOptions) Faucet() bool { return !c.Production() && !c.NoFaucet }
 
-// seedNames are the seeds: the ones given, else seed<N>.<name>.orama.network for
-// each of n machines.
-func (c CreateOptions) seedNames(n int) []string {
-	if len(c.Seeds) > 0 {
-		return c.Seeds
+// maxNameserverSlots is how many nameservers a cluster's domain can have: ns1 to
+// ns13 (pkg/node, the NS set that still fits a classic referral).
+const maxNameserverSlots = 13
+
+// nameserverHosts are ns1.<domain> to ns<n>.<domain> (pkg/node slotHostname).
+func nameserverHosts(domain string, n int) []string {
+	hosts := make([]string, n)
+	for i := range hosts {
+		hosts[i] = fmt.Sprintf("ns%d.%s", i+1, domain)
 	}
-	seeds := make([]string, n)
-	for i := range seeds {
-		seeds[i] = fmt.Sprintf("seed%d.%s.%s", i+1, c.Name, seedDomain)
+	return hosts
+}
+
+// seedNames are the seeds. With a domain (the network's own cluster serves it) the
+// seeds are nameservers of that cluster, because those are the names it publishes
+// with glue: the ones given or announced must be among ns1.<domain> ... ns<n>.<domain>,
+// and without any the seeds are all of them. Without a domain they are the ones
+// given, else ns<N>.<name>.orama.network for each of n machines, which the
+// maintainer then publishes.
+func (c CreateOptions) seedNames(n int, domain string) ([]string, error) {
+	if domain == "" {
+		if len(c.Seeds) > 0 {
+			return c.Seeds, nil
+		}
+		return nameserverHosts(c.Name+"."+seedDomain, n), nil
 	}
-	return seeds
+	published := nameserverHosts(domain, min(n, maxNameserverSlots))
+	if len(c.Seeds) == 0 {
+		return published, nil
+	}
+	for _, seed := range c.Seeds {
+		if !slices.Contains(published, seed) {
+			return nil, clierr.Usage("the seed %s is not a nameserver of the cluster this run creates at --domain %s, which publishes %s: "+
+				"a seed must be a name the cluster serves (change --domain, or the seeds in the announcement or --seed)",
+				seed, domain, strings.Join(published, ", "))
+		}
+	}
+	return c.Seeds, nil
 }
 
 // manifest is the network's manifest as far as it is known before the genesis
 // exists: its genesis digest is a placeholder until it is built. Validating it
 // here refuses a bad name, chain id, seed, channel, version or repository before
-// any machine is touched.
-func (c CreateOptions) manifest(rootSHA256 string, machines int) (*netregistry.Manifest, error) {
+// any machine is touched. domain is the --domain of the run.
+func (c CreateOptions) manifest(rootSHA256 string, machines int, domain string) (*netregistry.Manifest, error) {
+	seeds, err := c.seedNames(machines, domain)
+	if err != nil {
+		return nil, err
+	}
 	m := &netregistry.Manifest{
-		Name: c.Name, ChainID: c.ChainID, Seeds: c.seedNames(machines), Channel: c.Channel, MinVersion: c.MinVersion,
+		Name: c.Name, ChainID: c.ChainID, Seeds: seeds, Channel: c.Channel, MinVersion: c.MinVersion,
 		ReleaseRepo: c.ReleaseRepo, ReleaseRootSHA256: rootSHA256, Faucet: c.Faucet(),
 		GenesisSHA256: strings.Repeat("0", 64),
 	}
@@ -128,7 +165,7 @@ func (o *Options) prepareCreate() error {
 	c.PublishDir = orDefaultString(c.PublishDir, DefaultPublishDir)
 	c.MinVersion = orDefaultString(c.MinVersion, version.Current)
 	c.Channel = orDefaultString(c.Channel, defaultChannel(c.ChainID))
-	_, err := c.manifest(strings.Repeat("0", 64), len(o.IPs))
+	_, err := c.manifest(strings.Repeat("0", 64), len(o.IPs), o.Domain)
 	return err
 }
 
