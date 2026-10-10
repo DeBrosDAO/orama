@@ -230,9 +230,9 @@ Access is `credential` (an API key or a JWT, resolved by the middleware), `open`
 
 | Route | Handler | Access | Grant | Token | Notes |
 |---|---|---|---|---|---|
-| `/v1/proxy/anon` | `g.anonProxyHandler` | credential | `proxy:write` | wallet | owned |
+| `/v1/proxy/anon` | `g.anonProxyHandler` | credential | `proxy:write` | wallet | owned, no-log |
 | `/v1/proxy/relay` | `g.relayTunnelHandler` | open |  | any | main, no-log |
-| `/v1/proxy/tunnel` | `g.anonTunnelHandler` | credential | `proxy:write` | wallet | owned |
+| `/v1/proxy/tunnel` | `g.anonTunnelHandler` | credential | `proxy:write` | wallet | owned, no-log |
 
 ## /v1/pubsub
 
