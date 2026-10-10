@@ -8,6 +8,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/globalnetns"
+	"github.com/DeBrosOfficial/network/pkg/netclass"
 )
 
 // GlobalService is one service `orama global install` puts on a node.
@@ -235,7 +236,6 @@ type GlobalInstallOptions struct {
 
 var (
 	persistentPeer = regexp.MustCompile(`^[0-9a-f]{40}@[A-Za-z0-9.-]{1,253}:[0-9]{1,5}$`)
-	chainIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,47}$`)
 	monikerPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 )
 
@@ -287,8 +287,8 @@ func (o GlobalInstallOptions) validate() error {
 	if o.InitChain == nil {
 		return nil
 	}
-	if !chainIDPattern.MatchString(o.InitChain.ChainID) {
-		return fmt.Errorf("chain id %q must be lowercase letters, digits and dashes", o.InitChain.ChainID)
+	if !netclass.ValidChainID(o.InitChain.ChainID) {
+		return fmt.Errorf("chain id %q must be 1 to %d lowercase letters, digits and dashes, not starting or ending with a dash", o.InitChain.ChainID, netclass.MaxChainIDLen)
 	}
 	if !monikerPattern.MatchString(o.InitChain.Moniker) {
 		return fmt.Errorf("moniker %q must be letters, digits, '.', '_' or '-'", o.InitChain.Moniker)

@@ -11,8 +11,23 @@ package netclass
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
+
+// MaxChainIDLen is the longest chain id any part of the system takes.
+const MaxChainIDLen = 48
+
+// chainIDPattern is a chain id: lowercase letters, digits and hyphens, starting and ending with
+// a letter or digit. It is the one definition: the network manifest, the chain home an install
+// creates, the transactions the client signs and the status a node reports are all held to it,
+// so a chain id that is shown for approval or written to a file cannot carry a control
+// character, and cannot differ in case from the one it was checked as.
+var chainIDPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,` + fmt.Sprint(MaxChainIDLen-2) + `}[a-z0-9])?$`)
+
+// ValidChainID reports whether id is a well-formed chain id: 1 to MaxChainIDLen characters of
+// a-z, 0-9 and '-', not starting or ending with '-'.
+func ValidChainID(id string) bool { return chainIDPattern.MatchString(id) }
 
 // The chain id fragments of the networks that are not production.
 const (
@@ -28,6 +43,10 @@ var NonProductionMarkers = []string{MarkerStagenet, MarkerDevnet, MarkerLocalnet
 // ProductionMinCommittee is the smallest bootstrap committee a production
 // chain id may start with (chain/x/power/types ProductionMinCommitteeSize).
 const ProductionMinCommittee = 30
+
+// IsTestNetwork reports whether chainID names a network that is not production: the only chain ids
+// a faucet runs on.
+func IsTestNetwork(chainID string) bool { return !IsProduction(chainID) }
 
 // IsProduction reports whether chainID names a production network: one that
 // carries none of NonProductionMarkers.

@@ -27,30 +27,8 @@ func TestIsTestNetwork(t *testing.T) {
 }
 
 const (
-	chainGenesisFile = "../../../chain/x/emission/keeper/genesis.go"
-	chainErrorsFile  = "../../../chain/x/emission/types/errors.go"
+	chainErrorsFile = "../../../chain/x/emission/types/errors.go"
 )
-
-// The chain refuses MsgFaucet on any chain id that is not a test network's; the list here must be
-// the chain's, or the gateway would sign a transaction the chain is sure to refuse, or refuse one
-// it would accept.
-func TestIsTestNetwork_matchesTheChain(t *testing.T) {
-	src, err := os.ReadFile(chainGenesisFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := regexp.MustCompile(`nonProductionChainIDMarkers = \[\]string\{([^}]*)\}`).FindSubmatch(src)
-	if m == nil {
-		t.Fatalf("%s has no nonProductionChainIDMarkers: update this test with the chain's new shape", chainGenesisFile)
-	}
-	var chain []string
-	for _, q := range regexp.MustCompile(`"([^"]+)"`).FindAllSubmatch(m[1], -1) {
-		chain = append(chain, string(q[1]))
-	}
-	if strings.Join(chain, ",") != strings.Join(TestNetworkMarkers, ",") {
-		t.Errorf("the chain's markers are %v, here %v", chain, TestNetworkMarkers)
-	}
-}
 
 // classify finds the chain's refusals by their text, so the texts here must be the chain's.
 func TestChainReasons_matchTheChain(t *testing.T) {

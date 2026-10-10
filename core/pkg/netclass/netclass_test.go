@@ -20,6 +20,26 @@ func TestIsProduction_classifiesByMarker(t *testing.T) {
 	}
 }
 
+func TestValidChainID(t *testing.T) {
+	for id, want := range map[string]bool{
+		"orama-stagenet-5": true, "a": true, "orama-1": true, strings.Repeat("a", MaxChainIDLen): true,
+		"": false, strings.Repeat("a", MaxChainIDLen+1): false, "a b": false, "a\x1b": false, "é": false,
+		"Orama-1": false, "orama_1": false, "orama.1": false, "-orama": false, "orama-": false, "orama-1\n": false,
+	} {
+		if got := ValidChainID(id); got != want {
+			t.Errorf("ValidChainID(%q) = %v, want %v", id, got, want)
+		}
+	}
+}
+
+func TestIsTestNetwork_isTheOppositeOfProduction(t *testing.T) {
+	for _, id := range []string{"orama-stagenet-6", "orama-devnet-1", "orama-localnet-2", "orama-1", "orama-testnet-3", "orama-stagenet", ""} {
+		if IsTestNetwork(id) == IsProduction(id) {
+			t.Errorf("%q is both or neither", id)
+		}
+	}
+}
+
 func TestCheckCommittee_productionFloor(t *testing.T) {
 	if err := CheckCommittee("orama-1", ProductionMinCommittee-1); err == nil {
 		t.Fatal("a production chain id with 29 validators was accepted")

@@ -102,12 +102,13 @@ func TestQueryChainRPC_malformedStatusFields(t *testing.T) {
 	for name, tc := range map[string]struct {
 		network, version, want string
 	}{
-		"markup chain id":   {injected, "0.39.4", "node_info.network"},
-		"empty chain id":    {"", "0.39.4", "node_info.network"},
-		"long chain id":     {strings.Repeat("a", 65), "0.39.4", "node_info.network"},
-		"markup version":    {"orama-stagenet-1", injected, "node_info.version"},
-		"empty version":     {"orama-stagenet-1", "", "node_info.version"},
-		"version with ansi": {"orama-stagenet-1", "0.39.4\x1b[2J", "node_info.version"},
+		"markup chain id":    {injected, "0.39.4", "node_info.network"},
+		"empty chain id":     {"", "0.39.4", "node_info.network"},
+		"long chain id":      {strings.Repeat("a", 49), "0.39.4", "node_info.network"},
+		"uppercase chain id": {"Orama-1", "0.39.4", "node_info.network"},
+		"markup version":     {"orama-stagenet-1", injected, "node_info.version"},
+		"empty version":      {"orama-stagenet-1", "", "node_info.version"},
+		"version with ansi":  {"orama-stagenet-1", "0.39.4\x1b[2J", "node_info.version"},
 	} {
 		r := statusWith(t, tc.network, tc.version)
 		if r.Responsive || !strings.Contains(r.Error, tc.want) {
@@ -120,9 +121,9 @@ func TestQueryChainRPC_malformedStatusFields(t *testing.T) {
 }
 
 func TestQueryChainRPC_boundaryStatusFieldsAccepted(t *testing.T) {
-	r := statusWith(t, strings.Repeat("a", 64), "0.39.4+build_1-rc.2")
+	r := statusWith(t, strings.Repeat("a", 48), "0.39.4+build_1-rc.2")
 	if !r.Responsive {
-		t.Fatalf("a 64-character chain id and a build-suffixed version were refused: %s", r.Error)
+		t.Fatalf("a 48-character chain id and a build-suffixed version were refused: %s", r.Error)
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/DeBrosOfficial/network/pkg/clusterreg"
+	"github.com/DeBrosOfficial/network/pkg/netclass"
 	"github.com/DeBrosOfficial/network/pkg/onchain"
 )
 
@@ -189,7 +190,7 @@ func (s *Service) drip(j *job) (*Dripped, error) {
 		return nil, fmt.Errorf("read the chain id: %w", err)
 	}
 	if !IsTestNetwork(chainID) {
-		return nil, refuse(KindDisabled, "the faucet runs only on a test network (a chain id with one of %v), and this chain is not one", TestNetworkMarkers)
+		return nil, refuse(KindDisabled, "the faucet runs only on a test network (a chain id with one of %v), and this chain is not one", netclass.NonProductionMarkers)
 	}
 	client, err := onchain.New(s.chain, s.key, chainID)
 	if err != nil {

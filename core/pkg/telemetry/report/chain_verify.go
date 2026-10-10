@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+
+	"github.com/DeBrosOfficial/network/pkg/netclass"
 )
 
 // The chain section reaches the public status page, and whatever answers on
@@ -19,8 +21,6 @@ var (
 	// chainValidatorAddressRe is a validator address as CometBFT encodes it:
 	// bytes.HexBytes, whose JSON is the upper-case hex of 20 bytes.
 	chainValidatorAddressRe = regexp.MustCompile(`^[0-9A-F]{40}$`)
-	// chainIDRe is a conservative chain id (node_info.network).
-	chainIDRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
 	// chainNodeVersionRe is a CometBFT version string (node_info.version).
 	chainNodeVersionRe = regexp.MustCompile(`^[A-Za-z0-9.+_-]{1,64}$`)
 )
@@ -78,7 +78,7 @@ func validateChainStatus(st *chainStatus, wantNodeID string) error {
 		return errors.New("chain RPC /status: node_info.id is not this node's id " +
 			"(derived from its node key); something other than this node's chain answers on the RPC port")
 	}
-	if !chainIDRe.MatchString(st.NodeInfo.Network) {
+	if !netclass.ValidChainID(st.NodeInfo.Network) {
 		return errors.New("chain RPC /status: node_info.network is not a well-formed chain id")
 	}
 	if !chainNodeVersionRe.MatchString(st.NodeInfo.Version) {

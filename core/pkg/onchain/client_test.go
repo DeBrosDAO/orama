@@ -164,23 +164,15 @@ func TestNew_validatesItsInputs(t *testing.T) {
 	if _, err := New(newFakeChain(), nil, testChainID); err == nil {
 		t.Error("New accepted no signer")
 	}
-	for _, id := range []string{"", strings.Repeat("a", 65), "orama stagenet", "orama-1\x1b[2J", "orama/1", "orama-1\n", "chaîn"} {
+	for _, id := range []string{"", strings.Repeat("a", 49), "orama stagenet", "orama-1\x1b[2J", "orama/1", "orama-1\n", "chaîn", "Orama-1", "orama_1", "-orama", "orama-"} {
 		if _, err := New(newFakeChain(), newSigner(), id); err == nil {
 			t.Errorf("New accepted chain id %q", id)
 		}
 	}
 }
 
-func TestValidChainID(t *testing.T) {
-	for id, want := range map[string]bool{"orama-stagenet-5": true, "a": true, strings.Repeat("a", 64): true, "": false, strings.Repeat("a", 65): false, "a b": false, "a\x1b": false, "é": false} {
-		if got := ValidChainID(id); got != want {
-			t.Errorf("ValidChainID(%q) = %v, want %v", id, got, want)
-		}
-	}
-}
-
 func TestNew_acceptsTheChainIDsTheNetworksUse(t *testing.T) {
-	for _, id := range []string{"orama-stagenet-5", "orama-1", "orama_localnet.2", strings.Repeat("a", 64)} {
+	for _, id := range []string{"orama-stagenet-5", "orama-1", "orama-localnet-2", strings.Repeat("a", 48)} {
 		if _, err := New(newFakeChain(), newSigner(), id); err != nil {
 			t.Errorf("New refused chain id %q: %v", id, err)
 		}

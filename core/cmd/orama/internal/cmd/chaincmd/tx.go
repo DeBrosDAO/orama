@@ -16,6 +16,7 @@ import (
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/pkg/chainread"
 	"github.com/DeBrosOfficial/network/pkg/httputil"
+	"github.com/DeBrosOfficial/network/pkg/netclass"
 	"github.com/DeBrosOfficial/network/pkg/onchain"
 	"github.com/DeBrosOfficial/network/pkg/rwagent"
 )
@@ -174,8 +175,8 @@ func chainID(ctx context.Context, r *chainread.Reader) (string, error) {
 	if id == "" {
 		id = doc.Result.NodeInfo.Network
 	}
-	if !onchain.ValidChainID(id) {
-		return "", clierr.Failure("the chain's status has no usable chain id: %q is not 1 to 64 characters of A-Z, a-z, 0-9, '.', '_' and '-'", httputil.Printable(id))
+	if !netclass.ValidChainID(id) {
+		return "", clierr.Failure("the chain's status has no usable chain id: %q is not 1 to 48 characters of a-z, 0-9 and '-'", httputil.Printable(id))
 	}
 	return id, nil
 }

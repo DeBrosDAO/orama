@@ -13,6 +13,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/globalnetns"
+	"github.com/DeBrosOfficial/network/pkg/netclass"
 )
 
 const (
@@ -167,7 +168,7 @@ func FillChainView(statusBody, netBody, validatorsBody []byte, now time.Time) *C
 		r.Error = shortChainError(err)
 		return r
 	}
-	if !chainIDRe.MatchString(st.NodeInfo.Network) {
+	if !netclass.ValidChainID(st.NodeInfo.Network) {
 		r.Error = "chain RPC /status: node_info.network is not a well-formed chain id"
 		return r
 	}

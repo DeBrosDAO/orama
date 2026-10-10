@@ -13,6 +13,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/clusterreg"
 	"github.com/DeBrosOfficial/network/pkg/httputil"
+	"github.com/DeBrosOfficial/network/pkg/netclass"
 	"github.com/DeBrosOfficial/network/pkg/rwagent"
 )
 
@@ -46,9 +47,6 @@ const (
 	// so the bound is far from an honest figure and stops a node that lies about it.
 	MaxGas = 200_000_000
 
-	// maxChainIDLen is the longest chain id the client accepts.
-	maxChainIDLen = 64
-
 	// simulationGasLimit and simulationFee fill the gas and fee fields of the
 	// transaction that is simulated: the chain does not check either in a
 	// simulation, and the builder needs both positive.
@@ -60,15 +58,7 @@ const (
 
 var (
 	baseFeePattern = regexp.MustCompile(`^[0-9]{1,` + fmt.Sprint(maxBaseFeeDigits) + `}$`)
-	// chainIDPattern is the characters of a chain id. Anything else could carry a control
-	// character to the terminal where the chain id is shown for approval.
-	chainIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,` + fmt.Sprint(maxChainIDLen) + `}$`)
 )
-
-// ValidChainID reports whether id is a chain id the client signs for: 1 to 64 characters of
-// A-Z, a-z, 0-9, '.', '_' and '-'. It is the one definition; callers that read a chain id from an
-// endpoint check it with this before they show it.
-func ValidChainID(id string) bool { return chainIDPattern.MatchString(id) }
 
 // SentError is an error after the transaction was broadcast: the chain took it (or may have, when
 // the answer to the broadcast itself was lost), so it may still be in a block whatever went wrong
@@ -117,8 +107,8 @@ func New(chain Chain, signer Signer, chainID string) (*Client, error) {
 	if chain == nil || signer == nil {
 		return nil, errors.New("a chain and a signer are required")
 	}
-	if !chainIDPattern.MatchString(chainID) {
-		return nil, fmt.Errorf("chain id %q must be 1 to %d characters of A-Z, a-z, 0-9, '.', '_' and '-'", httputil.Printable(chainID), maxChainIDLen)
+	if !netclass.ValidChainID(chainID) {
+		return nil, fmt.Errorf("chain id %q must be 1 to %d characters of a-z, 0-9 and '-' (netclass.ValidChainID)", httputil.Printable(chainID), netclass.MaxChainIDLen)
 	}
 	return &Client{chain: chain, signer: signer, chainID: chainID, maxFee: big.NewInt(DefaultMaxFeeNorama)}, nil
 }

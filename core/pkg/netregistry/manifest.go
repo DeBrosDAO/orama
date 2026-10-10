@@ -22,6 +22,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/DeBrosOfficial/network/pkg/netclass"
 	"github.com/DeBrosOfficial/network/pkg/tornet"
 )
 
@@ -51,7 +52,6 @@ const maxManifestBytes = 64 * 1024
 
 var (
 	nameRE      = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
-	chainIDRE   = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,46}[a-z0-9])?$`)
 	sha256HexRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	semverRE    = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
 	devBranchRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
@@ -156,7 +156,7 @@ func (m *Manifest) Validate() error {
 	if !nameRE.MatchString(m.Name) {
 		return fmt.Errorf("manifest name %q: use 1-32 characters of a-z, 0-9 and -, starting with a letter", m.Name)
 	}
-	if !chainIDRE.MatchString(m.ChainID) {
+	if !netclass.ValidChainID(m.ChainID) {
 		return fmt.Errorf("manifest chain_id %q: use 1-48 characters of a-z, 0-9 and -, starting and ending with a letter or digit", m.ChainID)
 	}
 	if !m.Announced() && !sha256HexRE.MatchString(m.GenesisSHA256) {

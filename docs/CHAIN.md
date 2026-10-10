@@ -69,7 +69,8 @@ Also unwired: `x/gov`,
 `x/group`, `x/nft`, `x/circuit`, `x/crisis`, IBC, and an EVM. `x/auth/vesting` is not wired.
 wasmd's `x/wasm` is wired when the binary is built with cgo and libwasmvm. A `-tags nowasm`
 build does not link it and refuses a genesis that contains it. `x/wasmpolicy` is always wired:
-upload is closed until `upload_sunset_height`, and a contract cannot bank-send norama to a user.
+upload is closed until `upload_sunset_height`. A contract is an ordinary account for payments: it can bank-send norama to a user
+or to another contract, and only a module account is blocked as a recipient (`BlockedAddresses`).
 The genesis ships five standard contracts, the Orama bindings are linked, and contract state
 carries a deposit: see "`x/wasm`: contracts" below.
 

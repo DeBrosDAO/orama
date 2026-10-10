@@ -8,7 +8,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/chainread"
 	"github.com/DeBrosOfficial/network/pkg/httputil"
-	"github.com/DeBrosOfficial/network/pkg/onchain"
+	"github.com/DeBrosOfficial/network/pkg/netclass"
 )
 
 // nodeInfoPath is a node's Cosmos REST route for its chain id.
@@ -36,7 +36,7 @@ func (r RESTChainID) ChainID(ctx context.Context) (string, error) {
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		return "", fmt.Errorf("the node's info is not the JSON expected: %w", err)
 	}
-	if !onchain.ValidChainID(doc.Info.Network) {
+	if !netclass.ValidChainID(doc.Info.Network) {
 		return "", fmt.Errorf("the node reports the chain id %q, which is not a chain id", httputil.Printable(doc.Info.Network))
 	}
 	return doc.Info.Network, nil
