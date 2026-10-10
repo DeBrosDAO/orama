@@ -199,7 +199,15 @@ func appendStringField(dst []byte, field int, s string) []byte {
 	return appendBytesField(dst, field, []byte(s))
 }
 
+// appendUvarintField writes a varint scalar field, and nothing when v is zero: proto3
+// omits a scalar at its zero value, and every message encoded here is proto3. A zero
+// written out is not canonical: the RootWallet agent refuses to sign such bytes (an
+// operator's first transaction has sequence 0), and the chain rebuilds the SignDoc it
+// verifies canonically, so a zero account number would sign other bytes than it checks.
 func appendUvarintField(dst []byte, field int, v uint64) []byte {
+	if v == 0 {
+		return dst
+	}
 	dst = appendVarint(dst, uint64(field<<3))
 	return appendVarint(dst, v)
 }
