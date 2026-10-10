@@ -101,6 +101,7 @@ export const DEVELOPER_DOCS: DocLink[] = [
   { title: "Backups and restore", slug: "developer/backups", icon: DatabaseBackup, description: "Sealed namespace backups", group: "Run your app" },
 
   { title: "TypeScript SDK", slug: "developer/sdk-reference", icon: FileCode, description: "The JavaScript and TypeScript client", group: "Reference" },
+  { title: "Push notifications reference", slug: "developer/push-notifications", icon: Bell, description: "APNs, ntfy and UnifiedPush from your namespace", group: "Reference" },
   { title: "Go client", slug: "developer/go-sdk", icon: Binary, description: "The Go client for a gateway", group: "Reference" },
   { title: "Gateway HTTP API", slug: "developer/api-surface", icon: Network, description: "Every route and who owns it", group: "Reference" },
   { title: "CLI overview", slug: "developer/cli-overview", icon: Terminal, description: "Install, global flags, exit codes", group: "Reference" },
@@ -130,7 +131,9 @@ export const OPERATOR_DOCS: DocLink[] = [
 
   { title: "Join with orama setup", slug: "operator/setup", icon: Play, description: "Fresh machines to nodes in one command", group: "Install" },
   { title: "Install a cluster from scratch", slug: "operator/install-from-scratch", icon: ServerCog, description: "Every step, with checks and recovery", group: "Install" },
+  { title: "Run your own cluster", slug: "operator/run-your-own-cluster", icon: Rocket, description: "Three machines and a domain to a private cluster", group: "Install" },
   { title: "Build and sign", slug: "operator/build-and-sign", icon: Hammer, description: "Archives and the trust anchor", group: "Install" },
+  { title: "Signed archives", slug: "operator/signed-archives", icon: ShieldCheck, description: "Build signing and the node trust anchor", group: "Install" },
   { title: "DNS and nameservers", slug: "operator/nameserver", icon: Globe2, description: "Base domain, NS records, glue", group: "Install" },
   { title: "TLS and certificates", slug: "operator/tls-certificates", icon: ShieldCheck, description: "Shared store, choosing the ACME CA", group: "Install" },
   { title: "Joining nodes", slug: "operator/joining-nodes", icon: PlugZap, description: "Invites, roles, key-only servers", group: "Install" },
@@ -141,7 +144,10 @@ export const OPERATOR_DOCS: DocLink[] = [
   { title: "Cluster administration", slug: "operator/cluster-admin", icon: Users, description: "Operators, creators, gateway settings", group: "Run" },
   { title: "Monitoring", slug: "operator/monitoring", icon: Activity, description: "Telemetry, alerts, status page", group: "Run" },
   { title: "Upgrades", slug: "operator/upgrades", icon: ArrowUpCircle, description: "Rolling upgrade protocol", group: "Run" },
+  { title: "Upgrade notes", slug: "operator/upgrade-notes", icon: ScrollText, description: "What a release-crossing upgrade changes", group: "Run" },
   { title: "WireGuard", slug: "operator/wireguard", icon: Network, description: "The mesh", group: "Run" },
+  { title: "Vault guardians", slug: "operator/vault-guardians", icon: Lock, description: "Run, monitor and recover the vault guardian on each node", group: "Run" },
+  { title: "WebRTC operations", slug: "operator/webrtc-operations", icon: Video, description: "Placement, ports, shared TURN and role reconciliation", group: "Run" },
 
   { title: "Troubleshooting", slug: "operator/troubleshooting", icon: Wrench, description: "Named failures and fixes", group: "Fix" },
   { title: "Replace a node", slug: "operator/node-replacement", icon: Route, description: "Swap a nameserver safely", group: "Fix" },
@@ -150,6 +156,8 @@ export const OPERATOR_DOCS: DocLink[] = [
 
   { title: "OramaOS", slug: "operator/orama-os", icon: Cpu, description: "Locked-down node OS", group: "Platforms" },
   { title: "Global nodes", slug: "operator/global-nodes", icon: Globe2, description: "Run the chain and its services", group: "Platforms" },
+  { title: "Stealth TURN operations", slug: "operator/stealth-turn", icon: EyeOff, description: "TURN over TLS on port 443 behind an SNI router", group: "Platforms" },
+  { title: "Tor network", slug: "operator/tor-network", icon: Network, description: "Run Tor directory authorities, relays, exits and onion services", group: "Platforms" },
   { title: "Hardening checklist", slug: "operator/security", icon: Shield, description: "What to verify on every node", group: "Platforms" },
 ];
 
@@ -206,6 +214,7 @@ export const ROOTWALLET_DOCS: DocLink[] = [
 
 export const CONTRIBUTOR_DOCS: DocLink[] = [
   { title: "Dev setup", slug: "contributor/dev-setup", icon: Laptop, description: "Local development environment" },
+  { title: "Architecture reference", slug: "contributor/architecture-reference", icon: LayoutDashboard, description: "Node process model, components, data flow and security" },
   { title: "Code style", slug: "contributor/code-style", icon: FileText, description: "Coding conventions" },
   { title: "Testing", slug: "contributor/testing", icon: FlaskConical, description: "Unit, fleet e2e and the coverage gate" },
   { title: "Deployment", slug: "contributor/deployment", icon: Upload, description: "Build, push, rollout" },

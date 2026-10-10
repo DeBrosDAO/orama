@@ -5,7 +5,7 @@
 > - **Hand-written.** Who owns each gateway route: the SDK, the CLI, a direct caller or another node. [Gateway routes](c-gateway-routes.md) is the generated list of the same routes with their policy; this table is the owner of each and the reason a route is not in the SDK.
 > - **Owners:** SDK 43, CLI 81, direct 27, internal 23.
 
-Every route the gateway registers, and which client owns it. Humans use the CLI, programs use the SDK and this HTTP API, and there is no Orama dashboard ([the CLI](../vol1/35-the-cli.md), [SDKs](../vol1/36-sdks.md)). The TypeScript SDK's coverage is a decision rather than an accident: it reaches 43 of 174 routes, and the others are here with a reason.
+Every route the gateway registers, and which client owns it. Humans use the CLI, programs use the SDK and this HTTP API, and there is no Orama dashboard ([the CLI](../vol1/35-the-cli.md), [SDKs](../vol1/36-sdks.md)). The TypeScript SDK's coverage is a decision rather than an accident: it reaches 43 of 174 routes, and the other 131 are here with a reason.
 
 The route set in this appendix and the set the gateway registers must be identical. The test `core/pkg/gateway/api_surface_test.go` reads the first two cells of every table row whose first cell is a backticked path, so a registered route missing here fails, and so does a documented route no longer registered. Adding a route means deciding who calls it.
 
@@ -145,7 +145,7 @@ A namespace's cache is one Olric DMap with the `dmap` name folded into each key,
 | Route | Owner | Notes |
 |-------|-------|-------|
 | `/v1/webrtc/config` | direct | `GET` and `PUT {"require_admission": bool}`: the namespace's WebRTC policy. With it on, a room admits only users the namespace's functions admitted (`webrtc_admit`). A credential that may change the namespace's settings; [WebRTC](../vol1/23-webrtc.md). |
-| `/v1/webrtc/rooms` | direct | Room listing for the SFU. |
+| `/v1/webrtc/rooms` | direct | GET only: the SFU health JSON (status, room count). |
 | `/v1/webrtc/signal` | direct | SFU signalling. |
 | `/v1/webrtc/turn/credentials` | direct | Short-lived TURN credentials. Consumed by a WebRTC stack, not by this SDK; the SDK would only pass them through. |
 
@@ -172,7 +172,7 @@ A namespace's cache is one Olric DMap with the `dmap` name folded into each key,
 | `/v1/namespace/keys/` | CLI | Revoke a key. |
 | `/v1/namespace/list` | CLI | Namespaces owned by the calling wallet. |
 | `/v1/namespace/members` | CLI | Who else may work in this namespace, and at what role. `orama members list` or `add`. |
-| `/v1/namespace/members/` | CLI | Remove a member, or transfer the namespace. `orama members remove` or `transfer`. |
+| `/v1/namespace/members/` | CLI | Remove a member, or transfer the namespace. `orama members remove|transfer`. A transfer to a wallet already at the per-wallet cap is a generic `403 TRANSFER_REFUSED` that names neither the wallet nor the limit (they are in the audit trail), and writes nothing (the refusal itself is one bit about the recipient: it cannot take another namespace); 503 when the cap cannot be read. |
 | `/v1/namespaces` | CLI | Create a namespace: writes the owner grant and starts provisioning. Who may call it is `namespace_creation` (`operators`, `allowlist`, or `open`). A new cluster is `operators`; one that already had data stays `open` until an operator changes it. Per-wallet cap defaults to 10. 409 `NAMESPACE_TEARDOWN_PENDING` (`retryable`, `Retry-After`) when a deleted namespace of that name is still owed a teardown on an active node; 503 `NAMESPACE_PROVISION_FAILED` with a fixed message when the cluster could not be started (the cause is logged only); 503 `NAMESPACE_CAPACITY` when no node has room for another cluster (every node's namespace port range is full, or too few nodes report), which retrying does not clear. `orama namespace create`. |
 | `/v1/namespace/rate-limit` | CLI | Per-namespace rate limit. |
 | `/v1/namespace/restore` | CLI | Owner only. Replaces the namespace's RQLite with a backup (the live keys and grants, in the cluster registry, are not touched; the image is scrubbed after the load), writes its secrets under this cluster's encryption root, keeps this cluster's storage quota and pins its CIDs. Refused before any write when over that quota (413) or when RQLite cannot batch (503). The secrets arrive sealed to `/v1/namespace/restore-key`. `orama namespace restore`. |
@@ -180,7 +180,7 @@ A namespace's cache is one Olric DMap with the `dmap` name folded into each key,
 | `/v1/namespace/devices` | direct | An operator's list of one account's devices (`?subject=<wallet>`), for recovering an account under the `approval` policy. The members-write permission. No CLI command. See [Identity](../vol1/13-identity.md). |
 | `/v1/namespace/devices/` | direct | `DELETE /v1/namespace/devices/{id}` — an operator revokes a device of any account in the namespace. The members-write permission. No CLI command. |
 | `/v1/namespace/session-policy` | CLI | `orama namespace session-policy`. `GET` reads, `PUT` sets `device_policy` (`optional`, `required`, `approval`: whether end-user sessions must be bound to a device, and whether a new device needs an existing one's approval) and `sign_in` (`members`, the default, or `open`: whether a wallet holding no grant may sign in as an end user with no key); either or both, the one left out keeps its value. The namespace-write permission. See [Identity](../vol1/13-identity.md). |
-| `/v1/namespace/status` | CLI | Provisioning progress for a cluster id: the `poll_url` that `POST /v1/namespaces` returns. `orama namespace create` does not wait on it; `orama namespace list` shows each cluster's status. |
+| `/v1/namespace/status` | CLI | Provisioning progress for a cluster id: the `poll_url` that `POST /v1/namespaces` returns. `orama namespace create` does not wait on it; `orama namespace list` shows each cluster's status. Errors: 400 without `id`, 404 `cluster not found` for an id that is not in the registry, 503 when the registry could not be read (the cluster may exist; retry; the cause is in the gateway log with the cluster id and is not in the response). |
 | `/v1/namespace/webrtc/disable` | CLI | `orama namespace disable webrtc`. |
 | `/v1/namespace/webrtc/enable` | CLI | `orama namespace enable webrtc`. |
 | `/v1/namespace/webrtc/status` | CLI | `orama namespace webrtc-status`. |
@@ -239,12 +239,12 @@ A namespace's cache is one Olric DMap with the `dmap` name folded into each key,
 | `/v1/operator/invite` | CLI | Mint a node invite. `orama maint invite`. Optional body `{"expiry_seconds": N}` (or `expiry_minutes` from an older CLI); default and cap one hour. |
 | `/v1/operator/node/register` | CLI | Record a node in the inventory. |
 | `/v1/operator/rotate-signing-key` | CLI | Generate a new signing key for this gateway, publish it, and leave the outgoing one verifying what it already signed for one access-token lifetime. Admin grant **and** a wallet on the operator list. `orama maint operator rotate-signing-key`. |
-| `/v1/operator/rotate-secrets` | CLI | Rewrite stored ciphertext onto `enc:v1:<id>:`. `--rotate` generates a new encryption root first. Admin grant **and** operator list. `orama maint operator rotate-secrets`. |
+| `/v1/operator/rotate-secrets` | CLI | Rewrite stored ciphertext onto `enc:v1:<id>:` (a deployment's environment onto `enc:v2:<id>:`, sealed to its row) and enable bound writes. `--rotate` generates a new encryption root first. Admin grant **and** operator list. `orama maint operator rotate-secrets`. |
 | `/v1/operator/nodes` | CLI | Fleet inventory. |
 | `/v1/operator/operators` | CLI | List the operator wallets (`GET`) or add one (`POST` `{"wallet":"0x…"}`). Admin grant and a wallet already on the list. `orama maint operator list`, `orama maint operator add`. |
 | `/v1/operator/operators/` | CLI | `DELETE /v1/operator/operators/{wallet}` takes one wallet off the list and refuses to remove the last. `orama maint operator remove`. |
-| `/v1/operator/settings` | CLI | Effective namespace-creation mode and per-wallet cap. Operator grant and the operator list. `orama maint cluster settings show`. |
-| `/v1/operator/settings/` | CLI | `PUT /v1/operator/settings/namespace-creation` with `{"value":"operators"}`, `"allowlist"` or `"open"`, or `PUT /v1/operator/settings/max-namespaces-per-wallet` with `{"value":n}` from 1 to 10000. `orama maint cluster settings set`. |
+| `/v1/operator/settings` | CLI | Effective namespace-creation mode and per-wallet cap, and the auto-update settings (`auto_update`, `update_channel`, `update_window`, `release_repo`, with their defaults). Operator grant and the operator list. `orama maint cluster settings show`. |
+| `/v1/operator/settings/` | CLI | `PUT /v1/operator/settings/namespace-creation` with `{"value":"operators"}`, `"allowlist"` or `"open"`, or `PUT /v1/operator/settings/max-namespaces-per-wallet` with `{"value":n}` from 1 to 10000, or `PUT /v1/operator/settings/auto-update` (`off`, `notify`, `auto`), `update-channel` (1 to 32 of a-z, 0-9, -), `update-window` (`start-end` hours UTC, or `""`) or `release-repo` (an https URL, or `""`), each with `{"value":"..."}`; a value the agent could not use is refused 400 and not stored. `orama maint cluster settings set`. |
 | `/v1/operator/namespaces/remove` | CLI | `POST {"namespace","reason"}`: remove a namespace its owner can no longer delete (owner wallet lost, or a test run's throwaway wallet), with the same teardown as `/v1/namespace/delete`. Operator grant and the operator list; the lobby and reserved names are refused; recorded as `namespace.operator_remove` with the operator's wallet and the reason. `orama cluster namespace remove`. |
 | `/v1/operator/creators` | CLI | List (`GET`) or add (`POST` `{"wallet":"0x…"}`) wallets allowed to create namespaces when creation is `allowlist`. `orama maint cluster creators list`, `orama maint cluster creators add`. |
 | `/v1/operator/creators/` | CLI | `DELETE /v1/operator/creators/{wallet}` takes one wallet off that list. An empty list denies everyone. `orama maint cluster creators remove`. |

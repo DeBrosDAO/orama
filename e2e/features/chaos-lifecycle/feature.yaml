@@ -31,6 +31,6 @@ covers:
     - /v1/auth/challenge
     - /v1/deployments/go/upload
   claims:
-    - "docs/CLI_REFERENCE.md#orama-node-upgrade: an interrupted upgrade can be run again to completion"
-    - "docs/SECURITY.md: the credential routes are rate limited per client address; the limit answers 429 with Retry-After"
-    - "docs/DEV_DEPLOY.md: nodes join with their own invites and the cluster converges with every member"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-node-upgrade: an interrupted upgrade can be run again to completion"
+    - "docs/whitepaper/technical-reference/vol1/27-rate-limits-and-egress-controls.md: the credential routes are rate limited per client address; the limit answers 429 with Retry-After"
+    - "website/src/docs/operator/node-management.mdx: nodes join with their own invites and the cluster converges with every member"

@@ -13,7 +13,7 @@ import (
 )
 
 // Load fills blocks with gas so the x/fees base fee must rise
-// (docs/CHAIN.md "The base fee (EIP-1559-style)": the target is 50% of the
+// (docs/whitepaper/technical-reference/vol2/40-economics.md "The base fee (EIP-1559-style)": the target is 50% of the
 // block's max_gas). Gas is consumed by transaction SIZE (x/auth charges 10
 // gas per byte before any message runs, and a failed transaction's gas still
 // counts against the block, cosmos-sdk baseapp runTx consumeBlockGas): each

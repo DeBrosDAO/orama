@@ -10,6 +10,7 @@ Every integer constant whose name marks it as a port, a port range bound or a po
 
 | Value | Constant | Meaning |
 |---|---|---|
+| 53 | `core/pkg/constants/ports.go:DNSPort` | DNSPort is where a nameserver node's CoreDNS answers, on every address. |
 | 4001 | `core/pkg/constants/urls.go:NodeLibP2PPort` | NodeLibP2PPort is the orama node's own libp2p host, which bootstrap peers dial over the WireGuard overlay. |
 | 4101 | `core/pkg/constants/urls.go:IPFSSwarmPort` | IPFSSwarmPort is the libp2p swarm port of the node's Kubo daemon. Chosen to avoid colliding with the orama node's own libp2p host on 4001. |
 | 8080 | `core/pkg/constants/urls.go:IPFSGatewayPort` | IPFSGatewayPort is Kubo's read-only HTTP gateway. |

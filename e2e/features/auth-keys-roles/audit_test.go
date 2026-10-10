@@ -18,13 +18,13 @@ import (
 )
 
 const (
-	// auditMaxLimit (docs/API_SURFACE.md "/v1/audit").
+	// auditMaxLimit (docs/whitepaper/technical-reference/appendices/i-api-surface.md "/v1/audit").
 	auditMaxLimit = 200
 	auditBudget   = 30 * time.Second
 )
 
 // keyActor is how the trail records anything that is not a wallet: a
-// fingerprint, never the credential (docs/AUTH.md#the-record).
+// fingerprint, never the credential (docs/whitepaper/technical-reference/vol1/14-authorization.md#the-audit-trail).
 var keyActor = regexp.MustCompile(`^key:[0-9a-f]{16}$`)
 
 type auditEvent struct {
@@ -73,7 +73,7 @@ func waitForAction(t testing.TB, c *gw.Client, bearer, action string) []auditEve
 
 // TestAudit_recordsWhoChangedWhat: keys minted and revoked, grants given and
 // taken, and the session policy are recorded; a wallet is recorded as itself,
-// a key as a fingerprint, never the key (docs/AUTH.md#the-record).
+// a key as a fingerprint, never the key (docs/whitepaper/technical-reference/vol1/14-authorization.md#the-audit-trail).
 func TestAudit_recordsWhoChangedWhat(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)

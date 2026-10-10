@@ -10,7 +10,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Bugboard #274. docs/PUSH_NOTIFICATIONS.md told tenants they could leave the
+// Bugboard #274. website/src/docs/developer/push-notifications.mdx told tenants they could leave the
 // ntfy credential's base_url empty and fall back to "the platform's self-hosted
 // ntfy". There was no such fallback on a namespace gateway: ntfy_base_url is a
 // host-node setting and nothing carried it into a spawned namespace gateway's

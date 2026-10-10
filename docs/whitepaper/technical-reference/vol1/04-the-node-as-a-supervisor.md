@@ -378,7 +378,7 @@ Ports the node's own process opens: the libp2p listener (4001 is the default con
 | Raft quorum lost | Cluster tier retries; local tier keeps serving; node `degraded` | `Node lifecycle state changed` to `degraded`; `dns_nodes` row ages out after 120 s |
 | Peers all down at boot | Same as above; no exit | Node serves local traffic; becomes `active` when quorum returns |
 | `identity.key` missing or unparseable | `wireguard` fails (it reads the peer id from the file), so `libp2p` and everything behind it stay `blocked`; the process keeps running | Warning "Boot component not converged yet" for `wireguard` naming `identity.key` and `orama maint node install`; lifecycle stays `joining` |
-| Raft state on disk with no recorded raft id | `EnsureRQLite` refuses; `rqlite-local` retries | Error "holds raft state but no raft-node-id"; see `docs/COMMON_PROBLEMS.md` |
+| Raft state on disk with no recorded raft id | `EnsureRQLite` refuses; `rqlite-local` retries | Error "holds raft state but no raft-node-id"; see `website/src/docs/operator/troubleshooting.mdx` |
 | Index gateway unit active but answering 503 `starting` | The `gateway` component is `ready` (the unit is active), so the node reports `active` | `curl localhost:10104/health` shows the state; `orama node start` and the rollout gate keep waiting |
 | Index RQLite unit dies | `rqlite-local` health fails, unit restarted by systemd and by Reconcile; gateway re-reconciled | Warning from `LocalHealthy` naming `orama-namespace-rqlite@index` |
 | Lost Raft data on a former member | `EnsureRQLite` refuses to bootstrap a second cluster | Error naming the membership record, `orama maint node recover-raft` and the file to delete |

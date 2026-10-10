@@ -25,7 +25,7 @@ import (
 
 // TestCredentials_restShapeAndAccess: the REST credential is
 // "<expiry>:<namespace>" for 24 h with the udp/tcp/turns ladder; it needs a
-// signed-in user with the webrtc grant (docs/WEBRTC.md#1-get-turn-credentials,
+// signed-in user with the webrtc grant (website/src/docs/developer/webrtc.mdx#1-get-turn-credentials,
 // #turn-credential-protocol).
 func TestCredentials_restShapeAndAccess(t *testing.T) {
 	t.Parallel()
@@ -59,7 +59,7 @@ func TestCredentials_restShapeAndAccess(t *testing.T) {
 // TURN nodes, from the host-wide 49152-65535 range; a credential naming a
 // namespace the server does not serve, a tampered password, or one for an
 // expiry that was changed after signing allocates nothing
-// (docs/WEBRTC.md#turn-topology: isolation is the per-tenant secret).
+// (website/src/docs/operator/webrtc-operations.mdx#turn-topology: isolation is the per-tenant secret).
 func TestTURN_relayOnlyAuth(t *testing.T) {
 	t.Parallel()
 	fx := setup(t)
@@ -95,7 +95,7 @@ func TestTURN_relayOnlyAuth(t *testing.T) {
 }
 
 // tenantSecret is the namespace's TURN secret as the shared TURN process on n
-// holds it (docs/WEBRTC.md#turn-topology, turn.yaml).
+// holds it (website/src/docs/operator/webrtc-operations.mdx#turn-topology, turn.yaml).
 func tenantSecret(t *testing.T, fx *fixture, n fleet.Node) string {
 	t.Helper()
 	var cfg turn.Config
@@ -129,7 +129,7 @@ func sign(secret, username string) string {
 
 // TestSignal_accessAndRooms: the signalling socket needs a signed-in user
 // (a key alone is refused), the first frame must be a join, and the rooms
-// route reports the SFU. docs/WEBRTC.md lists POST/DELETE rooms; the handler
+// route reports the SFU. website/src/docs/developer/webrtc.mdx lists POST/DELETE rooms; the handler
 // serves GET only, so creating a room over REST is refused.
 func TestSignal_accessAndRooms(t *testing.T) {
 	t.Parallel()

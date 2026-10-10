@@ -32,7 +32,7 @@ const (
 	cleanupBudget = 5 * time.Minute
 	// reallocBudget: a member is non-viable after 10 minutes silent and its
 	// row pruned after 15; the reconciler sweeps every 60 s
-	// (docs/WEBRTC.md#role-reconciliation).
+	// (website/src/docs/operator/webrtc-operations.mdx#role-reconciliation).
 	reallocBudget = 25 * time.Minute
 	// chainAdvance is how many blocks every co-hosted validator must commit
 	// after the heal.
@@ -77,7 +77,7 @@ func setup(t *testing.T) *fixture {
 
 // TestSFUDown_drainAndReconnect: stopping the SFU that hosts a room tells its peers
 // server-draining (or closes them), and a client that reconnects through
-// another node's gateway gets media again (docs/WEBRTC.md#3-connect-signaling-websocket).
+// another node's gateway gets media again (website/src/docs/developer/webrtc.mdx#3-connect-signaling-websocket).
 func TestSFUDown_drainAndReconnect(t *testing.T) {
 	fx := setup(t)
 	room := "e2e-drain-" + fx.n.Name
@@ -116,7 +116,7 @@ func TestSFUDown_drainAndReconnect(t *testing.T) {
 // roomOwner is the member whose SFU hosts room when every SFU is healthy and
 // the room is new: the top of the rendezvous rank every gateway computes,
 // sha256 of namespace|room|node id, the id being the node's dns_nodes id
-// (docs/WEBRTC.md "Room Placement"; core pkg/gateway/handlers/webrtc
+// (website/src/docs/operator/webrtc-operations.mdx "Room Placement"; core pkg/gateway/handlers/webrtc
 // rankSFUNodes).
 func roomOwner(t *testing.T, fx *fixture, room string) fleet.Node {
 	t.Helper()
@@ -248,7 +248,7 @@ func survivor(fx *fixture, dead fleet.Node) fleet.Node {
 
 // requireChainAdvances: when the run co-hosts a chain, cutting one of its
 // three equal validators off halts it (exactly 2/3 is no CometBFT quorum,
-// docs/CHAIN.md "x/power"), so after the heal every validator must commit
+// docs/whitepaper/technical-reference/vol2/39-chain-architecture.md "x/power"), so after the heal every validator must commit
 // chainAdvance blocks past the head again before the next package runs.
 func requireChainAdvances(t *testing.T, f *fleet.Fleet) {
 	t.Helper()

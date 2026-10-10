@@ -39,7 +39,7 @@ type note struct {
 // stores notes in the namespace's IPFS and cache as itself. It renews its
 // token and keeps working; 40 notes written by four clients at once read back
 // through every node; an update and a rollback reach both replicas; deleting
-// the app stops it on both (docs/DEPLOYMENT_GUIDE.md "Deploying Go Backends",
+// the app stops it on both (website/src/docs/developer/deployments.mdx "Deploying Go Backends",
 // "Updating a Deployment").
 func TestReferenceGo_notesThroughTheGatewayAsItself(t *testing.T) {
 	t.Parallel()

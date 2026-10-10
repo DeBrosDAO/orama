@@ -20,7 +20,7 @@ const (
 	cronSchedule = "0 */2 * * * *"
 	cronWindow   = 9 * time.Minute
 	minSlots     = 3
-	maxDepth     = 5 // docs/SERVERLESS.md#depth-limiting
+	maxDepth     = 5 // website/src/docs/developer/functions.mdx#depth-limiting
 	triggerWait  = 3 * time.Minute
 	quietWindow  = 45 * time.Second
 )

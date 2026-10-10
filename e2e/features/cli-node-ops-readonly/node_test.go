@@ -30,7 +30,7 @@ type delegation struct {
 // dns delegation` prints are exactly what the parent zone must hold, and the
 // run's real Cloudflare delegation holds them: every glue address is a fleet
 // node and the public NS set of the base domain is the printed one
-// (docs/CLI_REFERENCE.md#orama-node-dns-delegation, docs/NAMESERVER_SETUP.md).
+// (docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-node-dns-delegation, website/src/docs/operator/nameserver.mdx).
 // --cloudflare-token-file is never passed: it writes to Cloudflare.
 func TestNodeDNSDelegation_matchesThePublicDelegation(t *testing.T) {
 	t.Parallel()
@@ -80,9 +80,9 @@ func TestNodeDNSDelegation_refusals(t *testing.T) {
 }
 
 // TestNodeMigrateRaftID_freshClusterAlreadyStable: "a fresh node is on a
-// stable id from its first boot" (docs/ARCHITECTURE.md), and the documented
+// stable id from its first boot" (website/src/docs/contributor/architecture-reference.mdx), and the documented
 // way to check is `orama maint node migrate-raft-id --env <env> --dry-run`
-// (docs/NODE_REPLACEMENT.md), which changes nothing.
+// (website/src/docs/operator/node-replacement.mdx), which changes nothing.
 func TestNodeMigrateRaftID_freshClusterAlreadyStable(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -137,7 +137,7 @@ func TestNodeList_sameInventoryAsNodes(t *testing.T) {
 
 // TestNodeLogs_onNode: `orama node logs` reads the journal of one service on
 // the node it runs on, by alias or by full template-instance name, and
-// validates --lines (docs/CLI_REFERENCE.md#orama-node-logs).
+// validates --lines (docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-node-logs).
 func TestNodeLogs_onNode(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)

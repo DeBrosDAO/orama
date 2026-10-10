@@ -159,7 +159,7 @@ func (k Keeper) initGenesisCommitteeValidators(ctx sdk.Context, genState types.G
 		// AfterValidatorBonded is what actually creates x/slashing's ValidatorSigningInfo record
 		// (via its own hook implementation) - without it, x/slashing's BeginBlocker panics the
 		// whole chain the first time this member signs a block ("no validator signing info
-		// found"), since GetValidatorSigningInfo has no fallback default (see docs/CHAIN.md).
+		// found"), since GetValidatorSigningInfo has no fallback default (see docs/whitepaper/technical-reference/vol2/39-chain-architecture.md).
 		// Setting Status directly to Bonded above (rather than going through a real bonding
 		// transition) never fires this hook on its own, so InitGenesis must call it explicitly.
 		if err := k.stakingKeeper.Hooks().AfterValidatorBonded(ctx, consAddr, valAddrBytes); err != nil {

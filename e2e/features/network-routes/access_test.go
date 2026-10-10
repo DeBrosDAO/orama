@@ -61,7 +61,7 @@ func nonOperators(t *testing.T, n *ns.Namespace) []principal {
 }
 
 // TestNetworkRoutes_nonOperatorsRefused: the peer map and topology mutation
-// are an operator's (docs/API_SURFACE.md: "an operator's (operator grant and
+// are an operator's (docs/whitepaper/technical-reference/appendices/i-api-surface.md: "an operator's (operator grant and
 // the operator list)"; route_policy.go: "The handlers additionally require
 // the caller's wallet to be on the operator list"). A fresh wallet owns a
 // namespace in open mode, so its owner grant alone must not reach connect or

@@ -24,6 +24,6 @@ covers:
     - orama node trust
     - orama node trust add-root
   claims:
-    - "docs/CLI_REFERENCE.md#orama-node-setup: --release installs a published release: its metadata and archive verify against the root named by --release-root, and the operator's wallet signs the result"
-    - "docs/SECURITY.md#supply-chain: a client refuses metadata under another root, an expired timestamp, an older snapshot and an archive whose hash differs from its target"
-    - "docs/CLI_REFERENCE.md#orama-node-trust-add-root: adopting a different root than the one adopted needs --replace, and a root that does not verify is refused"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-node-setup: --release installs a published release: its metadata and archive verify against the root named by --release-root, and the operator's wallet signs the result"
+    - "docs/whitepaper/technical-reference/vol1/29-build-signing-and-release.md: a client refuses metadata under another root, an expired timestamp, an older snapshot and an archive whose hash differs from its target"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-node-trust-add-root: adopting a different root than the one adopted needs --replace, and a root that does not verify is refused"

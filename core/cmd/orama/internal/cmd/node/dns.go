@@ -43,7 +43,7 @@ the domain. A resolver that cannot answer is reported and nothing is
 stored. --json adds "delegated" and "findings" to each domain.
 
 Run it again after adding or removing a nameserver, and update the parent
-zone to match. See docs/NAMESERVER_SETUP.md.`,
+zone to match. See orama.network/docs/operator/nameserver.`,
 	Example: `  orama node dns delegation --env devnet
   orama node dns delegation --env devnet --json`,
 	Args: cobra.NoArgs,

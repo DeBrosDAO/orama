@@ -216,7 +216,7 @@ func (h *ServerlessHandlers) getCallerHasInvokeFromRequest(r *http.Request) bool
 			// the scopes of the grant at the moment its unit started, and an
 			// app is started before its owner can grant it anything, so the
 			// claim is the one answer that is wrong for as long as the app
-			// has not renewed (docs/AUTH.md, "A workload's identity").
+			// has not renewed (docs/whitepaper/technical-reference/vol1/14-authorization.md, "A workload's identity").
 			if auth.IsWorkloadSubject(sub) {
 				grant, _ := ctx.Value(ctxkeys.Grant).(*auth.Grant)
 				return grant != nil && grant.Scopes().Has(auth.ScopeInvoke)

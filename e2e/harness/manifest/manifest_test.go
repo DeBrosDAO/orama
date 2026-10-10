@@ -21,7 +21,7 @@ covers:
   queries: ["orama.token.v1.Params"]
   units: ["orama-namespace-rqlite@.service", "orama-turn.service"]
   config: ["node.yaml:gateway.base_domain"]
-  claims: ["docs/AUTH.md#signing-in: the nonce is single-use"]
+  claims: ["docs/whitepaper/technical-reference/vol1/14-authorization.md#signing-in: the nonce is single-use"]
 `
 
 func writeFeature(t *testing.T, root, dir, body string) {
@@ -108,7 +108,7 @@ func TestValidate_problems(t *testing.T) {
 		"msg lowercase":   strings.Replace(validYAML, "MsgCreateToken", "createToken", 1),
 		"unit wrong":      strings.Replace(validYAML, "orama-turn.service", "sshd.service", 1),
 		"config no key":   strings.Replace(validYAML, "node.yaml:gateway.base_domain", "node.yaml", 1),
-		"claim not doc":   strings.Replace(validYAML, "docs/AUTH.md#signing-in", "it works", 1),
+		"claim not doc":   strings.Replace(validYAML, "docs/whitepaper/technical-reference/vol1/14-authorization.md#signing-in", "it works", 1),
 		"duplicate route": strings.Replace(validYAML, `"/v1/status"`, `"/health"`, 1),
 	}
 	for name, body := range cases {
@@ -139,6 +139,36 @@ func TestValidate_reportsAllProblemsAtOnce(t *testing.T) {
 	for _, want := range []string{"id", "title", "area", "stage", "covers"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error lacks %q: %v", want, err)
+		}
+	}
+}
+
+func TestClaimShape_forms(t *testing.T) {
+	accepted := []string{
+		"website/src/docs/developer/webrtc.mdx#firewall: only 443 is open",
+		"website/src/docs/operator/troubleshooting.mdx",
+		"docs/whitepaper/technical-reference/vol1/14-authorization.md#error-codes",
+		"docs/whitepaper/technical-reference/appendices/i-api-surface.md: every route has an owner",
+		"plans/e2e-fleet.md",
+	}
+	rejected := []string{
+		"website/src/docs/developer/webrtc.md",
+		"website/src/docs/webrtc.mdx",
+		"website/src/pages/docs.tsx",
+		"website/src/docs/developer/Webrtc.mdx",
+		"website/docs/developer/webrtc.mdx",
+		"docs/whitepaper/technical-reference/vol1/x.mdx",
+		"README.md",
+		"it works",
+	}
+	for _, c := range accepted {
+		if !claimShape.MatchString(c) {
+			t.Errorf("claim %q was refused", c)
+		}
+	}
+	for _, c := range rejected {
+		if claimShape.MatchString(c) {
+			t.Errorf("claim %q was accepted", c)
 		}
 	}
 }

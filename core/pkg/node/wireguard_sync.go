@@ -200,7 +200,7 @@ func (n *Node) reconcileWireGuardPeersWith(wp wgPeerProvisioner, currentPeers ma
 			// endpoint or allowed-ips change is rolled out. Skipping known keys
 			// meant a peer that moved to a new public IP kept the dead endpoint
 			// forever, which is the manual "reset the peer on both sides" in
-			// docs/COMMON_PROBLEMS.md.
+			// website/src/docs/operator/troubleshooting.mdx.
 			updated++
 			n.logger.ComponentInfo(logging.ComponentNode, "updated WG peer",
 				zap.String("public_key", shortWGKey(pubKey)),

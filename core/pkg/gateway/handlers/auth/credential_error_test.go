@@ -265,7 +265,7 @@ func TestOwnershipIsCheckedBeforeAnythingIsIssued(t *testing.T) {
 	}
 }
 
-// Every refusal carries a code and a hint (docs/AUTH.md, the error envelope):
+// Every refusal carries a code and a hint (docs/whitepaper/technical-reference/vol1/12-gateway-architecture.md, the error envelope):
 // a client is told what to do, not only what went wrong. The credential
 // refusals had codes and no hints, which stagenet e2e caught on open sign-in.
 func TestWriteCredentialError_everyRefusalCarriesAHint(t *testing.T) {

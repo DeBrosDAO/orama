@@ -32,8 +32,8 @@ const (
 // process, runs as its own non-root user, cannot read node secrets, another
 // deployment, the node's config or PID 1's environment, cannot write its own
 // code, can write its state directory, cannot bind any port but PORT, and
-// cannot reach the WireGuard network (docs/DEPLOYMENT_GUIDE.md "What your app
-// runs as"; docs/SECURITY.md "Tenant deployments").
+// cannot reach the WireGuard network (website/src/docs/developer/deployments.mdx "What your app
+// runs as"; docs/whitepaper/technical-reference/vol1/29-build-signing-and-release.md "Tenant deployments").
 func TestDeploySandbox_fromInside(t *testing.T) {
 	t.Parallel()
 	tn := newTenant(t)
@@ -227,7 +227,7 @@ func gatewayAddr(t testing.TB, raw string) string {
 // TestDeploySandbox_unitConfinement: host-side, the unit runs with a dynamic
 // user, a strict read-only system, private /tmp, no new privileges, the
 // recorded limits, its bind allow-list, and a 0600 env file
-// (docs/SECURITY.md "Tenant deployments").
+// (docs/whitepaper/technical-reference/vol1/16-secrets-and-keys.md "Tenant deployments").
 func TestDeploySandbox_unitConfinement(t *testing.T) {
 	t.Parallel()
 	tn := newTenant(t)
@@ -265,8 +265,8 @@ func TestDeploySandbox_unitConfinement(t *testing.T) {
 
 // TestDeployIdentity_workloadTokenRenews: the app is handed a token file and
 // renews it at its gateway's /v1/auth/renew with the token it holds; the
-// route refuses anything that is not a workload token (docs/DEPLOYMENT_GUIDE.md
-// "Your app's own credential"; docs/API_SURFACE.md "/v1/auth/renew").
+// route refuses anything that is not a workload token (website/src/docs/developer/deployments.mdx
+// "Your app's own credential"; docs/whitepaper/technical-reference/appendices/i-api-surface.md "/v1/auth/renew").
 func TestDeployIdentity_workloadTokenRenews(t *testing.T) {
 	t.Parallel()
 	tn := newTenant(t)
@@ -286,7 +286,7 @@ func TestDeployIdentity_workloadTokenRenews(t *testing.T) {
 // TestDeployIdentity_aSelectorOnTheAppGrantNarrowsTheApp: the gateway reads a
 // workload's grant under its app principal, so a selector on it narrows the
 // app's own calls. The grant used to be looked up as a key's and never found:
-// the selector narrowed nothing (docs/AUTH.md "A workload's identity").
+// the selector narrowed nothing (docs/whitepaper/technical-reference/vol1/14-authorization.md "A workload's identity").
 func TestDeployIdentity_aSelectorOnTheAppGrantNarrowsTheApp(t *testing.T) {
 	t.Parallel()
 	tn := newTenant(t)

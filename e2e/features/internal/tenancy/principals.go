@@ -16,11 +16,11 @@ import (
 )
 
 const (
-	// PathMembers grants a role (docs/API_SURFACE.md "Namespace management").
+	// PathMembers grants a role (docs/whitepaper/technical-reference/appendices/i-api-surface.md "Namespace management").
 	PathMembers = "/v1/namespace/members"
-	// PathKeys mints a scoped API key (docs/API_SURFACE.md "Namespace management").
+	// PathKeys mints a scoped API key (docs/whitepaper/technical-reference/appendices/i-api-surface.md "Namespace management").
 	PathKeys = "/v1/namespace/keys"
-	// Roles (docs/CLI_REFERENCE.md "orama members").
+	// Roles (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama members").
 	RoleRuntime = "runtime"
 	RoleReader  = "reader"
 	RoleAdmin   = "admin"

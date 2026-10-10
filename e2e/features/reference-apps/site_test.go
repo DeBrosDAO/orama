@@ -18,7 +18,7 @@ var sitePages = []string{"/", "/pricing.html", "/docs/", "/assets/site.css", "/a
 // TestReferenceSite_marketingSiteVisitorsAndUpdate: the static marketing site
 // deploys with `orama deploy static`, every node serves every page by name
 // with its content type, 200 visitors' page views all succeed, and an update
-// in place (`--update`) reaches every node (docs/DEPLOYMENT_GUIDE.md
+// in place (`--update`) reaches every node (website/src/docs/developer/deployments.mdx
 // "Deploying Static Sites", "Updating a Deployment").
 func TestReferenceSite_marketingSiteVisitorsAndUpdate(t *testing.T) {
 	t.Parallel()
@@ -45,7 +45,7 @@ var renderID = regexp.MustCompile(`<p id="render">([a-z0-9]+)</p>`)
 // serves it, each request is rendered on the server (two renders differ),
 // its dependency directory was cleared by orama-deploy-clean@ because the
 // standalone output ships its own, and `--update` (/v1/deployments/nextjs/update)
-// replaces it on every node (docs/DEPLOYMENT_GUIDE.md "Next.js with SSR").
+// replaces it on every node (website/src/docs/developer/deployments.mdx "Next.js with SSR").
 func TestReferenceNext_ssrRendersPerRequestAndUpdates(t *testing.T) {
 	t.Parallel()
 	requireNPM(t)

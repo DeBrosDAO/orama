@@ -16,7 +16,7 @@ const (
 
 // TestStaking_undelegateGuardLocksForceBond: while lambda < 1 a committee
 // member cannot withdraw its own force-bonded self-bond
-// (x/power/ante/undelegate_guard.go, docs/CHAIN.md "Force-bonding"). It is
+// (x/power/ante/undelegate_guard.go, docs/whitepaper/technical-reference/vol2/39-chain-architecture.md "Force-bonding"). It is
 // here, in the package that runs alone, because the attempt withdraws the
 // WHOLE self-bond: were the guard broken, the validator would lose its
 // power while other packages depend on the chain.

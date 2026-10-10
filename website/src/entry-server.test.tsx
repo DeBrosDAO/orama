@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import { NOT_FOUND_PROBE, PAGES, POSTS, render, structuredData } from "./entry-server";
 import { postPath } from "./blog/posts";
 import { EXPLORER_PATH } from "./content/pages";
+import { ROUTES } from "./content/routes";
+import { WHITEPAPER, WHITEPAPER_SHORT } from "./content/whitepaper";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 /**
  * Renders every prerendered page exactly as the build does. Catches a page
@@ -28,6 +32,33 @@ describe("prerendered pages", () => {
     },
     30_000,
   );
+
+  it("TestRender_whitepaper_download_section", async () => {
+    // React separates adjacent text nodes with <!-- -->; the reader sees none.
+    const html = (await render(ROUTES.whitepaper.path)).replaceAll("<!-- -->", "");
+    const { files, version, referenceTotal } = WHITEPAPER;
+    expect(files).toHaveLength(4);
+    // The primary download comes first, then the three reference volumes.
+    const hrefs = files.map((f) => html.indexOf(`href="${f.href}"`));
+    expect(hrefs.every((i) => i > 0)).toBe(true);
+    expect(hrefs).toEqual([...hrefs].sort((a, b) => a - b));
+    for (const f of files) expect(html).toContain(`PDF · ${f.pages} pages · ${f.size} · v${version}`);
+    expect(html).toContain(`${referenceTotal.pages.toLocaleString("en-US")} pages in three volumes`);
+    expect(html).toContain("docs/whitepaper/");
+    expect(html).toContain(`at version ${version}`);
+    // The short overview is still rendered below the downloads.
+    expect(html.indexOf("Download the whitepaper")).toBeLessThan(html.indexOf("<h1"));
+    expect(html).toContain("The problem");
+  }, 30_000);
+
+  it("TestWhitepaper_manifest_matches_version_file", () => {
+    expect(WHITEPAPER.version).toBe(readFileSync(resolve(__dirname, "../../VERSION"), "utf-8").trim());
+    for (const f of WHITEPAPER.files) {
+      expect(f.href).toContain(`-v${WHITEPAPER.version}`);
+      expect(f.pages).toBeGreaterThan(0);
+    }
+    expect(WHITEPAPER_SHORT.pages).toBeLessThan(WHITEPAPER.referenceTotal.pages);
+  });
 
   it("TestRender_unknown_path_is_404", async () => {
     expect(await render("/no-such-page")).toContain("This page doesn&#x27;t exist.");

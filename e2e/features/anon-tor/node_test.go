@@ -34,7 +34,7 @@ func upgradeReq(path, apiKey string) gw.Req {
 
 // TestTor_unitHardening: every node runs the Tor client as a client only,
 // SOCKS on loopback 9050 with per-credential isolation, internal addresses
-// refused, and the unit denied the private ranges (docs/ARCHITECTURE.md,
+// refused, and the unit denied the private ranges (website/src/docs/contributor/architecture-reference.mdx,
 // systemd/orama-namespace-tor@.service).
 func TestTor_unitHardening(t *testing.T) {
 	t.Parallel()

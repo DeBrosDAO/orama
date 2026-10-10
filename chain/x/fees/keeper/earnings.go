@@ -78,7 +78,7 @@ func (k Keeper) GetEarnings(ctx context.Context, addr sdk.AccAddress) (math.Int,
 // bonding from earnings ... earnings go only to the signer's own bond"). It is the primitive under
 // FundSpendFromEarnings, which the bond-funding message handlers call while they execute - the only
 // path by which an outsider who has never held a public bank balance (this chain starts every
-// account at zero, and payouts land only in earnings - see docs/CHAIN.md) can ever create or grow
+// account at zero, and payouts land only in earnings - see docs/whitepaper/technical-reference/vol2/40-economics.md) can ever create or grow
 // a validator or bond a node.
 func (k Keeper) TopUpSpendFromEarnings(ctx context.Context, addr sdk.AccAddress, denom string, amount math.Int) (math.Int, error) {
 	if denom != params.BaseDenom || !amount.IsPositive() {

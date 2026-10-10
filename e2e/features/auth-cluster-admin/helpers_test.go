@@ -21,7 +21,7 @@ import (
 const (
 	// pathNamespaces creates a namespace.
 	pathNamespaces = "/v1/namespaces"
-	// Namespace-creation modes (docs/CLI_REFERENCE.md "orama maint cluster settings set").
+	// Namespace-creation modes (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama maint cluster settings set").
 	modeOperators = "operators"
 	modeAllowlist = "allowlist"
 	modeOpen      = "open"
@@ -90,7 +90,7 @@ func setSetting(t testing.TB, cli *oramacli.Runner, name, value string) {
 }
 
 // expectCode fails unless resp has status and code; a 401/403 must also carry
-// a non-empty error and hint (docs/AUTH.md#when-a-request-is-refused).
+// a non-empty error and hint (docs/whitepaper/technical-reference/vol1/14-authorization.md#refusals-and-the-error-code-table).
 func expectCode(t testing.TB, resp *gw.Response, status int, code string) {
 	t.Helper()
 	var body map[string]any

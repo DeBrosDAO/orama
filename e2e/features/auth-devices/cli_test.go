@@ -43,7 +43,7 @@ func runCLI(t testing.TB, cli *oramacli.Runner, args ...string) oramacli.Result 
 
 // TestAuthApprove_cliApprovesAWaitingLogin: `orama auth approve <code>` on a
 // machine with a wallet signs the waiting login in as that wallet
-// (docs/AUTH.md "Signing in from a machine with no wallet on it").
+// (docs/whitepaper/technical-reference/vol1/13-identity.md "Signing in from a machine with no wallet on it").
 func TestAuthApprove_cliApprovesAWaitingLogin(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -94,7 +94,7 @@ func TestAuthApprove_cliDenyAndRefusals(t *testing.T) {
 
 // TestAuthLogin_cliDeviceKeyEnrolsTheDevice: --device-key enrols the Ed25519
 // key with the sign-in; the stored refresh token is device-bound (dv1_) and
-// the device is listed active (docs/AUTH.md#signing-in-with-a-device).
+// the device is listed active (docs/whitepaper/technical-reference/vol1/13-identity.md#signing-in-with-a-device).
 func TestAuthLogin_cliDeviceKeyEnrolsTheDevice(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)

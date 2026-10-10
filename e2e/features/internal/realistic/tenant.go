@@ -26,13 +26,13 @@ import (
 
 const (
 	// StartBudget: the platform polls a new app's health path every 30s and a
-	// server-side npm install may take minutes (docs/DEPLOYMENT_GUIDE.md).
+	// server-side npm install may take minutes (website/src/docs/developer/deployments.mdx).
 	StartBudget = 8 * time.Minute
 	// PollEvery paces waits on apps, functions and triggers.
 	PollEvery = 3 * time.Second
 	// cleanupBudget bounds one cleanup call.
 	cleanupBudget = 2 * time.Minute
-	// pathDeploymentDelete deletes an app (docs/API_SURFACE.md "Deployments").
+	// pathDeploymentDelete deletes an app (docs/whitepaper/technical-reference/appendices/i-api-surface.md "Deployments").
 	pathDeploymentDelete = "/v1/deployments/delete"
 	// exitNotFound is the CLI's "not found" exit code.
 	exitNotFound = 4

@@ -14,7 +14,7 @@ import (
 var authorityRefusal = regexp.MustCompile(`invalid authority: expected (orama1[02-9ac-hj-np-z]{38}), got (orama1[02-9ac-hj-np-z]{38})`)
 
 // authorityMsgs are the authority-gated messages of the stock modules the app
-// wires (docs/CHAIN.md "Modules wired": every one is given
+// wires (docs/whitepaper/technical-reference/vol2/39-chain-architecture.md "Modules wired": every one is given
 // app.UnreachableAuthority()). Every handler checks the authority before
 // anything else (cosmos-sdk types/authority.go ValidateAuthority is the first
 // call of each), so the bodies are left empty: a refusal can only come from
@@ -39,7 +39,7 @@ func authorityMsgs(authority string) map[string]chain.Msg {
 // consensus; MsgSoftwareUpgrade; MsgCancelUpgrade) signed by a validator
 // naming itself as authority is refused with ErrUnauthorized, and every
 // module names the SAME expected authority: the module address of
-// "orama/no-authority", which no key can sign for (docs/CHAIN.md, "x/houses
+// "orama/no-authority", which no key can sign for (docs/whitepaper/technical-reference/vol2/44-governance-and-contracts.md, "x/houses
 // is registered, and it is not the SDK x/gov authority"). No parameter moves.
 func TestAuthority_gatedMsgsRefusedForAnySigner(t *testing.T) {
 	t.Parallel()

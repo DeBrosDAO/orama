@@ -48,8 +48,8 @@ const (
 // checks, on that node: /v1/proxy/anon is 503
 // and never fetched directly; the tunnel is refused; /v1/health stays 200
 // with checks.anon_proxy "unavailable"; and the node stays in the gateway's
-// DNS answer when it is a nameserver (docs/ARCHITECTURE.md "Health",
-// SECURITY.md).
+// DNS answer when it is a nameserver (website/src/docs/contributor/architecture-reference.mdx "Health",
+// docs/whitepaper/technical-reference/vol2/38-anonymity-and-tor.md).
 func TestTorDown_failsClosedNodeStaysServing(t *testing.T) {
 	f := harness.Fleet(t)
 	n := ns.New(t, f, ns.Options{Via: ns.ViaOperator})
@@ -76,7 +76,7 @@ func TestTorDown_failsClosedNodeStaysServing(t *testing.T) {
 
 // TestTorDown_anonFetchFailsClosed: with the Tor client of the node that runs
 // the namespace's gateway stopped, a function's anon_fetch there gets status 0 with an error, never a
-// direct fetch (docs/SERVERLESS.md#http). It needs tinygo to build the
+// direct fetch (website/src/docs/developer/functions.mdx#http). It needs tinygo to build the
 // fixture function.
 func TestTorDown_anonFetchFailsClosed(t *testing.T) {
 	if _, err := exec.LookPath("tinygo"); err != nil {

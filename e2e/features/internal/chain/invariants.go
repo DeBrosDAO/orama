@@ -13,7 +13,7 @@ import (
 )
 
 // InvariantModules are the modules with an Invariants query, the same list
-// e2e/scripts/chain-deploy.sh `invariants` checks (docs/SECURITY_PLAYBOOKS.md).
+// e2e/scripts/chain-deploy.sh `invariants` checks (docs/whitepaper/technical-reference/vol2/39-chain-architecture.md).
 var InvariantModules = []string{"emission", "fees", "houses", "market", "nodes", "power", "relay", "shielded", "storage", "token"}
 
 // requiredTrue are the members a module's Invariants answer must carry as

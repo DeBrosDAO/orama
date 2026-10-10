@@ -26,7 +26,7 @@ const (
 
 // TestLogout_endsAccessAndRefresh: logging out revokes the refresh token and
 // the access token presented with it, so "log me out" stops the token in hand
-// too (docs/AUTH.md#revoking). The revocation reaches every gateway within the
+// too (docs/whitepaper/technical-reference/vol1/13-identity.md#revocation). The revocation reaches every gateway within the
 // list's staleness.
 func TestLogout_endsAccessAndRefresh(t *testing.T) {
 	t.Parallel()
@@ -96,7 +96,7 @@ func TestLogout_malformedRequests(t *testing.T) {
 }
 
 // TestRefresh_replayIsAudited: presenting a spent refresh token is refused and
-// recorded in the namespace's trail as auth.refresh.replay (docs/AUTH.md,
+// recorded in the namespace's trail as auth.refresh.replay (docs/whitepaper/technical-reference/vol1/14-authorization.md,
 // "presenting one twice is a replay, and the second attempt fails and is
 // recorded").
 func TestRefresh_replayIsAudited(t *testing.T) {

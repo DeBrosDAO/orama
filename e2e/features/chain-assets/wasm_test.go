@@ -37,7 +37,7 @@ func storeCodeMsg(sender string) chain.Msg {
 }
 
 // TestWasm_policyMatchesTheBuild: x/wasmpolicy is always wired; x/wasm only
-// when oramad links libwasmvm (docs/CHAIN.md "Modules wired"). The run's
+// when oramad links libwasmvm (docs/whitepaper/technical-reference/vol2/39-chain-architecture.md "Modules wired"). The run's
 // oramad is built by chain-deploy.sh with CGO_ENABLED=0, a no-VM build: its
 // genesis has wasmpolicy and no wasm, the wasm query and message types do not
 // exist, and a MsgStoreCode cannot even be signed. A VM build instead

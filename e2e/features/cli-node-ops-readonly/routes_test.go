@@ -22,7 +22,7 @@ func operatorReads(env string) []gw.Req {
 }
 
 // TestOperatorReadRoutes_refuseNonOperators: the cluster's telemetry and node
-// inventory are for its operators only (docs/CLI_REFERENCE.md#orama-monitor
+// inventory are for its operators only (docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-monitor
 // "Only the cluster's operators may read it"): no credential is 401, garbage
 // is 401, and a signed-in wallet that is not an operator is 403 NOT_AN_OPERATOR.
 // The operator's own reads are the CLI tests above.

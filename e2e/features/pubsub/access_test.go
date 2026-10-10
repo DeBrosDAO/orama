@@ -23,7 +23,7 @@ import (
 const (
 	closeRevoked = 4403
 	// sweepBudget: every open socket is re-checked every 10s against a list
-	// reloaded at each sweep (docs/AUTH.md#revoking), plus the round trip.
+	// reloaded at each sweep (docs/whitepaper/technical-reference/vol1/13-identity.md#open-websockets), plus the round trip.
 	sweepBudget = 25 * time.Second
 )
 
@@ -41,7 +41,7 @@ func TestPubsubAuth_noCredentialRefused(t *testing.T) {
 
 // TestPubsubAuth_rolesAndKeysDecide: runtime and a pubsub key publish and
 // subscribe; reader and a cache-only key do neither
-// (docs/CLI_REFERENCE.md "orama members", docs/ARCHITECTURE.md "API Keys").
+// (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama members", website/src/docs/contributor/architecture-reference.mdx "API Keys").
 func TestPubsubAuth_rolesAndKeysDecide(t *testing.T) {
 	t.Parallel()
 	n := tenancy.Namespace(t, harness.Fleet(t), ns.Options{})
@@ -111,7 +111,7 @@ func TestPubsubAuth_revokedSessionClosesSocket(t *testing.T) {
 
 // TestPubsubIsolation_topicsAreNamespaced: B publishing on a topic of the same
 // name reaches nobody in A; B's credentials cannot publish into or subscribe
-// to A (docs/SECURITY.md, NAMESPACE_MISMATCH).
+// to A (docs/whitepaper/technical-reference/vol1/14-authorization.md, NAMESPACE_MISMATCH).
 func TestPubsubIsolation_topicsAreNamespaced(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -187,7 +187,7 @@ func TestPubsubInput_malformedRefused(t *testing.T) {
 
 // TestPubsubAuth_topicSelectorGrant: a member grant narrowed to
 // pubsub:topic=chat.* reaches only matching topics when enforced, and nothing
-// while the gateway reports it unenforced (docs/SECURITY.md "Resource
+// while the gateway reports it unenforced (docs/whitepaper/technical-reference/vol1/14-authorization.md "Resource
 // selectors"; core/pkg/gateway/members_routes.go).
 func TestPubsubAuth_topicSelectorGrant(t *testing.T) {
 	t.Parallel()

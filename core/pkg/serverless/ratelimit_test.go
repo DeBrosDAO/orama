@@ -248,7 +248,7 @@ func TestTokenBucketLimiter_legacy_works(t *testing.T) {
 }
 
 // TestMultiTier_default_per_wallet_limit_matches_docs pins the figures
-// docs/SERVERLESS.md ("Invoke rate limits") states: a wallet gets a 60-invoke
+// website/src/docs/developer/functions.mdx ("Invoke rate limits") states: a wallet gets a 60-invoke
 // burst, the 61st is refused as per_wallet, and the refill is 10 a second.
 func TestMultiTier_default_per_wallet_limit_matches_docs(t *testing.T) {
 	l := NewMultiTierLimiter(DefaultLimiterConfig())

@@ -18,7 +18,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/oramacli"
 )
 
-// Namespace lifecycle routes (docs/API_SURFACE.md "Namespace management").
+// Namespace lifecycle routes (docs/whitepaper/technical-reference/appendices/i-api-surface.md "Namespace management").
 const (
 	PathCreate = "/v1/namespaces"
 	pathStatus = "/v1/namespace/status"
@@ -26,7 +26,7 @@ const (
 	PathList   = "/v1/namespace/list"
 	pathQuery  = "/v1/rqlite/query"
 	pathHealth = "/health"
-	// Creation modes (docs/CLI_REFERENCE.md "orama maint cluster settings set").
+	// Creation modes (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama maint cluster settings set").
 	modeOpen      = "open"
 	modeAllowlist = "allowlist"
 )

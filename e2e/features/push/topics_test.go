@@ -29,7 +29,7 @@ func registerTopic(t testing.TB, c *gw.Client, who tenancy.Cred, secret, token s
 // secret; a registration lives 7-8 days rounded up to a UTC day and a
 // refresh moves it forward; a token belongs to one topic, so registering it
 // under a new secret removes the old topic; DELETE needs the secret and a
-// wrong one is 404 (docs/PUSH_NOTIFICATIONS.md#step-5b--register-by-rotating-push-topic-no-account-binding).
+// wrong one is 404 (website/src/docs/developer/push-notifications.mdx#step-5b--register-by-rotating-push-topic-no-account-binding).
 func TestTopics_registerRefreshRotateRemove(t *testing.T) {
 	t.Parallel()
 	n := tenancy.Namespace(t, harness.Fleet(t), ns.Options{})

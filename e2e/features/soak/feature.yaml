@@ -43,4 +43,4 @@ covers:
     - orama-namespace-olric@.service
   claims:
     - "plans/e2e-fleet.md: simulated users hold sockets open for hours through chaos, and nothing is lost"
-    - "docs/MONITORING.md: a node whose commit index is over 100 ahead of its applied index is a warning"
+    - "website/src/docs/operator/monitoring.mdx: a node whose commit index is over 100 ahead of its applied index is a warning"

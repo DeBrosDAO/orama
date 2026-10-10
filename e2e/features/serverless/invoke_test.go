@@ -51,7 +51,7 @@ func invokeKey(t *testing.T, fx *fixture, fn, key string) *gw.Response {
 
 // TestInvoke_accessMatrix: a private function needs a signed-in wallet or
 // the invoke grant (a storage-only key is refused); a public one is open;
-// `name@N` runs that version (docs/SERVERLESS.md#functionyaml, #versioning).
+// `name@N` runs that version (website/src/docs/developer/functions.mdx#functionyaml, #versioning).
 func TestInvoke_accessMatrix(t *testing.T) {
 	t.Parallel()
 	fx := setup(t)
@@ -124,7 +124,7 @@ func TestInvoke_callerContext(t *testing.T) {
 
 // TestInvoke_nested: function_invoke runs another function of the namespace
 // with the caller's identity; from an anonymous public call a private target
-// is not reachable (docs/SERVERLESS.md#capabilities: a nested call with no
+// is not reachable (website/src/docs/developer/functions.mdx#capabilities: a nested call with no
 // caller reaches only public functions).
 func TestInvoke_nested(t *testing.T) {
 	t.Parallel()
@@ -145,7 +145,7 @@ func TestInvoke_nested(t *testing.T) {
 }
 
 // TestInvoke_timeoutIsRateLimited: running past timeout on a direct invoke is
-// 429 RATE_LIMITED, retryable (docs/SERVERLESS.md#functionyaml).
+// 429 RATE_LIMITED, retryable (website/src/docs/developer/functions.mdx#functionyaml).
 func TestInvoke_timeoutIsRateLimited(t *testing.T) {
 	t.Parallel()
 	fx := setup(t)
@@ -158,7 +158,7 @@ func TestInvoke_timeoutIsRateLimited(t *testing.T) {
 }
 
 // TestInvoke_memoryLimit: allocating past memory fails the invocation;
-// within it succeeds (docs/SECURITY.md: WithMemoryLimitPages).
+// within it succeeds (docs/whitepaper/technical-reference/vol1/21-serverless.md: WithMemoryLimitPages).
 func TestInvoke_memoryLimit(t *testing.T) {
 	t.Parallel()
 	fx := setup(t)
@@ -185,7 +185,7 @@ func TestInvoke_unknownHostModule(t *testing.T) {
 }
 
 // TestInvoke_concurrencyBounded: one namespace cannot run unbounded WASM at
-// once on a gateway (docs/SECURITY.md: a per-namespace slot); a burst queues
+// once on a gateway (docs/whitepaper/technical-reference/vol1/21-serverless.md: a per-namespace slot); a burst queues
 // and still completes.
 func TestInvoke_concurrencyBounded(t *testing.T) {
 	t.Parallel()
@@ -228,7 +228,7 @@ func TestInvoke_concurrencyBounded(t *testing.T) {
 // TestInvoke_crossNamespace: another namespace's credential cannot invoke a
 // private function or manage functions here (NAMESPACE_MISMATCH / 403), and
 // the main gateway refuses an anonymous invoke that names no namespace
-// (docs/SERVERLESS.md#http-api-reference; SECURITY.md bugboard #423/#427).
+// (website/src/docs/developer/functions.mdx#http-api-reference; docs/whitepaper/technical-reference/vol1/21-serverless.md, bugboard #423/#427).
 func TestInvoke_crossNamespace(t *testing.T) {
 	t.Parallel()
 	fx := setupN(t, 2)

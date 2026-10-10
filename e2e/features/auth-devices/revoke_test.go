@@ -17,7 +17,7 @@ import (
 // TestDeviceRevoke_reachesEveryGateway: revoking a device ends its access
 // tokens on every gateway — each node's public gateway and each node's
 // namespace gateway — within ten seconds, ends its refresh token, and leaves
-// the account's other device signed in everywhere (docs/AUTH.md#revoking-a-device).
+// the account's other device signed in everywhere (docs/whitepaper/technical-reference/vol1/13-identity.md#revoking-a-device).
 func TestDeviceRevoke_reachesEveryGateway(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -82,7 +82,7 @@ func TestDeviceRevoke_unknownAndForeignDevices(t *testing.T) {
 // TestSessions_listAndEndOne: the list shows each session with its device and
 // never the refresh token; ending one refuses its access tokens everywhere
 // within ten seconds and its refresh token at once, and leaves the others
-// (docs/AUTH.md#which-machines-are-signed-in-as-you).
+// (docs/whitepaper/technical-reference/vol1/13-identity.md#machines-with-no-wallet).
 func TestSessions_listAndEndOne(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)

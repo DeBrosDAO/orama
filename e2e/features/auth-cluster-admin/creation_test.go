@@ -61,8 +61,8 @@ func operatorCreate(t testing.TB, cli *oramacli.Runner, taken string) oramacli.R
 }
 
 // TestCreationMode_operatorsAdmitsOnlyOperators: in `operators` mode a user
-// is refused and the operator is admitted (docs/AUTH.md#the-lobby,
-// docs/CLI_REFERENCE.md "orama maint cluster settings set").
+// is refused and the operator is admitted (docs/whitepaper/technical-reference/vol1/13-identity.md#a-lobby-instead-of-claiming-on-first-sign-in,
+// docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama maint cluster settings set").
 func TestCreationMode_operatorsAdmitsOnlyOperators(t *testing.T) {
 	f := harness.Fleet(t)
 	taken := ns.New(t, f, ns.Options{}).Name
@@ -134,7 +134,7 @@ func TestClusterSettings_invalidValuesRefused(t *testing.T) {
 }
 
 // TestClusterSettings_refusedToNonOperators: a namespace owner's credential is
-// not an operator's (docs/API_SURFACE.md "Node and operator").
+// not an operator's (docs/whitepaper/technical-reference/appendices/i-api-surface.md "Node and operator").
 func TestClusterSettings_refusedToNonOperators(t *testing.T) {
 	f := harness.Fleet(t)
 	n := ns.New(t, f, ns.Options{})

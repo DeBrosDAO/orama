@@ -35,7 +35,7 @@ func reached(resp *gw.Response) bool {
 
 // TestGrants_pubsubTopicSelector: `pubsub:topic=chat.*` publishes to chat
 // topics and nothing else, and never widens past pub/sub
-// (docs/AUTH.md#narrowing-a-grant).
+// (docs/whitepaper/technical-reference/vol1/14-authorization.md#roles-and-grants).
 func TestGrants_pubsubTopicSelector(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -83,7 +83,7 @@ func TestGrants_cacheKeySelector(t *testing.T) {
 
 // TestGrants_storageNameSelector: `storage:avatars/*` uploads under avatars/
 // only, against the normalised name; `..` in a name is refused, not
-// resolved (docs/AUTH.md#narrowing-a-grant).
+// resolved (docs/whitepaper/technical-reference/vol1/14-authorization.md#roles-and-grants).
 func TestGrants_storageNameSelector(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)

@@ -198,7 +198,7 @@ var errFake = fakeErr("wg set failed")
 
 // A peer whose public IP moved keeps the same key, so the old reconciler
 // skipped it and the dead endpoint survived forever. That is the manual
-// "reset the peer on both sides" recipe in docs/COMMON_PROBLEMS.md.
+// "reset the peer on both sides" recipe in website/src/docs/operator/troubleshooting.mdx.
 func TestReconcileWireGuardPeers_appliesEndpointDrift(t *testing.T) {
 	n := testNode(t)
 	f := &fakeProvisioner{}

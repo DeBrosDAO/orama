@@ -40,7 +40,7 @@ type IsolatedService struct {
 //     (orama:orama-sfu 0640), and writes nothing. It runs /usr/local/bin/sfu,
 //     not /opt/orama/bin/sfu, which is root:orama 0750.
 //
-// Every other service still runs as orama. docs/SECURITY.md ("Per-service
+// Every other service still runs as orama. docs/whitepaper/technical-reference/vol1/05-privilege-and-filesystem-trust.md ("Per-service
 // accounts") names what keeps each of them there.
 var isolatedServices = []IsolatedService{
 	{Service: string(ServiceTypeCoreDNS)},

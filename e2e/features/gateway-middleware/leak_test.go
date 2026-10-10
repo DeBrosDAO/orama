@@ -17,7 +17,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/ns"
 )
 
-// openPaths are answered to anyone (docs/SECURITY.md "What the open health
+// openPaths are answered to anyone (docs/whitepaper/technical-reference/vol1/12-gateway-architecture.md "What the open health
 // and status endpoints show").
 var openPaths = []string{"/health", "/v1/health", "/status", "/v1/status", "/v1/internal/ping"}
 
@@ -57,8 +57,8 @@ func leaks(f *fleet.Fleet, body string) []string {
 // TestOpenEndpoints_nameNoNode: every open endpoint, through every node and
 // on a namespace host, answers without an address, peer id, hostname or
 // multiaddr of any node — anonymously they show status only
-// (docs/SECURITY.md "What the open health and status endpoints show";
-// docs/API_SURFACE.md "Health and version").
+// (docs/whitepaper/technical-reference/vol1/12-gateway-architecture.md "What the open health and status endpoints show";
+// docs/whitepaper/technical-reference/appendices/i-api-surface.md "Health and version").
 func TestOpenEndpoints_nameNoNode(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -70,7 +70,7 @@ func TestOpenEndpoints_nameNoNode(t *testing.T) {
 	for where, c := range clients {
 		for _, path := range openPaths {
 			if where == "namespace host" && path == "/v1/internal/ping" {
-				continue // only the index gateway serves the ping (docs/MONITORING.md "ring monitor")
+				continue // only the index gateway serves the ping (website/src/docs/operator/monitoring.mdx "ring monitor")
 			}
 			resp := c.MustSend(t, gw.Req{Path: path, Header: http.Header{"Accept": {"application/json"}}})
 			// The health handlers answer 503 while any check is degraded (a
@@ -90,7 +90,7 @@ func TestOpenEndpoints_nameNoNode(t *testing.T) {
 }
 
 // TestOpenEndpoints_pingSaysOKAndNothingElse: the peer prober's ping is
-// {"status":"ok"} — it used to name the node (docs/API_SURFACE.md
+// {"status":"ok"} — it used to name the node (docs/whitepaper/technical-reference/appendices/i-api-surface.md
 // "/v1/internal/ping"). It is reachable from the internet, like every path
 // Caddy proxies; what it shows is the point.
 func TestOpenEndpoints_pingSaysOKAndNothingElse(t *testing.T) {
@@ -110,7 +110,7 @@ func TestOpenEndpoints_pingSaysOKAndNothingElse(t *testing.T) {
 
 // TestOpenEndpoints_healthChecksCarryStatusOnly: /health's checks map each
 // check to its status and nothing else — no latency, error text or port
-// (docs/API_SURFACE.md "/health").
+// (docs/whitepaper/technical-reference/appendices/i-api-surface.md "/health").
 func TestOpenEndpoints_healthChecksCarryStatusOnly(t *testing.T) {
 	t.Parallel()
 	for _, path := range []string{"/health", "/v1/health"} {

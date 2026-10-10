@@ -38,7 +38,7 @@ pages say so plainly.
    contracts, and the `orama-global` services. Five pages cover about a tenth of it.
 4. **The CLI reference is a hand-written fork of a generated file.**
    `developer/cli-reference.mdx` (524 lines) shows `orama 0.122.108` and covers a
-   fraction of the command tree. `docs/CLI_REFERENCE.md` is generated from cobra and a
+   fraction of the command tree. `docs/whitepaper/technical-reference/appendices/d-cli-reference.md` is generated from cobra and a
    test fails if it drifts. The website should be generated from it, not maintained
    next to it.
 5. **The SDK reference documents the 2025 SDK.** `sdk-reference.mdx` (911 lines) covers
@@ -121,42 +121,42 @@ Each row names the page that will carry it and the source it is written from.
 
 | Topic | New page | Source of truth |
 |---|---|---|
-| What Orama is, who it is for, what is and is not built | `start/what-is-orama` | `README.md`, `docs/whitepaper/`, `docs/CLIENT_SURFACE.md` |
+| What Orama is, who it is for, what is and is not built | `start/what-is-orama` | `README.md`, `docs/whitepaper/`, `website/src/docs/developer/getting-started.mdx` |
 | The three journeys and where to start | `start/journeys` | this audit |
 | Glossary | `start/glossary` | all |
-| Architecture overview, planes, binaries, ports | `architecture/overview` | `docs/ARCHITECTURE.md`, `core/cmd/*` |
+| Architecture overview, planes, binaries, ports | `architecture/overview` | `website/src/docs/contributor/architecture-reference.mdx`, `core/cmd/*` |
 | Node process model and boot | `architecture/node-process-model` | `ARCHITECTURE.md` "Node process model" |
 | Request lifecycle and middleware stack | `architecture/request-lifecycle` | `ARCHITECTURE.md` "Data Flow", `core/pkg/gateway` |
 | Namespaces: what one is, its cluster, lifecycle | `developer/namespaces` | `DEPLOYMENT_GUIDE.md`, `core/pkg/namespace`, `orama namespace` |
-| Sign-in, wallets, lobby, sign-in policy, open sign-in | `developer/sign-in` | `docs/AUTH.md` |
+| Sign-in, wallets, lobby, sign-in policy, open sign-in | `developer/sign-in` | `docs/whitepaper/technical-reference/vol1/13-identity.md` |
 | Devices and device-bound sessions | `developer/devices` | `AUTH.md` "Devices", `sdk/src/auth/device.ts` |
 | Roles, members, grants, scoped API keys | `developer/access-control` | `AUTH.md` "Roles", "Keys", `orama members`, `orama namespace keys` |
 | Audit trail | in `access-control` | `orama audit`, `AUTH.md` "The record" |
-| Push notifications | `developer/push` | `docs/PUSH_NOTIFICATIONS.md` |
+| Push notifications | `developer/push` | `website/src/docs/developer/push-notifications.mdx` |
 | Relayed fetch | `privacy/relayed-fetch` and in `storage` | `SECURITY.md` "Relayed fetch", `sdk/src/storage/relay-*.ts`, `AUTH.md` "Fetch capabilities" |
 | Backups and restore of a namespace | `developer/backups` | `RUN_YOUR_OWN_CLUSTER.md` "A sealed backup" |
-| Go client SDK | `developer/go-sdk` | `docs/GO_CLIENT_SDK.md` |
-| Gateway HTTP API surface | `developer/api-surface` | `docs/API_SURFACE.md` |
-| Security model, threat model, what is not defended | `architecture/security-model` | `docs/SECURITY.md`, `docs/AUTH.md` |
+| Go client SDK | `developer/go-sdk` | `website/src/docs/developer/go-sdk.mdx` |
+| Gateway HTTP API surface | `developer/api-surface` | `docs/whitepaper/technical-reference/appendices/i-api-surface.md` |
+| Security model, threat model, what is not defended | `architecture/security-model` | `docs/whitepaper/technical-reference/vol1/05-privilege-and-filesystem-trust.md`, `docs/whitepaper/technical-reference/vol1/13-identity.md` |
 | Trust boundaries and secrets | `architecture/secrets-and-keys` | `SECURITY.md`, `AUTH.md` "Which key signed a token", "Between nodes" |
 | TLS and the shared certificate store | `operator/tls-certificates` | `DEVNET_INSTALL.md`, `ARCHITECTURE.md#tlshttps`, `core/pkg/tlsstore` |
 | Prerequisites, from-scratch install, verify, recover | `operator/install-from-scratch` | `RUN_YOUR_OWN_CLUSTER.md`, `DEVNET_INSTALL.md`, `NAMESERVER_SETUP.md`, `core/pkg/install` |
-| One-VPS eval | `operator/one-vps` | `docs/EVAL.md` |
+| One-VPS eval | `operator/one-vps` | `website/src/docs/operator/getting-started.mdx` |
 | Building and signed archives | `operator/build-and-sign` | `DEV_DEPLOY.md` |
 | Joining nodes, invites | `operator/joining-nodes` | `DEVNET_INSTALL.md` appendix, `core/pkg/invite` |
-| Node replacement | `operator/node-replacement` | `docs/NODE_REPLACEMENT.md` |
-| Wiping a node | `operator/clean-node` | `docs/CLEAN_NODE.md` |
+| Node replacement | `operator/node-replacement` | `website/src/docs/operator/node-replacement.mdx` |
+| Wiping a node | `operator/clean-node` | `website/src/docs/operator/clean-node.mdx` |
 | Cluster settings and operators | `operator/cluster-admin` | `orama cluster`, `orama operator` |
-| Inspector | `operator/inspector` | `docs/INSPECTOR.md` |
-| Global nodes | `operator/global-nodes` | `docs/RUN_A_GLOBAL_NODE.md` |
-| Sandbox clusters | `contributor/sandbox` | `docs/SANDBOX.md` |
-| Stealth TURN | `privacy/stealth-turn` | `docs/STEALTH_TURN.md` |
+| Inspector | `operator/inspector` | `website/src/docs/operator/inspector.mdx` |
+| Global nodes | `operator/global-nodes` | `website/src/docs/blockchain/run-a-global-node.mdx` |
+| Sandbox clusters | `contributor/sandbox` | `website/src/docs/contributor/sandbox.mdx` |
+| Stealth TURN | `privacy/stealth-turn` | `website/src/docs/operator/stealth-turn.mdx` |
 | Tor client and anonymity proxy | `privacy/tor` | `ARCHITECTURE.md` section 6, `core/pkg/anonproxy`, `core/pkg/tornet` |
 | VPN | `privacy/vpn` | `chain/x/vpnlaunch`; status stated plainly (see 5) |
-| Chain: modules, tokenomics, governance, storage deals, relay rewards, token factory, CNFT/market, shielded, contracts, explorer, running oramad | `blockchain/*` (14 pages) | `docs/CHAIN.md`, `chain/x/*` |
-| Vulnerability disclosure | `architecture/disclosure` | `docs/BOUNTY.md` |
+| Chain: modules, tokenomics, governance, storage deals, relay rewards, token factory, CNFT/market, shielded, contracts, explorer, running oramad | `blockchain/*` (14 pages) | `docs/whitepaper/technical-reference/vol2/39-chain-architecture.md`, `chain/x/*` |
+| Vulnerability disclosure | `architecture/disclosure` | `website/src/docs/blockchain/security-disclosure.mdx` |
 | RootWallet: what it is, install, wallets, vault, agent, sign-in with Orama, security, CLI, mobile vs desktop | `rootwallet/*` (9 pages) | `/Users/pen/dev/debros/rootwallet` (read only) |
-| Full CLI reference | `developer/cli/*` generated | `docs/CLI_REFERENCE.md` |
+| Full CLI reference | `developer/cli/*` generated | `docs/whitepaper/technical-reference/appendices/d-cli-reference.md` |
 
 ## 4. Proposed information architecture
 
@@ -196,9 +196,9 @@ search dialog labels, the search-index persona detection in `vite.config.ts`, an
 
 Confirmed against the tree on this branch:
 
-- A hosted dashboard and an Orama MCP do not exist (`docs/CLIENT_SURFACE.md`).
+- A hosted dashboard and an Orama MCP do not exist (`website/src/docs/developer/getting-started.mdx`).
 - The chain has no `x/gov` (changes go through `x/houses` or a hard fork), no IBC, no EVM.
-- OramaOS disk encryption for Ubuntu nodes is a design only (`docs/DISK_ENCRYPTION.md`).
+- OramaOS disk encryption for Ubuntu nodes is a design only (`website/src/docs/operator/security.mdx`).
 - Windows desktop RootWallet does not exist (README of the RootWallet repo).
 - Items under "Not built here" in `CHAIN.md` and "Not built yet" in `RUN_A_GLOBAL_NODE.md`.
 - The `plans/open-network/` tree on this branch holds only `decisions/C0-spikes.md`; the
@@ -209,16 +209,16 @@ Confirmed against the tree on this branch:
 
 - `orama env` help text says "Available default environments: production, devnet,
   testnet", but a fresh install has none (`noEnvironmentHelp` in
-  `core/cmd/orama/internal/environment.go`). `docs/CLI_REFERENCE.md` copies the stale
+  `core/cmd/orama/internal/environment.go`). `docs/whitepaper/technical-reference/appendices/d-cli-reference.md` copies the stale
   sentence because it is generated from the help text. The website pages say what the
   code does.
 
 ## 7. Method for Phase 2
 
 - The CLI reference is generated by `website/scripts/build-cli-docs.mjs` from
-  `docs/CLI_REFERENCE.md` into `website/src/docs/developer/cli/*.mdx`.
+  `docs/whitepaper/technical-reference/appendices/d-cli-reference.md` into `website/src/docs/developer/cli/*.mdx`.
 - Every prose page is written from the code and engineering doc named above. Commands
-  and flags are checked against `docs/CLI_REFERENCE.md`.
+  and flags are checked against `docs/whitepaper/technical-reference/appendices/d-cli-reference.md`.
 - Mermaid for flows and sequences (the renderer supports it); text blocks for layouts.
 - Hosts in examples use `example.com`, `203.0.113.x` (documentation range) and
   `<node-ip>` placeholders. No production IPs, secrets or credentials.

@@ -32,7 +32,7 @@ func bareHome(t testing.TB) *oramacli.Runner {
 }
 
 // TestConformance_sandboxAndBuildHelp runs the generic checks (help matches
-// docs/CLI_REFERENCE.md, --json accepted, unknown flags and subcommands are
+// docs/whitepaper/technical-reference/appendices/d-cli-reference.md, --json accepted, unknown flags and subcommands are
 // usage errors, `sandbox ssh` takes exactly one node number) on every
 // `orama maint sandbox` command and `orama maint build`. None of them runs.
 func TestConformance_sandboxAndBuildHelp(t *testing.T) {
@@ -43,7 +43,7 @@ func TestConformance_sandboxAndBuildHelp(t *testing.T) {
 
 // TestSandbox_unconfiguredMachineRefuses: with no sandbox configured, list
 // says there is none and status and ssh point at `orama maint sandbox setup`
-// instead of reaching for a cloud (docs/SANDBOX.md).
+// instead of reaching for a cloud (website/src/docs/contributor/sandbox.mdx).
 func TestSandbox_unconfiguredMachineRefuses(t *testing.T) {
 	t.Parallel()
 	cli := bareHome(t)

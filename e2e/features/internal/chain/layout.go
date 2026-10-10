@@ -19,7 +19,7 @@ const FleetHost = "127.0.0.1"
 // Host is the address, on the node itself, where the chain's node-local
 // ports answer. A fleet run's validator listens on loopback. Stagenet's chain
 // is co-located inside the orama-global netns and answers on
-// config.StagenetChainHost from the host's root namespace (docs/RUN_A_GLOBAL_NODE.md).
+// config.StagenetChainHost from the host's root namespace (website/src/docs/blockchain/run-a-global-node.mdx).
 // The chain's home, unit, service user and binary are the same on both
 // (Home, Unit, ServiceUser, Oramad).
 func (c *Chain) Host() string {

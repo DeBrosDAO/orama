@@ -9,7 +9,7 @@ import (
 // apiKeyQuerier is the minimal query capability API-key lookups need.
 //
 // API keys are authoritatively stored in the GLOBAL/CORE RQLite registry,
-// HMAC-hashed (docs/SECURITY.md:54-59). `orama namespace keys create` and
+// HMAC-hashed (docs/whitepaper/technical-reference/vol1/14-authorization.md:54-59). `orama namespace keys create` and
 // POST /v1/namespace/keys write there, and ONLY there. A namespace gateway's
 // own RQLite (g.sqlDB) may hold a stale, unrelated api_keys table -- it is
 // never authoritative and must never be queried for key validation. Every

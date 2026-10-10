@@ -42,7 +42,7 @@ func victimFor(t testing.TB, f *fleet.Fleet, r *monitor.Report, sc realistic.Ser
 // each service class, one class at a time on one node. The product itself
 // brings it back (a new start, before the harness would start it), the other
 // nodes keep serving meanwhile, and the whole cluster converges again before
-// the next class (docs/DEV_DEPLOY.md: services are supervised by
+// the next class (website/src/docs/contributor/testing.mdx: services are supervised by
 // orama-node and systemd).
 func TestChaos_killEachServiceClassRecoversByItself(t *testing.T) {
 	f := harness.Fleet(t)

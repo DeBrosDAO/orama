@@ -25,7 +25,7 @@ func skipIfUseOnly(fx *Fixture) string {
 }
 
 // Plan is every command of the guide, in order, and how to carry each out.
-// It has to match docs/RUN_YOUR_OWN_CLUSTER.md exactly (Runner.Verify): the
+// It has to match website/src/docs/operator/run-your-own-cluster.mdx exactly (Runner.Verify): the
 // Install section, "Use it" and "Check it".
 func Plan() []Step {
 	setup := func(name string, need, deny []string) Step {

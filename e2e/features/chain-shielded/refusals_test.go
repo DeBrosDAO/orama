@@ -26,7 +26,7 @@ var signedKinds = map[string]func(signer string, bundle []byte) chain.Msg{
 // TestShield_valueBalanceSignRefused: a shield (from the bank balance or from
 // earnings) needs a negative value balance and an unshield a positive one; a
 // zero or wrong-signed balance is refused before any proof is looked at
-// (docs/CHAIN.md "x/shielded": the value balance is the bundle's own).
+// (docs/whitepaper/technical-reference/appendices/e-chain-messages-and-queries.md "x/shielded": the value balance is the bundle's own).
 func TestShield_valueBalanceSignRefused(t *testing.T) {
 	t.Parallel()
 	c := chain.New(t)

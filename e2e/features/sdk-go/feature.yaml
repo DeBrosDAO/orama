@@ -1,5 +1,5 @@
 # The Go client SDK (core/pkg/client) against the fleet, as a program
-# outside the cluster uses it (docs/GO_CLIENT_SDK.md): storage upload, get,
+# outside the cluster uses it (website/src/docs/developer/go-sdk.mdx): storage upload, get,
 # pin, status and unpin as the namespace owner; empty and unicode files; a
 # forged JWT and the documented typed-error helpers; an app-runtime key alone,
 # another namespace's session and no credential refused; the database client
@@ -25,9 +25,9 @@ covers:
   units:
     - orama-namespace-tor@.service
   claims:
-    - "docs/GO_CLIENT_SDK.md#storage-client: upload, get, pin, status and unpin through the gateway"
-    - "docs/GO_CLIENT_SDK.md#error-handling: client methods return typed errors the errors helpers classify"
-    - "docs/GO_CLIENT_SDK.md#database-client: Query, Transaction, CreateTable, DropTable and GetSchema work with the Quick Start configuration"
-    - "docs/GO_CLIENT_SDK.md#cache-client: the SDK has no Cache accessor"
-    - "docs/GO_CLIENT_SDK.md#serverless-client: the SDK has no Serverless accessor"
-    - "docs/GO_CLIENT_SDK.md#anonymity-proxy: private destinations are refused; a runtime key alone is refused; requests leave through Tor"
+    - "website/src/docs/developer/go-sdk.mdx#storage-client: upload, get, pin, status and unpin through the gateway"
+    - "website/src/docs/developer/go-sdk.mdx#error-handling: client methods return typed errors the errors helpers classify"
+    - "website/src/docs/developer/go-sdk.mdx#database-client: Query, Transaction, CreateTable, DropTable and GetSchema work with the Quick Start configuration"
+    - "website/src/docs/developer/go-sdk.mdx#cache-client: the SDK has no Cache accessor"
+    - "website/src/docs/developer/go-sdk.mdx#serverless-client: the SDK has no Serverless accessor"
+    - "website/src/docs/developer/go-sdk.mdx#anonymity-proxy: private destinations are refused; a runtime key alone is refused; requests leave through Tor"

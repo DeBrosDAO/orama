@@ -1,6 +1,6 @@
 // Package tornet describes and configures the Orama Tor network: a separate
 // anonymity network built from unmodified upstream Tor code and run by Orama's
-// own directory authorities (docs/TOR_NETWORK.md).
+// own directory authorities (website/src/docs/operator/tor-network.mdx).
 //
 // It renders torrc files for the five roles (directory authority, relay, exit,
 // validator onion service, client), runs the offline authority key ceremony

@@ -21,6 +21,6 @@ covers:
     - orama-namespace-olric@.service
     - orama-namespace-gateway@.service
   claims:
-    - "docs/ARCHITECTURE.md#olric-is-supervised: after three failed probes the gateway drops its client, answers 503, and reconnects without a restart"
-    - "docs/ARCHITECTURE.md#the-tenant-plane-converges: the reconciler starts a stopped tenant service within a sweep"
-    - "docs/ARCHITECTURE.md: Olric v0.7.0 is in-memory only; a crash of every member loses every entry"
+    - "website/src/docs/contributor/architecture-reference.mdx#boot-components-not-a-sequence: after three failed probes the gateway drops its client, answers 503, and reconnects without a restart"
+    - "website/src/docs/contributor/architecture-reference.mdx#boot-components-not-a-sequence: the reconciler starts a stopped tenant service within a sweep"
+    - "website/src/docs/contributor/architecture-reference.mdx: Olric v0.7.0 is in-memory only; a crash of every member loses every entry"

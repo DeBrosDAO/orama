@@ -74,7 +74,7 @@ func requireRoles(t *testing.T) (*fleet.Fleet, roles) {
 		}
 	}
 	if !r.any() {
-		harness.SkipNotApplicable(t, "no node of this target runs a Tor role: install them with `orama global install --services dirauth|relay|onion` (docs/TOR_NETWORK.md, Rolling it out)")
+		harness.SkipNotApplicable(t, "no node of this target runs a Tor role: install them with `orama global install --services dirauth|relay|onion` (website/src/docs/operator/tor-network.mdx, Rolling it out)")
 	}
 	return f, r
 }

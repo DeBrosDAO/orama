@@ -12,7 +12,7 @@ import (
 // TestNetworkAdd_manifestURLsThatCannotBeTrustedAreRefused: a manifest names
 // the chain and the release root a node installs from, so only an https URL
 // that ends in /manifest.json is fetched, and nothing is stored when it is not
-// (docs/CLI_REFERENCE.md#orama-network-add).
+// (docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-network-add).
 func TestNetworkAdd_manifestURLsThatCannotBeTrustedAreRefused(t *testing.T) {
 	t.Parallel()
 	cli := isolated(t)
@@ -55,7 +55,7 @@ func TestNetworkAdd_gatewayOptionsNeedAGateway(t *testing.T) {
 // TestMaintNetworkPublish_writesANetworkAndKeepsAPublishedGenesis: publish
 // writes genesis.json, release-root.json and manifest.json, and a chain id
 // that is already published refuses another genesis with the conflict code
-// (docs/CLI_REFERENCE.md#orama-maint-network-publish).
+// (docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-maint-network-publish).
 func TestMaintNetworkPublish_writesANetworkAndKeepsAPublishedGenesis(t *testing.T) {
 	t.Parallel()
 	cli := isolated(t)
@@ -92,7 +92,7 @@ func TestMaintNetworkPublish_writesANetworkAndKeepsAPublishedGenesis(t *testing.
 // announce writes manifest.json and release-root.json with no genesis, can be
 // written again, refuses a production chain id with a faucet, and refuses a
 // network that is already published with its genesis
-// (docs/CLI_REFERENCE.md#orama-maint-network-announce).
+// (docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-maint-network-announce).
 func TestMaintNetworkAnnounce_writesAnAnnouncementAndRefusesACreatedNetwork(t *testing.T) {
 	t.Parallel()
 	cli := isolated(t)

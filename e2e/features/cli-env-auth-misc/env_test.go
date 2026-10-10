@@ -20,7 +20,7 @@ const concurrentAdds = 8
 // TestEnvAdd_customEnvironmentSignsInThroughIt: an environment added with the
 // run's CA and made active is what the next command talks to, end to end: a
 // real wallet login through it and whoami answered by its gateway
-// (docs/CLI_REFERENCE.md#orama-network-add, #orama-network-use).
+// (docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-network-add, #orama-network-use).
 func TestEnvAdd_customEnvironmentSignsInThroughIt(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -106,7 +106,7 @@ func TestEnvAdd_emptyNameOrUnusableURLRefused(t *testing.T) {
 }
 
 // TestEnvAdd_updatesInPlace: adding a name that exists updates its gateway
-// and description (docs/CLI_REFERENCE.md#orama-network-add "or update one already
+// and description (docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-network-add "or update one already
 // configured"); the CA stays for the same host and is dropped when the
 // environment is pointed at another host (environment.go AddEnvironment).
 func TestEnvAdd_updatesInPlace(t *testing.T) {
@@ -156,7 +156,7 @@ func TestEnvUse_unknownIsNotFound(t *testing.T) {
 
 // TestNetworkUse_hasNoAliases: `network use` answers to its own name only;
 // `switch` and `enable`, which `orama env use` had, are unknown subcommands
-// (docs/CLI_REFERENCE.md#orama-network-use).
+// (docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-network-use).
 func TestNetworkUse_hasNoAliases(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)

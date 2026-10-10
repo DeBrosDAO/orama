@@ -56,7 +56,7 @@ func bindArgs(keyFile, chainID string) []string {
 // TestGlobalBind_signatureVerifies: bind signs
 // "orama-global-bind-v1|chain-id|operator|service|hex(pubkey)" with the
 // service key, prints the public key and signature, keeps the private key in
-// its file, and submits nothing (docs/CLI_REFERENCE.md#orama-global).
+// its file, and submits nothing (docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-global).
 func TestGlobalBind_signatureVerifies(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -121,7 +121,7 @@ func TestGlobalBind_refusals(t *testing.T) {
 // TestGlobalRegister_bindingForThisChainOnly: register builds MsgRegisterNode
 // from bindings bind wrote and prints its sign document; a binding signed for
 // another chain id does not verify and is refused
-// (docs/CLI_REFERENCE.md#orama-global-register).
+// (docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-global-register).
 func TestGlobalRegister_bindingForThisChainOnly(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

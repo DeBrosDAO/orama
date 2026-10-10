@@ -16,7 +16,7 @@ const (
 	// rotationClusterName is the eval cluster the rotation test installs.
 	rotationClusterName = "rotate"
 	// openCreation lets any signed-in wallet create a namespace
-	// (docs/CLI_REFERENCE.md "orama maint cluster settings set").
+	// (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama maint cluster settings set").
 	openCreation = "open"
 )
 

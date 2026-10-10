@@ -204,7 +204,7 @@ Wasmd **v0.70.3** (read from GitHub, not vendored here):
 - `EncodeAnyMsg` unpacks any registered `sdk.Msg` whose signer is the contract.
 - Contract accounts are `BaseAccount`s plus wasm `ContractInfo` (`HasContractInfo`). They are not module accounts. A type switch on `ModuleAccountI` does not see them.
 
-`docs/CHAIN.md` is still right: this binary has no send restriction yet.
+`docs/whitepaper/technical-reference/vol2/39-chain-architecture.md` is still right: this binary has no send restriction yet.
 
 ### Decision
 

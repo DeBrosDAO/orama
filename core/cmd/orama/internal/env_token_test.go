@@ -53,7 +53,7 @@ func (g *tokenGateway) bearerOn(path string) string {
 }
 
 // envTokenHome is a HOME with no credential at all, pointed at gateway, with
-// ORAMA_TOKEN set: the CI shape docs/AUTH.md describes.
+// ORAMA_TOKEN set: the CI shape docs/whitepaper/technical-reference/vol1/12-gateway-architecture.md describes.
 func envTokenHome(t *testing.T, gateway string) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())

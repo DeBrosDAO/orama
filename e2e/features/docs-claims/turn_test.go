@@ -40,6 +40,9 @@ var (
 	shortTTL    = regexp.MustCompile(`(?i)10[- ]minute|\b600\s*s\b|\b600 seconds`)
 	sfuContext  = regexp.MustCompile(`(?i)sfu|signal`)
 	turnTLS443  = regexp.MustCompile(`(?i)turn.*(tls|turns).*443/udp`)
+	// fixedBug marks a line that tells the history of a fixed bug, which may
+	// name the old wrong value.
+	fixedBug = regexp.MustCompile(`(?i)bugboard #\d+`)
 )
 
 // TestTURNCredentialTTL_docsAgreeWithCode: REST and host-function TURN
@@ -58,7 +61,7 @@ func TestTURNCredentialTTL_docsAgreeWithCode(t *testing.T) {
 	}
 	for _, doc := range docs(t) {
 		for _, l := range grep(t, doc, turnTTLLine) {
-			if shortTTL.MatchString(l.Text) && !sfuContext.MatchString(l.Text) {
+			if shortTTL.MatchString(l.Text) && !sfuContext.MatchString(l.Text) && !fixedBug.MatchString(l.Text) {
 				t.Errorf("%s\n  gives TURN credentials a 10-minute TTL; REST/host-fn credentials last 24h, only SFU-signalled ones %ds", l, sfuTTLSeconds)
 			}
 		}
@@ -74,7 +77,7 @@ func TestTURNCredentialTTL_docsAgreeWithCode(t *testing.T) {
 // TestTURNTLSPort_docsAgreeWithCode: TURN over TLS is served on 5349/tcp and,
 // with stealth TURN, on 443/tcp through the SNI router
 // (core/pkg/gateway/handlers/webrtc/credentials.go: turns:<host>:5349 and
-// turns:<cdn>:443). No doc may say TURN TLS is 443/udp, and WEBRTC.md's
+// turns:<cdn>:443). No doc may say TURN TLS is 443/udp, and the WebRTC page's
 // firewall table must list 443 for stealth TURN (bugboard 2855).
 func TestTURNTLSPort_docsAgreeWithCode(t *testing.T) {
 	t.Parallel()
@@ -88,7 +91,7 @@ func TestTURNTLSPort_docsAgreeWithCode(t *testing.T) {
 	}
 	firewall := section(lines(t, webrtcDoc), "## Firewall")
 	if !regexp.MustCompile(`\|\s*443\s*\|`).MatchString(firewall) {
-		t.Errorf("%s \"## Firewall\" omits 443/tcp, which stealth TURN serves TURNS on (docs/STEALTH_TURN.md)", webrtcDoc)
+		t.Errorf("%s \"## Firewall\" omits 443/tcp, which stealth TURN serves TURNS on (website/src/docs/operator/stealth-turn.mdx)", webrtcDoc)
 	}
 }
 

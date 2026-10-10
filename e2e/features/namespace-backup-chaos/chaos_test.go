@@ -98,7 +98,7 @@ func TestBackupChaos_duringLeaderChange(t *testing.T) {
 // TestBackupChaos_restoreKeyFollowsRotation: rotating the cluster's encryption
 // root changes every namespace's restore key; a restore whose secrets were
 // sealed to the old key is refused with nothing written, and one sealed to
-// the new key succeeds (docs/CLI_REFERENCE.md "orama namespace restore-key",
+// the new key succeeds (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama namespace restore-key",
 // "orama maint operator rotate-secrets"). It runs on an eval cluster of its own:
 // the rotation cannot be undone.
 func TestBackupChaos_restoreKeyFollowsRotation(t *testing.T) {

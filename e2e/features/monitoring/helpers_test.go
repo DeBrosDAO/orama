@@ -20,7 +20,7 @@ const (
 	severityWarning  = "warning"
 	severityInfo     = "info"
 	nodeStatusOK     = "ok"
-	// verdictMarks start every table view's verdict line (docs/MONITORING.md
+	// verdictMarks start every table view's verdict line (website/src/docs/operator/monitoring.mdx
 	// "The verdict line").
 	verdictOK  = "✓"
 	verdictBad = "✗"
@@ -55,7 +55,7 @@ func startsWithVerdict(out string) bool {
 // (`orama maint operator add`, removed at t's cleanup), so the telemetry tests can
 // call the operator API over HTTP with a session of their own. The owner's
 // session carries the namespace's admin grant, the other half of the
-// requirement (docs/API_SURFACE.md "/v1/operator/telemetry"). Only
+// requirement (docs/whitepaper/technical-reference/appendices/i-api-surface.md "/v1/operator/telemetry"). Only
 // TestTelemetry_asOperator calls it, once, and shares the result with its
 // parallel subtests, so the package changes the operator list once.
 func operator(t *testing.T) *ns.Namespace {

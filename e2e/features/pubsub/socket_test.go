@@ -11,7 +11,7 @@ import (
 
 // The app pubsub API is a unix socket, 0600 in a 0700 runtime directory, and
 // the service admits a connection only when SO_PEERCRED says the peer runs as
-// its own user, the gateways' (docs/SECURITY.md; core/pkg/pubsub/socket.go).
+// its own user, the gateways' (docs/whitepaper/technical-reference/vol1/20-pubsub.md; core/pkg/pubsub/socket.go).
 const (
 	pubsubDir    = "/run/orama-pubsub"
 	pubsubSocket = pubsubDir + "/pubsub.sock"

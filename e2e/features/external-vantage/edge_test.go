@@ -23,7 +23,7 @@ const wsKey = "dGhlIHNhbXBsZSBub25jZQ=="
 
 // TestVantage_webSocketThroughCaddy: from outside, a pub/sub WebSocket to
 // the namespace host upgrades (101) through Caddy's HTTP/1.1 front — the
-// reason HTTP/2 is off (docs/ARCHITECTURE.md "HTTP/1.1 only", bug #249). The
+// reason HTTP/2 is off (website/src/docs/contributor/architecture-reference.mdx "HTTP/1.1 only", bug #249). The
 // bearer travels in a header file on the probe, never on its command line.
 func TestVantage_webSocketThroughCaddy(t *testing.T) {
 	t.Parallel()
@@ -47,13 +47,13 @@ func TestVantage_webSocketThroughCaddy(t *testing.T) {
 // internals that must never answer from the internet (Caddy admin 2019,
 // libp2p 4001, the gateway 10104, rqlite 10100/10101, Olric 10102/10103,
 // Kubo 10107, IPFS Cluster 10108/10110, Tor 9050, the chain P2P/RPC
-// 31000/31001, OramaOS 9998/9999; docs/SECURITY.md "Network Isolation").
+// 31000/31001, OramaOS 9998/9999; docs/whitepaper/technical-reference/vol1/06-the-wireguard-mesh.md "Network Isolation").
 var scanPorts = []int{22, 53, 80, 443, 2019, 4001, 5001, 8080, 9050, 9998, 9999,
 	10000, 10004, 10100, 10101, 10102, 10103, 10104, 10105, 10107, 10108, 10109, 10110, 31000, 31001}
 
 // TestVantage_onlyDocumentedPortsOpenFromOutside: from another location,
 // each node accepts TCP only on SSH, HTTP(S) and, on a nameserver, DNS
-// (docs/ARCHITECTURE.md "UFW Firewall"). The runner's own scan is
+// (website/src/docs/contributor/architecture-reference.mdx "UFW Firewall"). The runner's own scan is
 // wireguard-firewall's; this one comes from a different network.
 func TestVantage_onlyDocumentedPortsOpenFromOutside(t *testing.T) {
 	t.Parallel()
@@ -113,7 +113,7 @@ sys.exit(1)
 
 // TestVantage_turnAnswersSTUNFromOutside: with WebRTC on, each TURN relay
 // answers a STUN Binding on UDP 3478 from the internet with the probe's own
-// public address (docs/ARCHITECTURE.md "WebRTC"; the relay port is open while
+// public address (website/src/docs/contributor/architecture-reference.mdx "WebRTC"; the relay port is open while
 // the host relays).
 func TestVantage_turnAnswersSTUNFromOutside(t *testing.T) {
 	t.Parallel()

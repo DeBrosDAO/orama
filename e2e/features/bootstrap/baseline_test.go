@@ -13,7 +13,7 @@ import (
 
 // TestBootstrap_raftIdentitiesAreStable: a fresh install starts every index
 // rqlite under its libp2p peer id, not under its raft address, and records
-// the id beside raft.db (docs/CLI_REFERENCE.md "orama maint node migrate-raft-id":
+// the id beside raft.db (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama maint node migrate-raft-id":
 // identity must survive an address change; core/pkg/rqlite/identity.go).
 func TestBootstrap_raftIdentitiesAreStable(t *testing.T) {
 	t.Parallel()

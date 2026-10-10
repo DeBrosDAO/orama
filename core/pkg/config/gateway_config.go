@@ -47,7 +47,7 @@ type HTTPGatewayConfig struct {
 	// RelayAllowedSuffixes are the hosts the anonymous relay (/v1/proxy/relay)
 	// may reach: a host equal to or under one of them, port 443. Empty means
 	// this cluster's BaseDomain. Another cluster's base domain listed here makes
-	// this node a relay for that cluster's fetches (docs/SECURITY.md).
+	// this node a relay for that cluster's fetches (docs/whitepaper/technical-reference/vol1/12-gateway-architecture.md).
 	RelayAllowedSuffixes []string `yaml:"relay_allowed_suffixes"`
 
 	// WebRTC configuration (optional, enabled per-namespace)

@@ -15,8 +15,8 @@ and RootWallet.
 An application reaches the vault through the gateway instead. `POST
 /v1/vault/push` and `POST /v1/vault/pull` are served over HTTPS, do the Shamir
 split and combine server-side, and authenticate each request with a per-request
-Ed25519 ownership signature. That path is documented in
-[vault/docs](../vault/docs) and on the website under Vault.
+Ed25519 ownership signature. That path is documented on the
+website under Vault (`website/src/docs/developer/vault.mdx`).
 
 This package used to be a directory inside `@debros/orama`, where it added two
 cryptography dependencies and twenty top-level primitives to every application's
@@ -94,21 +94,25 @@ requires. The same two formulas are implemented in
 must agree exactly. A one-node eval cluster does not Shamir-split: the Orama
 gateway stores the envelope as a local key (`K=1`, `W=1`). Direct overlay
 clients that call `split(data, 1, 2)` still fail; eval apps use the HTTPS
-gateway. See `docs/EVAL.md`.
+gateway. See `website/src/docs/operator/getting-started.mdx`.
 
-## Authentication, and its current limit
+## Authentication
 
-The guardian issues a session token after a challenge exchange in which **no
-client secret takes part**: it returns a nonce and an HMAC tag computed with its
-own server secret, and then verifies that same tag when the client sends it
-back. Possession of an identity hash is therefore enough to obtain a session for
-that identity.
+Every call is checked twice by the guardian. The first check is a session token from a challenge
+exchange in which **no client secret takes part**: the guardian returns a nonce and an HMAC tag computed
+with its own server secret, then verifies that same tag when the client sends it back. The session
+therefore proves only that the caller completed a challenge on this guardian.
 
-The Ed25519 proof this needs is tracked as bug-51 and bug-52 and is the "Phase
-3" the guardian's own source refers to. Until it lands, a guardian's
-reachability on the WireGuard overlay is the real access boundary. This is why
-the configuration takes no HMAC key: the field existed, was required, and was
-never read by anything.
+The second check binds a request to an identity. Every secrets call carries `X-Vault-Pubkey` and an
+Ed25519 `X-Vault-Signature` over a message that names the operation, the secret and a version or
+timestamp (`vault-secret-put-v1:<identity>:<name>:<version>` and its get, delete and list siblings).
+The guardian requires the SHA-256 of that public key to equal the identity in the session token. The
+client signs with `privateKey`, the 32-byte Ed25519 seed in its configuration. Guardians still trust the
+WireGuard overlay for the rest (plain HTTP inside the tunnel, unauthenticated status and health
+endpoints); the known gaps are in `docs/whitepaper/technical-reference/vol1/28-vault.md`.
+
+A guardian restart invalidates cached session tokens. The next call fails with an `AUTH` error and is not
+retried; call `clearSessions()` and repeat.
 
 ## Development
 

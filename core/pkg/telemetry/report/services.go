@@ -99,7 +99,7 @@ const (
 // missing or whose config will not parse restarts forever in
 // `activating (auto-restart)`. It used to land in `failed` and raise a critical
 // alert; since the supervised units carry StartLimitIntervalSec=0 (see "Unit
-// restart policy" in docs/ARCHITECTURE.md) nothing parks them any more, so the
+// restart policy" in website/src/docs/contributor/architecture-reference.mdx) nothing parks them any more, so the
 // restart counter is the only signal left and this is where it has to be read.
 func restartLoopRisk(nRestarts int, activeSinceSec int64) bool {
 	if nRestarts <= restartLoopThreshold {

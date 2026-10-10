@@ -18,7 +18,7 @@ import (
 )
 
 // This file wires x/houses' enacted outcomes to the modules that act on them
-// (docs/CHAIN.md, "Governance enactment"):
+// (docs/whitepaper/technical-reference/vol2/44-governance-and-contracts.md, "Governance enactment"):
 //   - x/emission reads the emission split when it closes an epoch;
 //   - x/houses changes x/relay's reporter set through x/relay's own guarded message path;
 //   - x/houses schedules a passed software upgrade as an x/upgrade plan;

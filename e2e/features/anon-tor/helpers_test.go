@@ -18,7 +18,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/gw"
 )
 
-// Routes and limits (docs/API_SURFACE.md#network-and-proxy;
+// Routes and limits (docs/whitepaper/technical-reference/appendices/i-api-surface.md#network-and-proxy;
 // core/pkg/gateway/anon_proxy_handler.go, anon_tunnel_handler.go).
 const (
 	pathAnon       = "/v1/proxy/anon"

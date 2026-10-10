@@ -14,7 +14,7 @@ import (
 
 // routeCase is one representative route and the roles its policy admits,
 // read from the route policy table (core/pkg/gateway/route_policy.go) and
-// the role definitions (docs/AUTH.md#roles).
+// the role definitions (docs/whitepaper/technical-reference/vol1/14-authorization.md#roles-and-grants).
 type routeCase struct {
 	name   string
 	req    gw.Req
@@ -61,7 +61,7 @@ const (
 // no grant here, or not a cluster operator.
 var deniedCodes = map[string]bool{"INSUFFICIENT_SCOPE": true, "OWNERSHIP_REQUIRED": true, codeNotAnOperator: true}
 
-// TestRoles_matrix: each role reaches exactly what docs/AUTH.md#roles says —
+// TestRoles_matrix: each role reaches exactly what docs/whitepaper/technical-reference/vol1/14-authorization.md#roles-and-grants says —
 // owner and admin everything in the namespace, developer the data plane plus
 // db, deploy, secrets and fn:manage, runtime the data plane, reader nothing —
 // and a refusal says which permission was missing. Nobody's namespace role
@@ -137,7 +137,7 @@ func checkRefusalShape(t testing.TB, what string, resp *gw.Response) {
 }
 
 // TestOperatorRefusals_carryAHint: NOT_AN_OPERATOR, like every 401 and 403,
-// carries {error, code, hint} (docs/AUTH.md#when-a-request-is-refused). A
+// carries {error, code, hint} (docs/whitepaper/technical-reference/vol1/14-authorization.md#roles-and-grants). A
 // namespace owner holds the admin grant, so the operator list is what refuses
 // it. Expected red until the product adds the hint.
 func TestOperatorRefusals_carryAHint(t *testing.T) {
@@ -151,7 +151,7 @@ func TestOperatorRefusals_carryAHint(t *testing.T) {
 	}
 	if s, _ := body["hint"].(string); strings.TrimSpace(s) == "" {
 		t.Errorf("PRODUCT BUG: 403 %s carries no hint (core/pkg/gateway/handlers/operator/authorize.go requireOperator "+
-			"writes only error and code), although docs/AUTH.md#when-a-request-is-refused promises {error, code, hint}: %s",
+			"writes only error and code), although docs/whitepaper/technical-reference/vol1/14-authorization.md#refusals-and-the-error-code-table promises {error, code, hint}: %s",
 			codeNotAnOperator, resp.Body)
 	}
 }

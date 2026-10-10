@@ -22,7 +22,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/gw"
 )
 
-// Pub/sub routes (docs/API_SURFACE.md "Pub/sub"); shapes are
+// Pub/sub routes (docs/whitepaper/technical-reference/appendices/i-api-surface.md "Pub/sub"); shapes are
 // core/pkg/gateway/handlers/pubsub.
 const (
 	pathPublish  = "/v1/pubsub/publish"

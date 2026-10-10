@@ -58,13 +58,13 @@ covers:
     - orama-namespace-olric@.service
     - orama-namespace-rqlite@.service
   claims:
-    - "docs/API_SURFACE.md#namespace-management: creating a namespace writes the owner grant and starts provisioning (202 with a poll URL)"
-    - "docs/SECURITY.md: namespace names are validated as a DNS label, a unit instance and a directory; platform names are reserved"
-    - "docs/ARCHITECTURE.md: each namespace gets a five-port block in 10000-10099 on every member"
-    - "docs/SECURITY.md: tenant services listen on the WireGuard address, never on loopback or every interface"
-    - "docs/SECURITY.md#per-service-accounts: a tenant gateway writes only its own namespace directory; its YAML is 0600"
-    - "docs/CLI_REFERENCE.md#orama-namespace-keys-rotate: the original key keeps working for the overlap"
-    - "docs/CLI_REFERENCE.md#orama-namespace-repair: repair runs on a node and is refused elsewhere"
-    - "docs/CLI_REFERENCE.md#orama-members-transfer: only the owner transfers; the old owner keeps admin"
-    - "docs/API_SURFACE.md#namespace-management: deleting a namespace removes its units, data, DNS names, ports and keys"
-    - "docs/ARCHITECTURE.md: a namespace delete runs on a context of its own, so a client that disconnects mid-delete does not stop it, and a second delete while the first runs is refused 409 NAMESPACE_DELETE_IN_PROGRESS (retryable)"
+    - "docs/whitepaper/technical-reference/appendices/i-api-surface.md#namespace-management: creating a namespace writes the owner grant and starts provisioning (202 with a poll URL)"
+    - "docs/whitepaper/technical-reference/vol1/09-namespaces.md: namespace names are validated as a DNS label, a unit instance and a directory; platform names are reserved"
+    - "website/src/docs/contributor/architecture-reference.mdx: each namespace gets a five-port block in 10000-10099 on every member"
+    - "docs/whitepaper/technical-reference/vol1/20-pubsub.md: tenant services listen on the WireGuard address, never on loopback or every interface"
+    - "docs/whitepaper/technical-reference/vol1/05-privilege-and-filesystem-trust.md#per-service-accounts: a tenant gateway writes only its own namespace directory; its YAML is 0600"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-namespace-keys-rotate: the original key keeps working for the overlap"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-namespace-repair: repair runs on a node and is refused elsewhere"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-members-transfer: only the owner transfers; the old owner keeps admin"
+    - "docs/whitepaper/technical-reference/appendices/i-api-surface.md#namespace-management: deleting a namespace removes its units, data, DNS names, ports and keys"
+    - "website/src/docs/contributor/architecture-reference.mdx: a namespace delete runs on a context of its own, so a client that disconnects mid-delete does not stop it, and a second delete while the first runs is refused 409 NAMESPACE_DELETE_IN_PROGRESS (retryable)"

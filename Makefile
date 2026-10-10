@@ -24,7 +24,7 @@ core-clean:
 caddy-test:
 	cd caddy && go vet ./... && go test ./...
 
-# === Cluster guide e2e (executes docs/RUN_YOUR_OWN_CLUSTER.md on machines you provide) ===
+# === Cluster guide e2e (executes website/src/docs/operator/run-your-own-cluster.mdx on machines you provide) ===
 .PHONY: e2e-cluster
 e2e-cluster:
 	$(MAKE) -C core e2e-cluster

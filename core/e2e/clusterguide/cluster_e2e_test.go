@@ -41,7 +41,7 @@ const (
 func TestRunYourOwnClusterGuide_executedStepByStep(t *testing.T) {
 	domain := os.Getenv(envBaseDomain)
 	if domain == "" {
-		t.Skipf("%s is not set: no cluster fixture (see docs/DEV_DEPLOY.md, Cluster guide e2e)", envBaseDomain)
+		t.Skipf("%s is not set: no cluster fixture (see website/src/docs/contributor/testing.mdx, Cluster guide e2e)", envBaseDomain)
 	}
 	fx := fixtureFromEnv(t, domain)
 	if err := fx.Validate(); err != nil {

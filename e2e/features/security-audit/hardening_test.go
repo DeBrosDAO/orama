@@ -22,7 +22,7 @@ import (
 var exposure = regexp.MustCompile(`Overall exposure level for \S+: ([0-9.]+) (\S+)`)
 
 // maxExposure: systemd rates 9.0 and above UNSAFE. Every Orama daemon runs
-// under the hardening block (docs/SECURITY.md "systemd Hardening").
+// under the hardening block (docs/whitepaper/technical-reference/vol1/05-privilege-and-filesystem-trust.md "systemd Hardening").
 const maxExposure = 9.0
 
 // hardenedUnits are the long-running daemons of every core node.
@@ -61,8 +61,8 @@ func coreDNSIfNameserver(role string) []string {
 
 // TestHardening_socketBindEnforcementMatchesTheAlert: whether systemd can
 // enforce SocketBindAllow/Deny (+BPF_FRAMEWORK) is what the node report
-// says, and a node without it raises the security warning (docs/SECURITY.md
-// "Precondition"; docs/MONITORING.md "warning (security)").
+// says, and a node without it raises the security warning (docs/whitepaper/technical-reference/vol1/29-build-signing-and-release.md
+// "Precondition"; website/src/docs/operator/monitoring.mdx "warning (security)").
 func TestHardening_socketBindEnforcementMatchesTheAlert(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -83,7 +83,7 @@ func TestHardening_socketBindEnforcementMatchesTheAlert(t *testing.T) {
 }
 
 // TestSecrets_turnSecretSealedAtRest: a namespace's TURN shared secret is
-// stored as an enc: envelope, never plaintext (docs/SECURITY.md "Stored
+// stored as an enc: envelope, never plaintext (docs/whitepaper/technical-reference/vol1/11-app-deployments.md "Stored
 // secrets"). Only a count is read back from the registry, never the value.
 func TestSecrets_turnSecretSealedAtRest(t *testing.T) {
 	t.Parallel()

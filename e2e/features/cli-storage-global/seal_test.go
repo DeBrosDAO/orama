@@ -16,7 +16,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/oramacli"
 )
 
-// Sealing parameters (docs/CLI_REFERENCE.md#orama-storage-seal).
+// Sealing parameters (docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-storage-seal).
 const (
 	sealReplicas = 3
 	// sealPlainBytes spans several 1024-byte pieces and ends mid-piece.
@@ -79,7 +79,7 @@ func (k sealKit) seal(t testing.TB, cli *oramacli.Runner) []string {
 
 // TestStorageSeal_roundTripEverySlot: seal writes one different ciphertext
 // per slot and prints each piece root; open turns every slot back into the
-// exact plaintext (docs/CLI_REFERENCE.md#orama-storage-seal, #orama-storage-open).
+// exact plaintext (docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-storage-seal, #orama-storage-open).
 func TestStorageSeal_roundTripEverySlot(t *testing.T) {
 	t.Parallel()
 	cli := cliNoWallet(t)
@@ -104,7 +104,7 @@ func TestStorageSeal_roundTripEverySlot(t *testing.T) {
 }
 
 // TestStorageOpen_wrongKeyOrSlotWritesNothing: "A wrong seed, repair seed,
-// or slot fails and writes nothing" (docs/CLI_REFERENCE.md#orama-storage-open),
+// or slot fails and writes nothing" (docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-storage-open),
 // and so does a tampered slot file.
 func TestStorageOpen_wrongKeyOrSlotWritesNothing(t *testing.T) {
 	t.Parallel()
@@ -142,7 +142,7 @@ func TestStorageOpen_wrongKeyOrSlotWritesNothing(t *testing.T) {
 
 // TestStorageRewrap_rebuildsAnotherSlot: rewrap turns slot 0 into slot 2 with
 // the repair seed alone, byte for byte what seal wrote for slot 2
-// (docs/CLI_REFERENCE.md#orama-storage-rewrap).
+// (docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-storage-rewrap).
 func TestStorageRewrap_rebuildsAnotherSlot(t *testing.T) {
 	t.Parallel()
 	cli := cliNoWallet(t)

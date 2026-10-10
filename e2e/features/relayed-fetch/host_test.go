@@ -25,7 +25,7 @@ const (
 // TestStorageFetchCapMint_hostFunctionMintsForADeviceBoundCaller: a deployed
 // function mints capabilities with storage_fetch_cap_mint when its caller's
 // session is bound to a device, and they download the object; a caller with no
-// device gets nothing (docs/SERVERLESS.md#storage-fetch-capabilities).
+// device gets nothing (website/src/docs/developer/functions.mdx#storage-fetch-capabilities).
 func TestStorageFetchCapMint_hostFunctionMintsForADeviceBoundCaller(t *testing.T) {
 	t.Parallel()
 	if _, err := exec.LookPath("tinygo"); err != nil {

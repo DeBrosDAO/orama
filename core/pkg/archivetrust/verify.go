@@ -34,7 +34,7 @@ type Manifest struct {
 	// ReleaseRoot, when present, is a TUF release root, base64 of its
 	// root.json bytes. A node that verifies this manifest against its trust
 	// anchor adopts it as /etc/orama/release-root.json: the cluster then
-	// accepts releases signed under that root (docs/SECURITY.md).
+	// accepts releases signed under that root (docs/whitepaper/technical-reference/vol1/05-privilege-and-filesystem-trust.md).
 	ReleaseRoot string `json:"release_root,omitempty"`
 }
 

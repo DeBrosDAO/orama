@@ -1,7 +1,7 @@
 // Command orchard-smoke checks that the Orchard verifier linked into this binary accepts the two
 // committed Ironwood vectors and rejects a tampered copy of each. It exists to prove a static
 // build, the musl/zig one that cannot run on the machine that built it, on the machine that will
-// run the node. See docs/CHAIN.md, "Orchard smoke test".
+// run the node. See docs/whitepaper/technical-reference/vol2/39-chain-architecture.md, "Orchard smoke test".
 //
 // Exit status: 0 all checks passed, 1 a check failed, 2 the binary was built without the Rust
 // verifier.

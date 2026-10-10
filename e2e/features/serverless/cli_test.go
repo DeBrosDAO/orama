@@ -25,7 +25,7 @@ func runCLI(t *testing.T, fx *fixture, args ...string) oramacli.Result {
 }
 
 // TestFunctionCLI_groupListsSubcommands: `orama function` names every
-// subcommand (docs/CLI_REFERENCE.md#orama-function).
+// subcommand (docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-function).
 func TestFunctionCLI_groupListsSubcommands(t *testing.T) {
 	t.Parallel()
 	fx := setup(t)
@@ -38,7 +38,7 @@ func TestFunctionCLI_groupListsSubcommands(t *testing.T) {
 }
 
 // TestFunctionCLI_initBuildScaffold: the documented quick start — init, then
-// build — produces a WASM binary from the scaffold (docs/SERVERLESS.md#quick-start).
+// build — produces a WASM binary from the scaffold (website/src/docs/developer/functions.mdx#quick-start).
 func TestFunctionCLI_initBuildScaffold(t *testing.T) {
 	t.Parallel()
 	fx := setup(t)
@@ -119,7 +119,7 @@ func redeploy(t *testing.T, fx *fixture, dir, yamlTail string) {
 }
 
 // TestFunctionCLI_invalidConfigRefused: memory 1-256, timeout 1-300 and the
-// name rule are enforced before anything is uploaded (docs/SERVERLESS.md#functionyaml).
+// name rule are enforced before anything is uploaded (website/src/docs/developer/functions.mdx#functionyaml).
 func TestFunctionCLI_invalidConfigRefused(t *testing.T) {
 	t.Parallel()
 	fx := setup(t)
@@ -144,7 +144,7 @@ func TestFunctionCLI_invalidConfigRefused(t *testing.T) {
 }
 
 // TestFunctionCLI_secrets: set (inline and --from-file), list shows names
-// only, get_secret reads the value, delete removes it (docs/SERVERLESS.md#managing-secrets).
+// only, get_secret reads the value, delete removes it (website/src/docs/developer/functions.mdx#managing-secrets).
 func TestFunctionCLI_secrets(t *testing.T) {
 	t.Parallel()
 	fx := setup(t)

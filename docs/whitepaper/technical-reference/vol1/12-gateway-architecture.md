@@ -380,7 +380,7 @@ The auth codes are a contract the SDK switches on: `AUTH_MISSING`, `AUTH_INVALID
 
 ### Route documentation as a test
 
-`docs/API_SURFACE.md` assigns every route to a client (SDK, CLI, `direct` or `internal`). `TestEveryRegisteredRouteIsDocumented` (`core/pkg/gateway/api_surface_test.go`) parses `routes.go` and the serverless `routes.go` for literal `mux.Handle` and `mux.HandleFunc` patterns, adds the ORM gateway's list, and fails in both directions: a registered route missing from the document, or a documented route no longer registered. The table has 177 rows; its header prose still says 172.
+`docs/whitepaper/technical-reference/appendices/i-api-surface.md` assigns every route to a client (SDK, CLI, `direct` or `internal`). `TestEveryRegisteredRouteIsDocumented` (`core/pkg/gateway/api_surface_test.go`) parses `routes.go` and the serverless `routes.go` for literal `mux.Handle` and `mux.HandleFunc` patterns, adds the ORM gateway's list, and fails in both directions: a registered route missing from the document, or a documented route no longer registered. The table has 177 rows; its header prose still says 172.
 
 ## State it owns
 
@@ -517,7 +517,7 @@ At ten times the load the first bottleneck is the registry leader, not the gatew
 - **The ownership gate hides grant read failures and writes.** In `core/pkg/gateway/middleware.go:authorizationMiddleware`, the `grantFor` closure turns any error from `GrantIn` into "no grant", so a registry fault on an ownership-gated route answers 403 `OWNERSHIP_REQUIRED` instead of a retryable 503 (`lookupRequestGrant` does this correctly for other routes). A failed `INSERT OR IGNORE INTO namespaces`, run on every such request, answers 500 with the database error text.
 - **Deployment forwarding to another node is cut at 5 s and does not replay the body.** `core/pkg/gateway/middleware.go:proxyCrossNodeToIP` gives every replica row, the home node's included, a 5 s timeout, and each attempt passes the same inbound `r.Body`, which an earlier attempt may have consumed. The 120 s `GatewayProxyTimeout` applies only when no replica row exists.
 - **The gateway YAML is declared twice.** `core/pkg/gatewayspec/spec.go:GatewayYAMLConfig` and the function-local `yamlCfg` in `core/cmd/gateway/config.go` are kept in step by hand; no test decodes the whole spawned file with the real parser.
-- **Stale documents.** `docs/ARCHITECTURE.md` omits four gates from its Middleware Stack list and names `startOlricReconnectLoop` (now `startOlricSupervisor`); `docs/API_SURFACE.md` states 172 routes against 177 rows.
+- **Stale document.** `website/src/docs/contributor/architecture-reference.mdx` omits four gates from its Middleware Stack list and names `startOlricReconnectLoop` (now `startOlricSupervisor`).
 
 ## Verify it yourself
 

@@ -37,7 +37,7 @@ const (
 )
 
 // invariantModules are the modules whose Invariants query must hold on every node
-// (docs/SECURITY_PLAYBOOKS.md); the same list deploy.sh's `invariants` command runs.
+// (docs/whitepaper/technical-reference/vol2/39-chain-architecture.md); the same list deploy.sh's `invariants` command runs.
 var invariantModules = []string{"emission", "fees", "storage", "nodes", "relay", "houses", "token", "market", "power", "shielded"}
 
 // hasInclusionCommit reports whether a block's first transaction is the injected extended commit

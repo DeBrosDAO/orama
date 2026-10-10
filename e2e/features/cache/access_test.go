@@ -15,7 +15,7 @@ import (
 )
 
 // revocationBudget: a revocation reaches every gateway within the 10-second
-// reload (docs/AUTH.md#revoking), plus the round trip.
+// reload (docs/whitepaper/technical-reference/vol1/13-identity.md#revocation), plus the round trip.
 const revocationBudget = 20 * time.Second
 
 // cacheBodies is one valid body per cache route.
@@ -45,7 +45,7 @@ func TestCacheAuth_garbageCredentialRefused(t *testing.T) {
 }
 
 // TestCacheAuth_rolesDecide: the runtime role holds the data plane, the
-// reader role holds nothing (docs/CLI_REFERENCE.md "orama members").
+// reader role holds nothing (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama members").
 func TestCacheAuth_rolesDecide(t *testing.T) {
 	t.Parallel()
 	n := tenancy.Namespace(t, harness.Fleet(t), ns.Options{})
@@ -64,7 +64,7 @@ func TestCacheAuth_rolesDecide(t *testing.T) {
 }
 
 // TestCacheAuth_keyGrantDecides: a key holds exactly its grants
-// (docs/ARCHITECTURE.md "API Keys").
+// (website/src/docs/contributor/architecture-reference.mdx "API Keys").
 func TestCacheAuth_keyGrantDecides(t *testing.T) {
 	t.Parallel()
 	n := tenancy.Namespace(t, harness.Fleet(t), ns.Options{})
@@ -79,7 +79,7 @@ func TestCacheAuth_keyGrantDecides(t *testing.T) {
 }
 
 // TestCacheAuth_revokedSessionStops: a logged-out member's access token stops
-// working everywhere within the revocation reload (docs/AUTH.md#revoking).
+// working everywhere within the revocation reload (docs/whitepaper/technical-reference/vol1/13-identity.md#revocation).
 func TestCacheAuth_revokedSessionStops(t *testing.T) {
 	t.Parallel()
 	n := tenancy.Namespace(t, harness.Fleet(t), ns.Options{})
@@ -100,7 +100,7 @@ func TestCacheAuth_revokedSessionStops(t *testing.T) {
 }
 
 // TestCacheIsolation_otherNamespaceRefused: B's credentials never read A's
-// cache; B's key is refused by name (docs/SECURITY.md, NAMESPACE_MISMATCH).
+// cache; B's key is refused by name (docs/whitepaper/technical-reference/vol1/18-cache.md, NAMESPACE_MISMATCH).
 func TestCacheIsolation_otherNamespaceRefused(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)

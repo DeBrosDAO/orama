@@ -19,6 +19,6 @@ covers:
   units:
     - orama-namespace-wireguard@.service
   claims:
-    - "docs/SECURITY.md#network-isolation: Reconcile removes only tagged rules it no longer wants and exact legacy rules, never an operator's"
-    - "docs/SECURITY.md#network-isolation: orama-global rules are not the cluster reconcile's"
-    - "docs/ARCHITECTURE.md: the mesh comes up at boot on its own; orama node restart does not tear wg0 down"
+    - "docs/whitepaper/technical-reference/vol1/30-install-and-upgrade.md#the-firewall-swap-and-ram-hygiene-phase-6b: Reconcile removes only tagged rules it no longer wants and exact legacy rules, never an operator's"
+    - "docs/whitepaper/technical-reference/vol1/04-the-node-as-a-supervisor.md#the-unit-model: orama-global rules are not the cluster reconcile's"
+    - "website/src/docs/contributor/architecture-reference.mdx: the mesh comes up at boot on its own; orama node restart does not tear wg0 down"

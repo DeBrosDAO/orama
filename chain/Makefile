@@ -51,7 +51,7 @@ build-wasm:
 
 ## contracts-verify: rebuild the genesis standard contracts from their pinned upstream commits and fail
 ## if any sha256 differs from contracts/standard/manifest.json. Slow (it compiles five contracts) and
-## needs the Rust toolchain and wasm-opt named in the manifest; see docs/CHAIN.md, "x/wasm: contracts".
+## needs the Rust toolchain and wasm-opt named in the manifest; see docs/whitepaper/technical-reference/vol2/44-governance-and-contracts.md, "x/wasm: contracts".
 contracts-verify:
 	./contracts/standard/build.sh verify
 

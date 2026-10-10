@@ -16,7 +16,7 @@ requires:
   chain: true
 covers:
   claims:
-    - "docs/CHAIN.md#inclusion-lists-c13: vote extensions are on from the genesis height the deploy sets (0 = off on a run chain, 2 on stagenet) and nothing changes it"
-    - "docs/CHAIN.md#denom-and-accounts: a user cannot pay another user in the public denom; the private path is x/shielded (chain-shielded)"
-    - "docs/CHAIN.md#other-fail-closed-pieces: x/confidential accepts no attestation; nothing on chain reaches it"
-    - "docs/CHAIN.md#modules-wired: the node registers exactly the orama messages chain/proto declares"
+    - "docs/whitepaper/technical-reference/vol2/39-chain-architecture.md#local-and-stagenet-scripts: vote extensions are on from the genesis height the deploy sets (0 = off on a run chain, 2 on stagenet) and nothing changes it"
+    - "docs/whitepaper/technical-reference/vol2/40-economics.md#the-earnings-ledger: a user cannot pay another user in the public denom; the private path is x/shielded (chain-shielded)"
+    - "docs/whitepaper/technical-reference/vol2/39-chain-architecture.md#confidential-nodes: x/confidential accepts no attestation; nothing on chain reaches it"
+    - "docs/whitepaper/technical-reference/vol2/39-chain-architecture.md#chain-architecture: the node registers exactly the orama messages chain/proto declares"

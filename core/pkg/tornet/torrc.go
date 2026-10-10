@@ -74,7 +74,7 @@ func RelayTorrc(c RelayConfig) (string, error) {
 	}
 	var b torrc
 	b.comment("Managed by Orama Network: rewritten on every `orama global install`.")
-	b.comment("Relay of the Orama Tor network " + c.Network.Name + " (docs/TOR_NETWORK.md).")
+	b.comment("Relay of the Orama Tor network " + c.Network.Name + " (orama.network/docs/operator/tor-network).")
 	b.line("DataDirectory " + c.Home)
 	b.line("Log notice stdout")
 	b.line("SafeLogging 1")
@@ -226,7 +226,7 @@ func OnionTorrc(c OnionConfig) (string, error) {
 	}
 	var b torrc
 	b.comment("Managed by Orama Network: rewritten on every `orama global install`.")
-	b.comment("Validator onion service of the Orama Tor network " + c.Network.Name + " (docs/TOR_NETWORK.md).")
+	b.comment("Validator onion service of the Orama Tor network " + c.Network.Name + " (orama.network/docs/operator/tor-network).")
 	b.line("DataDirectory " + c.Home)
 	b.line("Log notice stdout")
 	b.line("SafeLogging 1")
@@ -274,7 +274,7 @@ func ClientTorrc(c ClientConfig) (string, error) {
 		return "", fmt.Errorf("SOCKS address: %w", err)
 	}
 	var b torrc
-	b.comment("Client of the Orama Tor network " + c.Network.Name + " (docs/TOR_NETWORK.md).")
+	b.comment("Client of the Orama Tor network " + c.Network.Name + " (orama.network/docs/operator/tor-network).")
 	b.line("DataDirectory " + c.Home)
 	b.line("Log notice stdout")
 	b.line("SafeLogging 1")

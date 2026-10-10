@@ -4,7 +4,7 @@
 // An archive is installable only when its manifest.sig is an EIP-191
 // personal_sign signature of SigningMessage(manifest.json) by one of them and
 // every file it carries matches that manifest. `orama maint build` signs exactly
-// that message, and a signed manifest may rotate the anchor (docs/SECURITY.md).
+// that message, and a signed manifest may rotate the anchor (docs/whitepaper/technical-reference/vol1/30-install-and-upgrade.md).
 //
 // It is a leaf package — rootfs and go-ethereum only — because the installer,
 // the build, push, setup and the gateway's join handler all need it.
@@ -145,7 +145,7 @@ func errMissingAnchor(path string) error {
 	return fmt.Errorf("%w: %s does not exist, so this node cannot verify any build archive. "+
 		"A genesis install creates it from --operator-wallet and a joining node from the cluster it "+
 		"joins; a node installed before archives were signed gets it once from "+
-		"`orama maint push --trust-signers <address>` (docs/SECURITY.md)", ErrNoAnchor, path)
+		"`orama maint push --trust-signers <address>` (docs/whitepaper/technical-reference/vol1/29-build-signing-and-release.md)", ErrNoAnchor, path)
 }
 
 // ReadAnchor reads the anchor at path. Its directory must be a real directory

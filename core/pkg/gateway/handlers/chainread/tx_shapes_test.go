@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// These tests pin the answers a wallet branches on, route by route, as docs/CHAIN.md states them.
+// These tests pin the answers a wallet branches on, route by route, as docs/whitepaper/technical-reference/vol2/39-chain-architecture.md states them.
 
 func keysOf(t *testing.T, body []byte) string {
 	t.Helper()

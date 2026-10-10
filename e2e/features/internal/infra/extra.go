@@ -19,7 +19,7 @@ import (
 const extraLocation = "hel1"
 
 // SetupArgs is `orama node setup` joining extra through the first core node,
-// the command provisioning runs for every joiner (docs/CLI_REFERENCE.md "orama
+// the command provisioning runs for every joiner (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama
 // node setup"): the run key opens the fresh server once, its host key is
 // pinned, and the invite is minted on the --join-via node over SSH.
 func SetupArgs(t testing.TB, extra harness.Extra, archive string) []string {

@@ -24,7 +24,7 @@ const (
 // DeviceProofVersion is the first line of every device proof statement.
 const DeviceProofVersion = "orama-device-proof-v1"
 
-// Device proof actions (docs/AUTH.md, "Proving the device on later requests").
+// Device proof actions (docs/whitepaper/technical-reference/vol1/13-identity.md, "Proving the device on later requests").
 const (
 	ProofRefresh    = "refresh"
 	ProofApprove    = "approve"
@@ -144,7 +144,7 @@ type Proof struct {
 	Signature string `json:"sig"`
 }
 
-// ProofMessage is the exact statement a device signs (docs/AUTH.md).
+// ProofMessage is the exact statement a device signs (docs/whitepaper/technical-reference/vol1/13-identity.md).
 func ProofMessage(action, namespace, binding string, issuedAt int64, id string) []byte {
 	return []byte(strings.Join([]string{
 		DeviceProofVersion, action, namespace, binding, strconv.FormatInt(issuedAt, 10), id,

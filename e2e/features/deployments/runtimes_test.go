@@ -17,7 +17,7 @@ import (
 
 // everyNodeServes asks each core node, by the app's own name, for path: DNS is
 // round-robin and a node without the app proxies to its home node
-// (docs/DEPLOYMENT_GUIDE.md "Cross-Node Routing").
+// (website/src/docs/developer/domains.mdx "Cross-Node Routing").
 func everyNodeServes(t testing.TB, tn *tenant, appURL, path, want string) {
 	t.Helper()
 	for _, nc := range tenancy.PerNode(t, tn.f, tn.app(appURL)) {
@@ -27,7 +27,7 @@ func everyNodeServes(t testing.TB, tn *tenant, appURL, path, want string) {
 
 // TestDeployStatic_servesSPAFromEveryNode: a static site is served with the
 // right content types and cache header, unknown routes fall back to
-// index.html (docs/DEPLOYMENT_GUIDE.md "Deploying Static Sites").
+// index.html (website/src/docs/developer/deployments.mdx "Deploying Static Sites").
 func TestDeployStatic_servesSPAFromEveryNode(t *testing.T) {
 	t.Parallel()
 	tn := newTenant(t)
@@ -54,7 +54,7 @@ func TestDeployStatic_servesSPAFromEveryNode(t *testing.T) {
 }
 
 // TestDeployNextStatic_exportServed: a Next.js static export deploys as a
-// static site (docs/DEPLOYMENT_GUIDE.md "Static Next.js Export").
+// static site (website/src/docs/developer/deployments.mdx "Static Next.js Export").
 func TestDeployNextStatic_exportServed(t *testing.T) {
 	t.Parallel()
 	tn := newTenant(t)
@@ -64,7 +64,7 @@ func TestDeployNextStatic_exportServed(t *testing.T) {
 }
 
 // TestDeployNextSSR_standaloneServerRuns: an SSR upload is a standalone
-// server.js the platform runs with node (docs/DEPLOYMENT_GUIDE.md "What Happens
+// server.js the platform runs with node (website/src/docs/developer/deployments.mdx "What Happens
 // Behind the Scenes"). The tarball is sent over the API: building one with
 // `orama deploy nextjs --ssr` needs npm and Next.js on the runner (the next
 // test does that when npm is present).
@@ -128,7 +128,7 @@ func TestDeployNode_cliDeployServes(t *testing.T) {
 }
 
 // TestDeployNode_startScriptRunsUnderNPM: a package.json with a start script
-// runs `npm start` under orama-deploy-npm@ (docs/DEPLOYMENT_GUIDE.md "Start
+// runs `npm start` under orama-deploy-npm@ (website/src/docs/developer/deployments.mdx "Start
 // Command Detection"); its install ran in orama-deploy-build@.
 func TestDeployNode_startScriptRunsUnderNPM(t *testing.T) {
 	t.Parallel()

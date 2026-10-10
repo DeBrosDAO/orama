@@ -33,7 +33,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/fleet"
 )
 
-// Layout of a co-hosted validator (e2e/scripts/chain-deploy.sh, docs/CHAIN.md
+// Layout of a co-hosted validator (e2e/scripts/chain-deploy.sh, docs/whitepaper/technical-reference/vol2/39-chain-architecture.md
 // "The stagenet deploy script").
 const (
 	Oramad      = "/usr/lib/orama-global/bin/oramad"
@@ -109,7 +109,7 @@ func (c *Chain) Node(t testing.TB, i int) fleet.Node {
 // orama-global netns, as the chain's own units do: the host ruleset lets only
 // root and the cluster's account reach the chain's host-only ports through the
 // veth, so the chain user cannot query its RPC from the root namespace
-// (docs/RUN_A_GLOBAL_NODE.md).
+// (website/src/docs/blockchain/run-a-global-node.mdx).
 func (c *Chain) OramadCmd(args ...string) string {
 	q := make([]string, 0, len(args)+10)
 	if c.F.State.IsStagenet() {

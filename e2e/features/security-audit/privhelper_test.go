@@ -41,7 +41,7 @@ type helperResponse struct {
 
 // refusedArgv is what the helper's server must refuse whoever asks, root
 // included: tools, units, ports, properties and env files outside its
-// allow-list (docs/SECURITY.md "Root actions from unprivileged services").
+// allow-list (docs/whitepaper/technical-reference/vol1/05-privilege-and-filesystem-trust.md "Root actions from unprivileged services").
 var refusedArgv = [][]string{
 	{}, {"bash", "-c", "id"}, {"systemctl"}, {"systemctl", "start", "ssh.service"},
 	{"systemctl", "restart", "orama-node.service"}, {"systemctl", "start", "orama-namespace-gateway@../../x.service"},
@@ -87,7 +87,7 @@ func TestPrivhelper_serverRefusesOutsideTheAllowList(t *testing.T) {
 // TestPrivhelper_socketAdmitsOnlyRootAndOrama: the socket is root:orama
 // 0660, so another account cannot even connect, and the orama account from
 // outside the two admitted units is refused by the unit check
-// (docs/SECURITY.md: "authorised by the systemd unit the caller runs in"): an
+// (docs/whitepaper/technical-reference/vol1/05-privilege-and-filesystem-trust.md: "authorised by the systemd unit the caller runs in"): an
 // SSH session runs in no system.slice service, so the helper cannot name a
 // unit for it at all (privhelper.UnitFromCgroup).
 func TestPrivhelper_socketAdmitsOnlyRootAndOrama(t *testing.T) {
@@ -127,7 +127,7 @@ func inUnitCgroup(t *testing.T, f *fleet.Fleet, n fleet.Node, unit, cmd string) 
 // TestPrivhelper_tenantGatewayRefusedIndexGatewayNarrowed: a process in a
 // tenant's gateway unit is refused everything, even a daemon-reload; the
 // cluster gateway may reload but may not rewrite the mesh (persist-peers is
-// orama-node's) (docs/SECURITY.md "And by which process asks").
+// orama-node's) (docs/whitepaper/technical-reference/vol1/29-build-signing-and-release.md "And by which process asks").
 func TestPrivhelper_tenantGatewayRefusedIndexGatewayNarrowed(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -148,7 +148,7 @@ func TestPrivhelper_tenantGatewayRefusedIndexGatewayNarrowed(t *testing.T) {
 }
 
 // TestPrivhelper_symlinkedDeployDirRefused: a deployment directory that is a
-// symlink is refused before systemd would bind it (docs/SECURITY.md "The bind
+// symlink is refused before systemd would bind it (docs/whitepaper/technical-reference/vol1/05-privilege-and-filesystem-trust.md "The bind
 // source is checked by root before the unit starts").
 func TestPrivhelper_symlinkedDeployDirRefused(t *testing.T) {
 	t.Parallel()

@@ -43,7 +43,7 @@ func target(r route, via string, to fleet.Node) string {
 // node's shell, over its own loopback and over the overlay to another node,
 // every node-to-node route refuses a caller that presents no MAC, stamp or
 // secret, and one that presents forged ones — being on the host or on the
-// mesh is not a credential (docs/SECURITY.md "Inter-gateway trust").
+// mesh is not a credential (docs/whitepaper/technical-reference/vol1/12-gateway-architecture.md "Inter-gateway trust").
 func TestInternalRoutes_refusedOnTheNodeWithoutNodeCredentials(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)

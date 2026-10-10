@@ -136,7 +136,7 @@ func deposit(t *testing.T, c *chain.Chain, id string) feeDeposit {
 }
 
 // TestNodesRegister_refusals: every documented refusal of MsgRegisterNode
-// (docs/CHAIN.md "x/nodes", x/nodes/types/validate.go, keeper/msg.go), one
+// (docs/whitepaper/technical-reference/vol2/39-chain-architecture.md "x/nodes", x/nodes/types/validate.go, keeper/msg.go), one
 // transaction each, and none of them leaves a node behind.
 func TestNodesRegister_refusals(t *testing.T) {
 	t.Parallel()
@@ -217,7 +217,7 @@ func TestNodesRegister_notAnOperatorRefused(t *testing.T) {
 // TestNodesRegister_duplicateAndReusedKeysRefused: a node id cannot be
 // registered twice; a service pubkey bound to a live node cannot be bound to
 // a second one; and after the first node retires, its pubkey stays revoked
-// forever (docs/CHAIN.md: "A service pubkey is unique on the network").
+// forever (docs/whitepaper/technical-reference/vol2/37-global-nodes.md: "A service pubkey is unique on the network").
 func TestNodesRegister_duplicateAndReusedKeysRefused(t *testing.T) {
 	t.Parallel()
 	c := chain.New(t)

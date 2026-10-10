@@ -58,7 +58,7 @@ the same role 'genesis collect-gentxs' plays for a gentx-based genesis.
 
 Must be run once per genesis validator, before the chain's first 'oramad start' and before
 'genesis collect-gentxs' (there are no gentxs in a bootstrap-committee genesis: committee members
-need no self-bond - see docs/CHAIN.md).`,
+need no self-bond - see docs/whitepaper/technical-reference/vol2/39-chain-architecture.md).`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			operatorAddr := args[0]

@@ -19,7 +19,7 @@ const scopeAdmin = "admin"
 // spoofed is everything a caller on the internet can claim about where it
 // is and who vouched for it: an overlay source in every forwarding header,
 // the internal-auth hop headers, the removed coordination constant, and
-// forged stamps of every kind (docs/SECURITY.md "Inter-gateway trust").
+// forged stamps of every kind (docs/whitepaper/technical-reference/vol1/13-identity.md "Inter-gateway trust").
 func spoofed(t testing.TB, namespace string) http.Header {
 	t.Helper()
 	h := forgedStamps(t)
@@ -111,7 +111,7 @@ func TestInternalRoutes_wrongMethodFromTheInternetNever2xxOr5xx(t *testing.T) {
 // TestNodeSelfRoutes_internetAnyMethodIs404: a node's own routes refuse
 // (404) any caller that is not a process on the host or a node on the
 // overlay — whatever the method — so the public cannot even learn they
-// exist (docs/SECURITY.md "A node recording itself").
+// exist (docs/whitepaper/technical-reference/vol1/04-the-node-as-a-supervisor.md "A node recording itself").
 func TestNodeSelfRoutes_internetAnyMethodIs404(t *testing.T) {
 	t.Parallel()
 	c := harness.GW(t)
@@ -128,7 +128,7 @@ func TestNodeSelfRoutes_internetAnyMethodIs404(t *testing.T) {
 			case http.StatusMethodNotAllowed:
 				t.Errorf("PRODUCT BUG: %s %s from the internet: HTTP 405, want 404 — the node API checks the method "+
 					"before the off-host 404 (core/pkg/gateway/handlers/nodeapi/handler.go authenticateAgainst), so the "+
-					"public learns the route exists, against docs/SECURITY.md \"A node recording itself\": %.200s", m, r.path, resp.Body)
+					"public learns the route exists, against docs/whitepaper/technical-reference/vol1/12-gateway-architecture.md \"A node recording itself\": %.200s", m, r.path, resp.Body)
 			default:
 				t.Errorf("%s %s from the internet: HTTP %d, want 404: %.200s", m, r.path, resp.Status, resp.Body)
 			}

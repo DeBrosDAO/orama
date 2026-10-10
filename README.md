@@ -33,20 +33,20 @@ make vault-build
 | Document | Description |
 |----------|-------------|
 | [Whitepaper](docs/whitepaper/WHITEPAPER.md) | What Orama is, how it works, what runs on it today |
-| [Architecture](docs/ARCHITECTURE.md) | System architecture and design patterns |
-| [Client surface](docs/CLIENT_SURFACE.md) | Humans use the CLI; programs use the SDK / HTTP. No dashboard, no Orama MCP |
-| [One-VPS eval](docs/EVAL.md) | Single machine: index + tenant, not HA |
-| [Deployment Guide](docs/DEPLOYMENT_GUIDE.md) | Deploy apps, databases, and domains |
-| [Dev & Deploy](docs/DEV_DEPLOY.md) | Building, deploying to VPS, rolling upgrades |
-| [Authentication](docs/AUTH.md) | Who someone is, what they may do, and how the gateway decides |
-| [Security](docs/SECURITY.md) | Security hardening and threat model |
-| [Monitoring](docs/MONITORING.md) | Cluster health monitoring |
-| [TypeScript SDK](docs/TS_SDK.md) | `@debros/orama` — the client applications use |
-| [Go Client SDK](docs/GO_CLIENT_SDK.md) | The Go client for the same gateway |
-| [Serverless](docs/SERVERLESS.md) | WASM serverless functions |
-| [API Surface](docs/API_SURFACE.md) | Every gateway route and which client owns it |
-| [CLI Reference](docs/CLI_REFERENCE.md) | Every command and flag, generated from the code |
-| [Common Problems](docs/COMMON_PROBLEMS.md) | Troubleshooting known issues |
+| [Architecture](website/src/docs/contributor/architecture-reference.mdx) | System architecture and design patterns |
+| [Client surface](website/src/docs/developer/getting-started.mdx) | Humans use the CLI; programs use the SDK / HTTP. No dashboard, no Orama MCP |
+| [One-VPS eval](website/src/docs/operator/getting-started.mdx) | Single machine: index + tenant, not HA |
+| [Deployment Guide](website/src/docs/developer/deployments.mdx) | Deploy apps, databases, and domains |
+| [Dev & Deploy](website/src/docs/contributor/deployment.mdx) | Building, deploying to VPS, rolling upgrades |
+| [Authentication](docs/whitepaper/technical-reference/vol1/13-identity.md) | Who someone is, what they may do, and how the gateway decides |
+| [Security](docs/whitepaper/technical-reference/vol1/05-privilege-and-filesystem-trust.md) | Security hardening and threat model |
+| [Monitoring](website/src/docs/operator/monitoring.mdx) | Cluster health monitoring |
+| [TypeScript SDK](website/src/docs/developer/sdk-reference.mdx) | `@debros/orama` — the client applications use |
+| [Go Client SDK](website/src/docs/developer/go-sdk.mdx) | The Go client for the same gateway |
+| [Serverless](website/src/docs/developer/functions.mdx) | WASM serverless functions |
+| [API Surface](docs/whitepaper/technical-reference/appendices/i-api-surface.md) | Every gateway route and which client owns it |
+| [CLI Reference](docs/whitepaper/technical-reference/appendices/d-cli-reference.md) | Every command and flag, generated from the code |
+| [Common Problems](website/src/docs/operator/troubleshooting.mdx) | Troubleshooting known issues |
 
 ## Contributing
 

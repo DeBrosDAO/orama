@@ -170,7 +170,7 @@ func TestRemoveDeadNodeFromRaft_refusesWhenQuorumIsLost(t *testing.T) {
 	survivors := []survivingNodePorts{{NodeID: "node2", InternalIP: "10.0.0.2", RQLiteHTTPPort: 1, RQLiteRaftPort: 2}}
 
 	err := r.cm.removeDeadNodeFromRaft(context.Background(), "10.0.0.1:2", survivors)
-	if err == nil || !strings.Contains(err.Error(), "lost quorum") || !strings.Contains(err.Error(), "NODE_REPLACEMENT.md") {
+	if err == nil || !strings.Contains(err.Error(), "lost quorum") || !strings.Contains(err.Error(), "operator/node-replacement") {
 		t.Fatalf("err = %v, want a quorum-loss refusal naming the recovery procedure", err)
 	}
 	if len(r.raftRemovals) != 0 {

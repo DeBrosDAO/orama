@@ -26,7 +26,7 @@ const (
 // that already owns a namespace cannot be handed a second one (a generic 403
 // TRANSFER_REFUSED that says nothing of the recipient); the owner keeps the
 // namespace and can hand it to a wallet that owns nothing
-// (docs/AUTH.md#roles: a transfer is held to the per-wallet cap).
+// (docs/whitepaper/technical-reference/vol1/14-authorization.md: a transfer is held to the per-wallet cap).
 func TestWalletCap_transferIsHeldToTheCap(t *testing.T) {
 	f := harness.Fleet(t)
 	ns.Hold(t, f, 2)

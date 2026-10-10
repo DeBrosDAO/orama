@@ -81,7 +81,7 @@ const (
 	// PrincipalToken: a logged-in user or a deployed app's own workload token,
 	// never a key or a key's exchange. This is what makes an extracted runtime
 	// key worthless on the data plane, while an app its owner granted the
-	// domain reaches it as itself (docs/AUTH.md "A workload's identity").
+	// domain reaches it as itself (docs/whitepaper/technical-reference/vol1/14-authorization.md "A workload's identity").
 	PrincipalToken
 )
 

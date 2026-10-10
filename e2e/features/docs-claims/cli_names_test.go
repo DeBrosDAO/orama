@@ -44,7 +44,7 @@ func resolve(ref *cliconf.Reference, words []string) (prefix, unknown string) {
 		if !commandWord.MatchString(w) {
 			break
 		}
-		path = append(path, w)
+		path = append(path, canonicalName(ref, strings.Join(path, " "), w))
 	}
 	k := len(path)
 	for k > 1 {
@@ -60,6 +60,21 @@ func resolve(ref *cliconf.Reference, words []string) (prefix, unknown string) {
 		return prefix, path[k]
 	}
 	return prefix, ""
+}
+
+// canonicalName is the name a documented child of parent goes by when word is
+// one of its aliases (`orama apps` is `orama app`); any other word is returned
+// as it is.
+func canonicalName(ref *cliconf.Reference, parent, word string) string {
+	for _, c := range ref.Commands {
+		if !strings.HasPrefix(c.Path, parent+" ") || strings.Contains(strings.TrimPrefix(c.Path, parent+" "), " ") {
+			continue
+		}
+		if slices.Contains(c.Aliases, word) {
+			return strings.TrimPrefix(c.Path, parent+" ")
+		}
+	}
+	return word
 }
 
 // unknownMentions lists the command names docs use that the reference does
@@ -150,11 +165,11 @@ func report(t *testing.T, ms []mention) {
 	t.Helper()
 	sort.Slice(ms, func(i, j int) bool { return ms[i].Where.String() < ms[j].Where.String() })
 	for _, m := range ms {
-		t.Errorf("%s\n  names `%s`, but `%s` is not a command the binary has (docs/CLI_REFERENCE.md)", m.Where, m.Text, m.Unknown)
+		t.Errorf("%s\n  names `%s`, but `%s` is not a command the binary has (whitepaper appendix D)", m.Where, m.Text, m.Unknown)
 	}
 }
 
-// TestAPISurface_cliCommandNamesExist: every CLI command API_SURFACE.md says
+// TestAPISurface_cliCommandNamesExist: every CLI command the API surface appendix says
 // calls a route is a real command (bugboard 2855: `orama app deploy` and
 // `orama namespace webrtc enable|disable|status` do not exist; the real ones
 // are `orama deploy`, `orama namespace enable webrtc` and `webrtc-status`).
@@ -164,7 +179,7 @@ func TestAPISurface_cliCommandNamesExist(t *testing.T) {
 }
 
 // TestDocs_cliCommandNamesExist: the same check over every document under
-// docs/, so a renamed or removed command cannot live on in prose.
+// docs page (whitepaper and website), so a renamed or removed command cannot live on in prose.
 func TestDocs_cliCommandNamesExist(t *testing.T) {
 	t.Parallel()
 	var files []string

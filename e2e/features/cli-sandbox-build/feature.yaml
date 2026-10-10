@@ -1,7 +1,7 @@
 # CLI conformance for the commands that must never run against real
 # infrastructure in a fleet run: every `orama maint sandbox` command and `orama
 # build` only through --help and usage errors (help matches
-# docs/CLI_REFERENCE.md, unknown flags and subcommands, `sandbox ssh` arity),
+# docs/whitepaper/technical-reference/appendices/d-cli-reference.md, unknown flags and subcommands, `sandbox ssh` arity),
 # the read-only sandbox commands on a machine with no sandbox configured, and
 # build refusing outside a checkout, refusing a bad architecture and warning
 # on the deprecated --sign. No Hetzner credential ever reaches the CLI.
@@ -28,4 +28,4 @@ covers:
     - orama maint sandbox ssh
     - orama maint sandbox status
   claims:
-    - "docs/SANDBOX.md: a machine with no sandbox configured is told to run orama maint sandbox setup"
+    - "website/src/docs/contributor/sandbox.mdx: a machine with no sandbox configured is told to run orama maint sandbox setup"

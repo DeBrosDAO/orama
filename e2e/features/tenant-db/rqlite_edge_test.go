@@ -126,7 +126,7 @@ func TestRQLiteInput_malformedAndOversized(t *testing.T) {
 }
 
 // TestRQLiteAuth_rolesDecide: the raw database is the admin grant's
-// (docs/CLI_REFERENCE.md "orama members": admin is the control plane,
+// (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama members": admin is the control plane,
 // including the raw database; runtime is the data plane).
 func TestRQLiteAuth_rolesDecide(t *testing.T) {
 	t.Parallel()
@@ -178,7 +178,7 @@ func TestRQLiteIsolation_clusterRegistryNeedsOperator(t *testing.T) {
 	// An operator reaches the registry with a credential of a namespace it
 	// administers: the lobby belongs to nobody and its sessions hold no
 	// permission, so a lobby sign-in is never served a db route
-	// (docs/AUTH.md "The lobby"), operator or not.
+	// (docs/whitepaper/technical-reference/vol1/12-gateway-architecture.md "The lobby"), operator or not.
 	op := tenancy.Member(t, tenancy.Namespace(t, f, ns.Options{}), tenancy.RoleAdmin)
 	tenancy.ExpectRefused(t, tenancy.Post(t, c, pathQuery, tenancy.Cred{Bearer: op.Token()}, body), http.StatusForbidden, tenancy.CodeNotOperator)
 	cli := harness.CLI(t)
@@ -204,10 +204,10 @@ func TestRQLiteIsolation_clusterRegistryNeedsOperator(t *testing.T) {
 }
 
 // TestRQLiteIsolation_platformTablesUnreachable: the namespace database also
-// holds the tables that authenticate it (docs/SECURITY.md "Function SQL":
+// holds the tables that authenticate it (docs/whitepaper/technical-reference/vol1/17-database.md "Function SQL":
 // api_keys, grants, refresh_tokens, ...). A member with the admin grant is not
 // the owner, and must not read credentials or rewrite grants with raw SQL:
-// ownership moves only by transfer (docs/CLI_REFERENCE.md "orama members
+// ownership moves only by transfer (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama members
 // transfer").
 func TestRQLiteIsolation_platformTablesUnreachable(t *testing.T) {
 	t.Parallel()
@@ -241,7 +241,7 @@ func TestRQLiteIsolation_platformTablesUnreachable(t *testing.T) {
 }
 
 // TestRQLiteIsolation_platformTablesRefusedToEveryRole: the raw-database routes
-// run the same SQL filter as a function (docs/SECURITY.md "Function SQL"). A
+// run the same SQL filter as a function (docs/whitepaper/technical-reference/vol1/17-database.md "Function SQL"). A
 // developer holds db:write and nothing that manages members, and must not mint
 // authority or claim another tenant's content by writing the platform tables
 // directly — through exec, inside a transaction, or through the builders. The
@@ -286,7 +286,7 @@ func TestRQLiteIsolation_platformTablesRefusedToEveryRole(t *testing.T) {
 }
 
 // TestRQLiteIsolation_triggerAndHistoryTablesRefusedToADeveloper: a cron or
-// pubsub firing skips the caller check (docs/SECURITY.md), so a db:write member
+// pubsub firing skips the caller check (docs/whitepaper/technical-reference/vol1/21-serverless.md), so a db:write member
 // who could insert a trigger row could run a private function, and a forged
 // deployment_history row picks the CID a rollback restores. The developer role
 // holds db:write and nothing else; both are refused through exec and inside a

@@ -13,8 +13,8 @@ import (
 )
 
 // unitAccounts is the account each always-running unit runs as
-// (docs/SECURITY.md "Dedicated User", "Per-service accounts";
-// docs/ARCHITECTURE.md "Process Isolation": Tor as debian-tor, WireGuard
+// (docs/whitepaper/technical-reference/vol1/05-privilege-and-filesystem-trust.md "Dedicated User", "Per-service accounts";
+// website/src/docs/contributor/architecture-reference.mdx "Process Isolation": Tor as debian-tor, WireGuard
 // root). The SFU (orama-sfu) runs only with WebRTC and is checked where
 // present.
 var unitAccounts = map[string]string{
@@ -85,7 +85,7 @@ func requireNamespaceTools(t *testing.T, f *fleet.Fleet, n fleet.Node) {
 
 // TestIsolation_environAcrossAccounts is a KNOWN GAP recorded as it stands:
 // every daemon that runs as orama can read every other orama daemon's
-// environment (docs/SECURITY.md "Per-service accounts": "a process that
+// environment (docs/whitepaper/technical-reference/vol1/05-privilege-and-filesystem-trust.md "Per-service accounts": "a process that
 // shares a uid with another passes the kernel's ptrace check ... Every
 // daemon that runs as orama can therefore read what every other orama daemon
 // holds"; "Not done yet: ... a runtime test ... that each unit cannot read
@@ -94,7 +94,7 @@ func requireNamespaceTools(t *testing.T, f *fleet.Fleet, n fleet.Node) {
 // kernel (a non-zero exit saying Permission denied, or No such file where the
 // unit hides other processes with ProtectProc=invisible, not any failure). When
 // the gap is closed this test fails on its first half; update it and
-// SECURITY.md together.
+// docs/whitepaper/technical-reference/vol1/05-privilege-and-filesystem-trust.md together.
 func TestIsolation_environAcrossAccounts(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -106,7 +106,7 @@ func TestIsolation_environAcrossAccounts(t *testing.T) {
 	_, err := fmt.Sscan(strings.TrimSpace(caddy.Stdout), &size)
 	if caddy.Exit != 0 || err != nil || size == 0 {
 		t.Errorf("KNOWN GAP changed: Caddy (orama) can no longer read the cluster gateway's environ (exit %d, %d bytes, %v: %s) — "+
-			"update docs/SECURITY.md \"Per-service accounts\" and this test", caddy.Exit, size, err, f.Redact(caddy.Stderr))
+			"update docs/whitepaper/technical-reference/vol1/29-build-signing-and-release.md \"Per-service accounts\" and this test", caddy.Exit, size, err, f.Redact(caddy.Stderr))
 	}
 	coredns := readEnviron(t, f, n, edge.CoreDNSUnit, "orama-coredns", gateway)
 	if coredns.Exit == 0 || !refusedByKernel(coredns.Stderr) {
@@ -117,7 +117,7 @@ func TestIsolation_environAcrossAccounts(t *testing.T) {
 
 // TestIsolation_noGlobalIPv6: IPv6 is off at runtime, so no interface has a
 // global IPv6 address a service bound to :: could be reached on around the
-// IPv4 firewall (docs/SECURITY.md "IPv6 Disabled"; the TCP scan of the
+// IPv4 firewall (docs/whitepaper/technical-reference/vol1/30-install-and-upgrade.md "IPv6 Disabled"; the TCP scan of the
 // public IPv4 addresses is wireguard-firewall's).
 func TestIsolation_noGlobalIPv6(t *testing.T) {
 	t.Parallel()
@@ -133,7 +133,7 @@ func TestIsolation_noGlobalIPv6(t *testing.T) {
 }
 
 // TestIsolation_kernelHardening: core dumps of setuid programs off and
-// ptrace restricted to descendants (docs/SECURITY.md "RAM-to-disk":
+// ptrace restricted to descendants (docs/whitepaper/technical-reference/vol1/05-privilege-and-filesystem-trust.md "RAM-to-disk":
 // fs.suid_dumpable=0 and kernel.yama.ptrace_scope=1, both written by the
 // installer's sysctl drop-in; the environ boundary above relies on the second).
 func TestIsolation_kernelHardening(t *testing.T) {

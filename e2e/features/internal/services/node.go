@@ -17,7 +17,7 @@ import (
 )
 
 // Loopback services of the index plane (core/pkg/constants/ports.go,
-// docs/SECURITY.md#network-isolation, docs/ARCHITECTURE.md#node-process-model).
+// docs/whitepaper/technical-reference/vol1/05-privilege-and-filesystem-trust.md#per-service-accounts, website/src/docs/contributor/architecture-reference.mdx#node-process-model).
 const (
 	KuboAPIPort        = 10107
 	ClusterRESTPort    = 10108
@@ -99,7 +99,7 @@ func ClusterREST(t testing.TB, f *fleet.Fleet, n fleet.Node, path string, auth b
 }
 
 // ClusterKuboProxyAs calls the serve-ipfs-cluster proxy as a local user:
-// it admits only sockets the orama user owns (docs/ARCHITECTURE.md).
+// it admits only sockets the orama user owns (website/src/docs/contributor/architecture-reference.mdx).
 func ClusterKuboProxyAs(t testing.TB, f *fleet.Fleet, n fleet.Node, user string) Probe {
 	t.Helper()
 	url := fmt.Sprintf("http://127.0.0.1:%d/api/v0/version", ClusterKuboProxy)

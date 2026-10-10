@@ -14,4 +14,4 @@ requires:
   chain: false
 covers:
   claims:
-    - "docs/AUTH.md#capability-websockets: capability upgrades are limited per client address (60 a minute, burst 20)"
+    - "docs/whitepaper/technical-reference/vol1/13-identity.md#open-websockets: capability upgrades are limited per client address (60 a minute, burst 20)"

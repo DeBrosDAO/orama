@@ -1,7 +1,7 @@
 // Package rollout turns a set of nodes into an ordered, printable upgrade plan.
 //
 // The rolling upgrade used to be a loop over the order nodes happened to appear
-// in nodes.conf, separated by a fixed sleep. docs/DEV_DEPLOY.md claimed
+// in nodes.conf, separated by a fixed sleep. website/src/docs/operator/node-management.mdx claimed
 // followers-first, leader-last; nothing in the code implemented it. Restarting
 // the leader first costs an election on every node after it, and restarting the
 // only two healthy nameservers back to back takes the zone offline.

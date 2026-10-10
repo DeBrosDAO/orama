@@ -29,7 +29,7 @@ const (
 // together so neither the clock nor the block count alone can force an epoch shut: at least
 // MinBlocksFloor blocks must still be produced even if BFT time alone would already satisfy
 // EpochDurationFloor, which is what makes the block count (not the timestamp a byzantine
-// supermajority could otherwise manipulate) the binding brake - see docs/CHAIN.md.
+// supermajority could otherwise manipulate) the binding brake - see docs/whitepaper/technical-reference/vol2/40-economics.md.
 const (
 	// EpochDurationFloor is the minimum epoch_duration_seconds once AllowBootstrapStake is false:
 	// 24 hours.
@@ -71,7 +71,7 @@ func NewParams(epochDuration time.Duration, minBlocksPerEpoch uint64, allowBoots
 // DefaultParams returns x/emission's genesis-default Params: a 24h epoch duration, a minimum of
 // 14,400 blocks per epoch, and AllowBootstrapStake=false (a production genesis). A devnet or
 // localnet genesis must explicitly opt into a shorter epoch by also setting AllowBootstrapStake
-// (see chain/scripts/localnet and docs/CHAIN.md); once genesis has run none of these three values
+// (see chain/scripts/localnet and docs/whitepaper/technical-reference/vol2/39-chain-architecture.md); once genesis has run none of these three values
 // can ever change again: no x/emission Msg writes them (plans/open-network.md D18).
 func DefaultParams() Params {
 	return NewParams(DefaultEpochDuration, DefaultMinBlocksPerEpoch, false)

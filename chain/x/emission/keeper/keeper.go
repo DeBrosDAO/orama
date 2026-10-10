@@ -104,7 +104,7 @@ func (k Keeper) Logger(ctx context.Context) log.Logger {
 // CurrentEpoch returns the epoch number currently in progress. It implements
 // power/types.EmissionKeeper, so x/power can measure its own time-based rules (the bootstrap
 // deadline, the cap hysteresis window, the new-validator ramp) in the same epoch units
-// x/emission's schedule uses (see docs/CHAIN.md).
+// x/emission's schedule uses (see docs/whitepaper/technical-reference/appendices/e-chain-messages-and-queries.md).
 func (k Keeper) CurrentEpoch(ctx context.Context) (uint64, error) {
 	state, err := k.EpochState.Get(ctx)
 	if err != nil {

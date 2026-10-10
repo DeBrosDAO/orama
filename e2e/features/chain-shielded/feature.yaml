@@ -1,4 +1,4 @@
-# Stage 8: x/shielded on the live run chain (docs/CHAIN.md "x/shielded: the
+# Stage 8: x/shielded on the live run chain (docs/whitepaper/technical-reference/vol2/43-the-shielded-pool.md "x/shielded: the
 # Ironwood shielded pool"). The run's oramad is built with CGO_ENABLED=0 and
 # no verifier binary (e2e/scripts/chain-deploy.sh), and the run chain holds no
 # bank balance, so no bundle can be accepted: the tests drive every message
@@ -43,13 +43,13 @@ covers:
     - orama.shielded.v1.NullifierSpent
     - orama.shielded.v1.Invariants
   claims:
-    - "docs/CHAIN.md#x-shielded: a bundle needs the right value-balance sign for its message, a canonical framing and at most max_actions_per_bundle actions"
-    - "docs/CHAIN.md#x-shielded: a shielded message is the only message in its tx; a signer-less transfer carries no signature, no fee and no memo and names the protocol signer"
-    - "docs/CHAIN.md#x-shielded: an unshield goes only to a target its signer owns; deposit and contract targets are not linked"
-    - "docs/CHAIN.md#x-shielded: a transfer's value balance is its fee and covers the base fee of its gas and the nullifier fee of every action"
-    - "docs/CHAIN.md#x-shielded: a bundle whose anchor is not one of the tree's is refused before any proof is checked, and a node that cannot hash the tree accepts none; the pool, the tree and the nullifier set stay untouched"
-    - "docs/SECURITY_PLAYBOOKS.md: the module account equals the pools plus the queue, no pool is negative, the nullifier database folds to the accumulator"
-    - "docs/CHAIN.md#x-shielded: REFUSAL PATHS ONLY: orama.shielded.v1.MsgShield; the success path needs a run chain built with the Orchard library and the pinned verifier binary (trigger: chain-deploy.sh builds and installs them)"
-    - "docs/CHAIN.md#x-shielded: REFUSAL PATHS ONLY: orama.shielded.v1.MsgShieldEarnings; the success path needs a run chain built with the Orchard library and the pinned verifier binary (trigger: chain-deploy.sh builds and installs them)"
-    - "docs/CHAIN.md#x-shielded: REFUSAL PATHS ONLY: orama.shielded.v1.MsgShieldedTransfer; the success path needs a run chain built with the Orchard library and the pinned verifier binary (trigger: chain-deploy.sh builds and installs them)"
-    - "docs/CHAIN.md#x-shielded: REFUSAL PATHS ONLY: orama.shielded.v1.MsgUnshield; the success path needs a run chain built with the Orchard library and the pinned verifier binary (trigger: chain-deploy.sh builds and installs them)"
+    - "docs/whitepaper/technical-reference/vol2/43-the-shielded-pool.md#admission: a bundle needs the right value-balance sign for its message, a canonical framing and at most max_actions_per_bundle actions"
+    - "docs/whitepaper/technical-reference/vol2/43-the-shielded-pool.md#admission: a shielded message is the only message in its tx; a signer-less transfer carries no signature, no fee and no memo and names the protocol signer"
+    - "docs/whitepaper/technical-reference/vol2/43-the-shielded-pool.md#admission: an unshield goes only to a target its signer owns; deposit and contract targets are not linked"
+    - "docs/whitepaper/technical-reference/vol2/43-the-shielded-pool.md#admission: a transfer's value balance is its fee and covers the base fee of its gas and the nullifier fee of every action"
+    - "docs/whitepaper/technical-reference/vol2/43-the-shielded-pool.md#execution: a bundle whose anchor is not one of the tree's is refused before any proof is checked, and a node that cannot hash the tree accepts none; the pool, the tree and the nullifier set stay untouched"
+    - "docs/whitepaper/technical-reference/vol2/39-chain-architecture.md: the module account equals the pools plus the queue, no pool is negative, the nullifier database folds to the accumulator"
+    - "docs/whitepaper/technical-reference/vol2/43-the-shielded-pool.md#the-two-verifiers: REFUSAL PATHS ONLY: orama.shielded.v1.MsgShield; the success path needs a run chain built with the Orchard library and the pinned verifier binary (trigger: chain-deploy.sh builds and installs them)"
+    - "docs/whitepaper/technical-reference/vol2/43-the-shielded-pool.md#the-two-verifiers: REFUSAL PATHS ONLY: orama.shielded.v1.MsgShieldEarnings; the success path needs a run chain built with the Orchard library and the pinned verifier binary (trigger: chain-deploy.sh builds and installs them)"
+    - "docs/whitepaper/technical-reference/vol2/43-the-shielded-pool.md#the-two-verifiers: REFUSAL PATHS ONLY: orama.shielded.v1.MsgShieldedTransfer; the success path needs a run chain built with the Orchard library and the pinned verifier binary (trigger: chain-deploy.sh builds and installs them)"
+    - "docs/whitepaper/technical-reference/vol2/43-the-shielded-pool.md#the-two-verifiers: REFUSAL PATHS ONLY: orama.shielded.v1.MsgUnshield; the success path needs a run chain built with the Orchard library and the pinned verifier binary (trigger: chain-deploy.sh builds and installs them)"

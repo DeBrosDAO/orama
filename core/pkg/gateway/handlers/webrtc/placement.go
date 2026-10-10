@@ -22,7 +22,7 @@ import (
 // is computed, not stored: rank the namespace's healthy SFU nodes by
 // rendezvous (highest-random-weight) hash of namespace|room|node, and prefer a
 // node that already hosts the room. No shared-state write happens on the join
-// path. See docs/WEBRTC.md#room-placement.
+// path. See website/src/docs/operator/webrtc-operations.mdx#room-placement.
 
 const (
 	// sfuProbeTimeout bounds one health probe. The probe runs over WireGuard to a

@@ -14,7 +14,7 @@ import (
 
 // TestNamespaceRepair_onANodeIsIdempotent: `orama namespace repair` runs on a
 // node and talks to that node's gateway over the WireGuard address
-// (docs/CLI_REFERENCE.md "orama namespace repair"). On a healthy namespace it
+// (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama namespace repair"). On a healthy namespace it
 // succeeds and changes nothing; run twice it succeeds twice; an unknown
 // namespace fails; run off a node it fails with a message saying so.
 func TestNamespaceRepair_onANodeIsIdempotent(t *testing.T) {
@@ -51,7 +51,7 @@ func TestNamespaceRepair_onANodeIsIdempotent(t *testing.T) {
 
 // TestNamespaceWebRTC_enableStatusDisable: `orama namespace enable webrtc`
 // provisions the feature, webrtc-status reports it, disable removes it, and
-// an unknown feature is refused (docs/CLI_REFERENCE.md "orama namespace
+// an unknown feature is refused (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama namespace
 // enable"). The WebRTC data path itself is the realtime features'.
 func TestNamespaceWebRTC_enableStatusDisable(t *testing.T) {
 	t.Parallel()

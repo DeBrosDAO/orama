@@ -40,7 +40,7 @@ var loginPrompt = regexp.MustCompile(`(?m)login:\s*$`)
 // its first boot: the code on the console, no SSH and no login prompt, the
 // code never served, a payload that does not decrypt refused, completion
 // accepted exactly once, and the enrollment port closed after it
-// (docs/ORAMAOS_DEPLOYMENT.md "Enrollment Flow"; docs/SECURITY.md).
+// (website/src/docs/operator/orama-os.mdx "Enrollment Flow"; docs/whitepaper/technical-reference/vol1/16-secrets-and-keys.md).
 func TestOramaOS_firstBootEnrollmentContract(t *testing.T) {
 	t.Parallel()
 	v := bootVM(t)
@@ -88,7 +88,7 @@ func TestOramaOS_firstBootEnrollmentContract(t *testing.T) {
 // its headers and half its body and stalls, so it is in flight on the guest;
 // a second, whole request is then accepted with a response sealed under the
 // code carrying the node's own agent token; when the first finishes its
-// body, it decrypts too and is refused 409 (docs/SECURITY.md "A second POST
+// body, it decrypts too and is refused 409 (website/src/docs/operator/orama-os.mdx "A second POST
 // to /complete is 409").
 func completeOnce(t *testing.T, v *vm, code string) {
 	t.Helper()

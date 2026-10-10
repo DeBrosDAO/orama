@@ -13,7 +13,7 @@ import (
 )
 
 // publicHealthKeys are the only members an anonymous /health may carry
-// (docs/API_SURFACE.md): the detail is /v1/operator/health's.
+// (docs/whitepaper/technical-reference/appendices/i-api-surface.md): the detail is /v1/operator/health's.
 var publicHealthKeys = []string{"checks", "server", "status"}
 
 func TestHealth_publicShapeOnly(t *testing.T) {

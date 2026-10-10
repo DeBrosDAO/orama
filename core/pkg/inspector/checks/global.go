@@ -48,7 +48,7 @@ func CheckGlobal(data *inspector.ClusterData) []inspector.CheckResult {
 
 // sectionResults turns one section ("chain" or "global") of a node into
 // checks. The section names the check ids; every check belongs to the
-// "global" subsystem, the only one --subsystem and docs/INSPECTOR.md know.
+// "global" subsystem, the only one --subsystem and website/src/docs/operator/inspector.mdx know.
 func sectionResults(host, subsystem string, present bool, issues []globalhealth.Issue) []inspector.CheckResult {
 	if !present {
 		return nil

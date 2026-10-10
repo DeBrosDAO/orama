@@ -128,6 +128,102 @@ export ORAMA_TOKEN="$CI_ORAMA_KEY"      # from the CI secret store
 orama deploy static ./dist --name www --update
 ```
 
+## Sessions, API keys, members and audit
+
+The CLI signs in with your wallet and stores a session, not a key: an access token that lasts 15 minutes and renews itself from a 30-day refresh token. `orama auth login` asks which namespace to sign in to; blank signs in without one. With no terminal to ask (a script, a pipe, CI) it does not prompt and signs in without one; pass `--namespace <name>` to choose.
+
+### Which machines are signed in
+
+```bash
+orama auth sessions                  # every live session for this wallet
+orama auth sessions revoke <id>      # end one
+orama auth sessions revoke --all     # end all of them
+```
+
+Ending a session stops it minting new access tokens, and refuses the access
+tokens it already minted — and closes the sockets they hold open — within ten
+seconds. A session issued before sessions carried an id cannot be named that
+way: its access tokens work until they expire, at most 15 minutes, and the
+command says so.
+
+### Namespaces and environments
+
+Creating a namespace is its own step, and the wallet that makes it owns it:
+
+```bash
+orama namespace create myapp
+orama auth login --namespace myapp
+```
+
+Signing in to a namespace that does not exist used to create it, so a typo made
+a namespace and one belonged to whoever happened to sign in first. It answers
+404 now, naming the command above.
+
+One machine can hold credentials for several environments. `orama auth list`
+shows them, `orama auth switch` changes the active one, and `orama auth logout`
+clears it. Which gateway a command talks to is decided by the active
+environment — see `orama network` — not by a flag on each command.
+
+Every command and flag is in the [CLI reference](/docs/developer/cli-overview), which is
+generated from the command tree rather than written by hand.
+
+### API keys for your application
+
+Deploying uses your own credentials. An application that talks to the gateway at
+runtime needs a key of its own, and which one depends on where the code runs:
+
+```bash
+# Safe in a browser bundle: data-plane grants only
+orama namespace keys create --scope app-runtime --label web
+
+# Server-side only: the whole control plane
+orama namespace keys create --scope admin --label ci
+
+orama namespace keys list
+orama namespace keys revoke --id <id>
+```
+
+A key carries a set of grants and the gateway refuses an operation whose grant
+the key does not hold, naming the one it needed. `--scope` takes a profile
+(`invoke-only`, `app-runtime`, `admin`) or an explicit grant list. See
+[Where a key belongs](/docs/developer/sdk-reference#where-a-key-belongs).
+
+Every key expires — 90 days by default, a year at most — and `orama namespace
+keys rotate --id <id>` mints a successor with the same grants while leaving the
+original alive for a week, so there is a window in which to deploy the new one.
+
+### Working with other people
+
+A namespace has one owner and any number of members, and a member holds a role:
+
+```bash
+orama members list
+orama members add 0xabc… --role admin     # the control plane
+orama members add 0xdef… --role runtime   # the data plane
+orama members remove 0xabc…
+orama members transfer 0xabc…             # hand the namespace over
+```
+
+`admin` is everything except ownership; `runtime` is invoke, storage, push,
+webrtc, proxy, pubsub and cache; `reader` is a member with no grant at all.
+Ownership is transferred rather than granted, and it is one step rather than a
+removal and a grant, so there is no moment where the namespace has no owner. You
+keep an admin grant, so handing a project over does not lock you out of it.
+
+### What happened, and who did it
+
+```bash
+orama audit                 # oldest first
+orama audit --follow        # and keep printing
+```
+
+Sign-ins, keys minted and revoked, grants given and taken away, deployments,
+functions, secrets and namespace changes, each with who did it and from where.
+Events are kept 90 days.
+
+The whole model — identities, roles, grants, tokens, and what each refusal
+means — is in the technical reference's authorization chapter (`docs/whitepaper/technical-reference/vol1/14-authorization.md`).
+
 ## Where next
 
 | You want to | Read |
@@ -137,3 +233,4 @@ orama deploy static ./dist --name www --update
 | Invite teammates, scope a key | [Access control and keys](/docs/developer/access-control) |
 | Build | [Deployments](/docs/developer/deployments), [Databases](/docs/developer/databases), [Functions](/docs/developer/functions), [Storage](/docs/developer/storage), [Pub/sub](/docs/developer/pubsub), [WebRTC](/docs/developer/webrtc), [Push](/docs/developer/push) |
 | Look up a command | [CLI overview](/docs/developer/cli-overview) |
+| See what Orama is and is not | [How you talk to the network](/docs/developer/client-surface) |

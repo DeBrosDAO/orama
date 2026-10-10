@@ -62,7 +62,7 @@ func expectNodeFailure(t testing.TB, f *fleet.Fleet, out fleet.Output, anyOf ...
 // TestChainTx_accountWithoutHistoryStopsBeforeSigning: with --node, the
 // command reads the signer's account from the chain first; an account the
 // chain has never seen stops there, before the agent is asked to sign and
-// before anything is broadcast (docs/CLI_REFERENCE.md#orama-cluster-register-onchain).
+// before anything is broadcast (docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-cluster-register-onchain).
 func TestChainTx_accountWithoutHistoryStopsBeforeSigning(t *testing.T) {
 	t.Parallel()
 	harness.RequireChain(t)
@@ -90,7 +90,7 @@ func nodeSeeds(t testing.TB, f *fleet.Fleet, n fleet.Node) (seed, repair string)
 
 // TestStorageGet_absentDealWritesNothing: get looks the deal up on chain and
 // fetches only a slot whose root matches it; a deal that does not exist
-// writes no output (docs/CLI_REFERENCE.md#orama-storage-get).
+// writes no output (docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-storage-get).
 func TestStorageGet_absentDealWritesNothing(t *testing.T) {
 	t.Parallel()
 	harness.RequireChain(t)
@@ -111,7 +111,7 @@ func TestStorageGet_absentDealWritesNothing(t *testing.T) {
 
 // TestStoragePut_absentDealUploadsNothing: every file's root is checked
 // against its slot on chain before any byte is sent, so a deal that does not
-// exist uploads nothing (docs/CLI_REFERENCE.md#orama-storage-put).
+// exist uploads nothing (docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-storage-put).
 func TestStoragePut_absentDealUploadsNothing(t *testing.T) {
 	t.Parallel()
 	harness.RequireChain(t)
@@ -134,7 +134,7 @@ func TestStoragePut_absentDealUploadsNothing(t *testing.T) {
 // TestStorageRepair_absentDealRestoresNothing: repair reads the deal on chain
 // before it fetches or uploads anything, so a deal that does not exist fails
 // as a runtime error naming the deal query and restores no slot
-// (docs/CLI_REFERENCE.md#orama-storage-repair).
+// (docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-storage-repair).
 func TestStorageRepair_absentDealRestoresNothing(t *testing.T) {
 	t.Parallel()
 	harness.RequireChain(t)
@@ -152,7 +152,7 @@ func TestStorageRepair_absentDealRestoresNothing(t *testing.T) {
 // TestGlobalStageOramad_unverifiedBinaryRefused: stage-oramad places a binary
 // only after it verifies against the adopted release root through TUF
 // metadata; a binary with no metadata is refused and nothing is linked into
-// the cosmovisor layout (docs/CLI_REFERENCE.md#orama-global-stage-oramad).
+// the cosmovisor layout (docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-global-stage-oramad).
 // It stages into a root-owned scratch home, never the chain's own.
 func TestGlobalStageOramad_unverifiedBinaryRefused(t *testing.T) {
 	t.Parallel()

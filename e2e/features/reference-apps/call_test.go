@@ -20,7 +20,7 @@ const (
 	callPeers      = 3
 	callPublishers = 2
 	// placeBudget bounds the SFU starting on every node after enable
-	// (docs/WEBRTC.md "Architecture").
+	// (website/src/docs/developer/webrtc.mdx "Architecture").
 	placeBudget = 5 * time.Minute
 	mediaBudget = 2 * time.Minute
 	webrtcOff   = 5 * time.Minute
@@ -30,7 +30,7 @@ const (
 // served by name and three users in one room, each signalling through a
 // different node's gateway, talk relay-only through the namespace's TURN and
 // SFU: both publishers are heard by the listener and by each other
-// (docs/WEBRTC.md; the headless peer speaks the page's protocol).
+// (website/src/docs/developer/webrtc.mdx; the headless peer speaks the page's protocol).
 func TestReferenceCall_groupCallThroughEveryNode(t *testing.T) {
 	t.Parallel()
 	tn := realistic.NewTenant(t)

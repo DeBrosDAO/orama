@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// docs/AUTH.md: a reader holds nothing beyond the routes that ask for no
+// docs/whitepaper/technical-reference/vol1/14-authorization.md: a reader holds nothing beyond the routes that ask for no
 // permission. On a route that does not require ownership no grant was resolved
 // for a wallet unless it was narrowed, so any wallet session was handed the
 // data plane, and a reader put and read the cache (stagenet e2e, 2026-09-30).

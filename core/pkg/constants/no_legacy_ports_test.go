@@ -42,7 +42,7 @@ var portLiteral = regexp.MustCompile(`(^|[^0-9])(5001|7001|6001|3320|4501)([^0-9
 //
 // Comments are checked too. A stale comment naming a dead port is how an
 // operator ends up curling the wrong endpoint during an incident, which is
-// exactly what docs/DEV_DEPLOY.md did until this sweep.
+// exactly what website/src/docs/contributor/testing.mdx did until this sweep.
 func TestNoLegacyPortLiterals(t *testing.T) {
 	root := repoGoRoot(t)
 

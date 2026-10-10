@@ -28,7 +28,7 @@ covers:
     - orama-namespace-gateway@.service
     - orama-namespace-coredns@.service
   claims:
-    - "docs/ARCHITECTURE.md: every overlay unit starts after the WireGuard unit; the gateway after rqlite"
-    - "docs/ARCHITECTURE.md: with the index rqlite down, CoreDNS keeps answering for the zone"
-    - "docs/ARCHITECTURE.md#boot-components-not-a-sequence: a dead voter is evicted automatically and forgotten by raft and every WireGuard peer set"
-    - "docs/DEV_DEPLOY.md: after all nodes restart, gateways and nameservers serve and the cluster reconverges"
+    - "website/src/docs/contributor/architecture-reference.mdx: every overlay unit starts after the WireGuard unit; the gateway after rqlite"
+    - "website/src/docs/contributor/architecture-reference.mdx: with the index rqlite down, CoreDNS keeps answering for the zone"
+    - "website/src/docs/contributor/architecture-reference.mdx#boot-components-not-a-sequence: a dead voter is evicted automatically and forgotten by raft and every WireGuard peer set"
+    - "website/src/docs/operator/upgrade-notes.mdx: after all nodes restart, gateways and nameservers serve and the cluster reconverges"

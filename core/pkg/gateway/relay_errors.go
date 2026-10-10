@@ -9,7 +9,7 @@ import (
 
 // The typed refusals of the anonymous relay (bugboard #266). The relay takes no
 // credential, so these are not credential refusals and are not AuthCode values;
-// they carry {error, code, hint} like those do (docs/AUTH.md "Error codes").
+// they carry {error, code, hint} like those do (docs/whitepaper/technical-reference/vol1/14-authorization.md "Error codes").
 const (
 	// CodeRelayDestinationNotAllowed — the relay reaches only hosts under its
 	// allowed suffixes, on port 443, and never an IP literal.

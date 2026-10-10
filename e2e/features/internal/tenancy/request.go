@@ -69,7 +69,7 @@ func Get(t testing.TB, c *gw.Client, path string, who Cred) *gw.Response {
 }
 
 // ExpectRefused fails unless resp is status with code; every 401 and 403
-// carries {error, code, hint} (docs/AUTH.md#when-a-request-is-refused).
+// carries {error, code, hint} (docs/whitepaper/technical-reference/vol1/14-authorization.md#refusals-and-the-error-code-table).
 func ExpectRefused(t testing.TB, resp *gw.Response, status int, code string) {
 	t.Helper()
 	var body map[string]any

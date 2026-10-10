@@ -69,7 +69,7 @@ func installedNode(t *testing.T) (*chain.Chain, fleet.Node) {
 			return c, n
 		}
 	}
-	harness.SkipNotApplicable(t, "no node of this target has "+constants.GlobalReporterUnit+": install a directory authority's reporter with `orama global install --services chain,dirauth,reporter` (docs/TOR_NETWORK.md, The relay bandwidth reporter)")
+	harness.SkipNotApplicable(t, "no node of this target has "+constants.GlobalReporterUnit+": install a directory authority's reporter with `orama global install --services chain,dirauth,reporter` (orama.network/docs/operator/tor-network, The relay bandwidth reporter)")
 	return nil, fleet.Node{}
 }
 

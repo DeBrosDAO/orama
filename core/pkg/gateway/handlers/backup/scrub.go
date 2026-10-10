@@ -37,7 +37,7 @@ import (
 // of the third (rows of other namespaces, and rows naming a CID the registry
 // records only against other namespaces). What it cannot do is check size_bytes: no gateway call reports a
 // pinned object's size, so the rows an image carries for CIDs nobody else holds
-// are counted as the image says (docs/SECURITY.md).
+// are counted as the image says (docs/whitepaper/technical-reference/vol1/17-database.md).
 
 // platformSQLQuery lists the triggers and views of the database.
 const platformSQLQuery = "SELECT type, name, sql FROM sqlite_master WHERE type IN ('trigger', 'view')"

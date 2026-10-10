@@ -45,11 +45,11 @@ covers:
     - /v1/operator/telemetry/stream
     - /v1/status
   claims:
-    - "docs/MONITORING.md#the-telemetry-api: only the cluster's operators read telemetry; 401 and 403 map to exit 3, a bad interval to 400"
-    - "docs/MONITORING.md#cluster-telemetry-on-the-gateway: each node's report is refreshed every 10s and the assembled snapshot is reused for 5s"
-    - "docs/MONITORING.md#subcommands: every view starts with the verdict line and takes --json"
-    - "docs/MONITORING.md#report-format: the report envelope carries meta, summary with verdict, components, alerts and nodes"
-    - "docs/MONITORING.md#request-metrics: requests are attributed to their namespace; invalid names count as (invalid); the window is at most 60s"
-    - "docs/MONITORING.md#public-status-page: /v1/status carries node counts, component states and 90-day daily uptime, no node named"
-    - "docs/INSPECTOR.md#exit-codes: exit 1 exactly when a check failed"
-    - "docs/INSPECTOR.md#output-formats: --format json is one JSON document"
+    - "website/src/docs/operator/monitoring.mdx#the-telemetry-api: only the cluster's operators read telemetry; 401 and 403 map to exit 3, a bad interval to 400"
+    - "website/src/docs/operator/monitoring.mdx#cluster-telemetry-on-the-gateway: each node's report is refreshed every 10s and the assembled snapshot is reused for 5s"
+    - "website/src/docs/operator/monitoring.mdx#subcommands: every view starts with the verdict line and takes --json"
+    - "website/src/docs/operator/monitoring.mdx#report-format: the report envelope carries meta, summary with verdict, components, alerts and nodes"
+    - "website/src/docs/operator/monitoring.mdx#request-metrics: requests are attributed to their namespace; invalid names count as (invalid); the window is at most 60s"
+    - "website/src/docs/operator/monitoring.mdx#public-status-page: /v1/status carries node counts, component states and 90-day daily uptime, no node named"
+    - "website/src/docs/operator/inspector.mdx#exit-codes: exit 1 exactly when a check failed"
+    - "website/src/docs/operator/inspector.mdx#output-formats: --format json is one JSON document"

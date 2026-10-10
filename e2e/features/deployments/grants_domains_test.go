@@ -20,7 +20,7 @@ const (
 
 // TestDeployGrants_runtimeYesControlPlaneNo: an app is granted runtime or
 // reader, never the control plane, and list shows the grant
-// (docs/CLI_REFERENCE.md "orama app grants").
+// (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama app grants").
 func TestDeployGrants_runtimeYesControlPlaneNo(t *testing.T) {
 	t.Parallel()
 	tn := newTenant(t)
@@ -55,7 +55,7 @@ func TestDeployGrants_runtimeYesControlPlaneNo(t *testing.T) {
 // TestDeployGrants_nameIsADeploymentOfTheNamespace: a grant names a deployment
 // that exists in the caller's namespace and has a name a deployment can have; a
 // name with '/' or ':' is 400 and one that is no deployment is 404, and neither
-// leaves a grant behind (docs/AUTH.md#a-workloads-identity). A granted app
+// leaves a grant behind (docs/whitepaper/technical-reference/vol1/14-authorization.md). A granted app
 // lists with its role and selector, in the CLI's --json too.
 func TestDeployGrants_nameIsADeploymentOfTheNamespace(t *testing.T) {
 	t.Parallel()
@@ -102,7 +102,7 @@ func TestDeployGrants_nameIsADeploymentOfTheNamespace(t *testing.T) {
 // TestDeployDomains_addListVerifyRemove: a custom domain is registered with a
 // verification token, listed, not served until verified, and removed; the
 // network's own base domain and malformed names are refused
-// (docs/DEPLOYMENT_GUIDE.md "Custom Domains"). Verification's success path
+// (website/src/docs/developer/domains.mdx "Custom Domains"). Verification's success path
 // needs a TXT record the test can publish, which features cannot.
 func TestDeployDomains_addListVerifyRemove(t *testing.T) {
 	t.Parallel()

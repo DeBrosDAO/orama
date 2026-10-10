@@ -26,7 +26,7 @@ const servingBudget = 2 * reconnectBudget
 
 // TestOlricChaos_memberLossServedAndRejoined stops one node's Olric: the other
 // nodes' gateways keep serving, the tenant reconciler starts the member again
-// (docs/ARCHITECTURE.md "The tenant plane converges"), and the rejoined node's
+// (website/src/docs/contributor/architecture-reference.mdx "The tenant plane converges"), and the rejoined node's
 // gateway serves what was written while it was away.
 func TestOlricChaos_memberLossServedAndRejoined(t *testing.T) {
 	f := harness.Fleet(t)
@@ -62,7 +62,7 @@ func TestOlricChaos_memberLossServedAndRejoined(t *testing.T) {
 // TestOlricChaos_unreachableCacheAnswers503ThenReconnects freezes Olric on
 // every node: each gateway drops its client after three failed probes and
 // answers 503, then reconnects on its own once Olric answers again, without
-// the gateway restarting (docs/ARCHITECTURE.md "Olric is supervised").
+// the gateway restarting (website/src/docs/contributor/architecture-reference.mdx "Olric is supervised").
 func TestOlricChaos_unreachableCacheAnswers503ThenReconnects(t *testing.T) {
 	f := harness.Fleet(t)
 	infra.HealthyAround(t)
@@ -100,7 +100,7 @@ func TestOlricChaos_unreachableCacheAnswers503ThenReconnects(t *testing.T) {
 	}
 }
 
-// TestOlricChaos_memoryOnly: Olric is in-memory only (docs/ARCHITECTURE.md
+// TestOlricChaos_memoryOnly: Olric is in-memory only (website/src/docs/contributor/architecture-reference.mdx
 // "Olric v0.7.0 is in-memory only"): its config names no data directory, and
 // crashing every member loses every entry.
 func TestOlricChaos_memoryOnly(t *testing.T) {

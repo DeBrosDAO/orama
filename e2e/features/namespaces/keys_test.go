@@ -28,7 +28,7 @@ var (
 
 const (
 	// keyReloadBudget: a revoked key is refused everywhere within the
-	// revocation reload (docs/AUTH.md#revoking), plus the round trip.
+	// revocation reload (docs/whitepaper/technical-reference/vol1/13-identity.md#revocation), plus the round trip.
 	keyReloadBudget = 30 * time.Second
 	pathCacheHealth = "/v1/cache/health"
 )
@@ -72,7 +72,7 @@ func keyServes(t testing.TB, n *ns.Namespace, key string, want bool) func() (boo
 // TestNamespaceKeys_cliCreateListRotateRevoke drives the five key commands:
 // a key works, list shows it, rotate mints a successor while the original
 // keeps working for the overlap, revoke stops a key, revoke-legacy finds none
-// on a namespace that never had one (docs/CLI_REFERENCE.md "orama namespace
+// on a namespace that never had one (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama namespace
 // keys").
 func TestNamespaceKeys_cliCreateListRotateRevoke(t *testing.T) {
 	t.Parallel()
@@ -135,7 +135,7 @@ func TestNamespaceKeys_cliRefusals(t *testing.T) {
 }
 
 // TestNamespaceKeys_namespaceFlagIsHonoured: --namespace names the namespace
-// the key is for (docs/CLI_REFERENCE.md). A CLI signed in to A asking for a key
+// the key is for (docs/whitepaper/technical-reference/appendices/d-cli-reference.md). A CLI signed in to A asking for a key
 // in B must not quietly mint one in A.
 func TestNamespaceKeys_namespaceFlagIsHonoured(t *testing.T) {
 	t.Parallel()

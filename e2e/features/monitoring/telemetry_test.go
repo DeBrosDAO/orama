@@ -19,7 +19,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/ns"
 )
 
-// Telemetry API (docs/MONITORING.md "The telemetry API").
+// Telemetry API (website/src/docs/operator/monitoring.mdx "The telemetry API").
 const (
 	telemetryPath = "/v1/operator/telemetry"
 	streamPath    = "/v1/operator/telemetry/stream"
@@ -47,7 +47,7 @@ type snapshot struct {
 
 // TestTelemetry_refusedToNonOperators: the snapshot and the stream are
 // refused to no credential (401) and to a namespace owner who is not on the
-// operator list (403 NOT_AN_OPERATOR) (docs/SECURITY.md "What the open
+// operator list (403 NOT_AN_OPERATOR) (docs/whitepaper/technical-reference/vol1/12-gateway-architecture.md "What the open
 // health and status endpoints show": operator grant and the operator list).
 // The refusal is held to {error, code} here; its documented hint is the
 // subtest's, so the product bug that leaves it out fails one check.
@@ -64,7 +64,7 @@ func TestTelemetry_refusedToNonOperators(t *testing.T) {
 		hint, _ := expectNotOperator(t, resp)["hint"].(string)
 		if strings.TrimSpace(hint) == "" {
 			t.Errorf("PRODUCT BUG: 403 %s carries no hint (core/pkg/gateway/handlers/operator/authorize.go requireOperator "+
-				"writes only error and code), although docs/AUTH.md#when-a-request-is-refused promises {error, code, hint}: %s",
+				"writes only error and code), although docs/whitepaper/technical-reference/vol1/14-authorization.md#refusals-and-the-error-code-table promises {error, code, hint}: %s",
 				tenancy.CodeNotOperator, resp.Body)
 		}
 	})
@@ -118,7 +118,7 @@ func servedToAnOperator(t *testing.T, op *ns.Namespace) {
 
 // snapshotReusedForFiveSeconds: two reads of one gateway in quick
 // succession are the same assembly (the same collected_at), and no read is
-// older than the cache plus one assembly (docs/MONITORING.md "Aggregation":
+// older than the cache plus one assembly (website/src/docs/operator/monitoring.mdx "Aggregation":
 // reused for 5s from when it finished, bounded at 15s). A pair can straddle
 // the moment one assembly expires, or be too far apart, so pairs are taken
 // until one lands inside the window; none ever sharing an assembly fails.
@@ -157,7 +157,7 @@ func snapshotReusedForFiveSeconds(t *testing.T, op *ns.Namespace) {
 // streamSendsSnapshotsAndBoundsInterval: the stream answers
 // text/event-stream with `event: snapshot` blocks at the asked interval,
 // and refuses an interval outside 2-60 whole seconds with 400
-// (docs/API_SURFACE.md "/v1/operator/telemetry/stream").
+// (docs/whitepaper/technical-reference/appendices/i-api-surface.md "/v1/operator/telemetry/stream").
 func streamSendsSnapshotsAndBoundsInterval(t *testing.T, op *ns.Namespace) {
 	c := harness.GW(t)
 	for _, bad := range []string{"1", "61", "0", "-5", "2.5", "abc"} {

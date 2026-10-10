@@ -56,7 +56,7 @@ func requireAuthoritative(t *testing.T, server, what string, a *edge.Answer) {
 
 // requireNegative fails unless a is the negative answer to a name under the
 // base domain for a type it lacks: authoritative NOERROR with no answer and
-// the apex SOA in the authority section (NODATA; docs/NAMESERVER_SETUP.md
+// the apex SOA in the authority section (NODATA; website/src/docs/operator/nameserver.mdx
 // "Nameserver slots"). Every name under the base exists, because *.<base>
 // covers it, so the zone never answers NXDOMAIN there.
 func requireNegative(t *testing.T, server, what, base string, a *edge.Answer) {

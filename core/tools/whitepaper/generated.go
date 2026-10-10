@@ -10,9 +10,8 @@ import (
 type generator func(b *Book) ([]byte, error)
 
 // generators maps a generated appendix file to its generator. Appendix D
-// (the CLI reference) is rendered by core/cmd/orama's reference tests, which
-// write it beside docs/CLI_REFERENCE.md and fail when it is stale; see
-// core/Makefile `docs`.
+// (the CLI reference) is rendered by core/cmd/orama's book_reference_test.go,
+// which writes it and fails when it is stale; see core/Makefile `docs`.
 var generators = map[string]generator{
 	"appendices/a-port-map.md":                   genPorts,
 	"appendices/b-schema.md":                     genSchema,

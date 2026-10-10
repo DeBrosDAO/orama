@@ -917,7 +917,7 @@ func (s *Service) RevokeToken(ctx context.Context, namespace, token string, all 
 	//
 	// Every session means every namespace: the access tokens are revoked for
 	// the subject everywhere (RevokeAllSessions), and a refresh token left in
-	// another namespace would mint new ones (docs/AUTH.md: "ends every
+	// another namespace would mint new ones (docs/whitepaper/technical-reference/vol1/13-identity.md: "ends every
 	// session of the wallet at once").
 	if all && subject != "" {
 		_, err := db.Query(internalCtx, "UPDATE refresh_tokens SET revoked_at = datetime('now'), grace_used_at = datetime('now') WHERE subject = ? AND revoked_at IS NULL", subject)

@@ -34,7 +34,7 @@ const (
 	// AcceptLegacyCoordinationMAC lets a request stamped only with the v1 MAC
 	// verify, for callers that do not need the body covered. It exists for the
 	// rolling upgrade from the build that signs nothing else, and is removed in
-	// the release after that one (docs/SECURITY.md, "Coordination MAC v2").
+	// the release after that one (docs/whitepaper/technical-reference/vol1/15-inter-node-trust.md, "Coordination MAC v2").
 	// Compiled in does not mean accepted: while a LegacyFloor is installed the
 	// v1 form is refused once every node of the cluster signs the newer ones.
 	AcceptLegacyCoordinationMAC = true

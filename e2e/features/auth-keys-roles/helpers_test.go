@@ -17,7 +17,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/wallet"
 )
 
-// Routes (docs/API_SURFACE.md) and roles (docs/AUTH.md#roles).
+// Routes (docs/whitepaper/technical-reference/appendices/i-api-surface.md) and roles (docs/whitepaper/technical-reference/vol1/14-authorization.md#authorization).
 const (
 	pathKeys    = "/v1/namespace/keys"
 	pathMembers = "/v1/namespace/members"
@@ -41,7 +41,7 @@ const (
 )
 
 // refusal fails unless resp is status with code and carries {error, code,
-// hint} (docs/AUTH.md#when-a-request-is-refused); it returns the body.
+// hint} (docs/whitepaper/technical-reference/vol1/14-authorization.md#the-object-check-in-the-handlers); it returns the body.
 func refusal(t testing.TB, resp *gw.Response, status int, code string) map[string]any {
 	t.Helper()
 	var body map[string]any

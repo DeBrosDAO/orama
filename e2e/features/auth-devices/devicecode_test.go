@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	// pendingLife: "A pending login lasts ten minutes" (docs/AUTH.md).
+	// pendingLife: "A pending login lasts ten minutes" (docs/whitepaper/technical-reference/vol1/13-identity.md).
 	pendingLife = 10 * time.Minute
 	// pollInterval is what the gateway hands back (core/pkg/gateway/auth/device.go).
 	pollInterval = 5
@@ -103,7 +103,7 @@ func approveWithWallet(t testing.TB, c *gw.Client, w *wallet.EVM, namespace, use
 }
 
 // TestDeviceLogin_startShape: a device code, a readable user code, ten
-// minutes, a five-second interval and no verification_uri (docs/AUTH.md,
+// minutes, a five-second interval and no verification_uri (docs/whitepaper/technical-reference/vol1/13-identity.md,
 // "Signing in from a machine with no wallet on it").
 func TestDeviceLogin_startShape(t *testing.T) {
 	t.Parallel()

@@ -18,7 +18,7 @@ const healthy = "healthy"
 
 // TestStatus_everyNodeHealthyAsTableAndJSON: `orama status` lists every core
 // node healthy — as a table, and with --json as {host, role, status}
-// (docs/CLI_REFERENCE.md "orama status").
+// (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama status").
 func TestStatus_everyNodeHealthyAsTableAndJSON(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -41,7 +41,7 @@ func TestStatus_everyNodeHealthyAsTableAndJSON(t *testing.T) {
 }
 
 // TestNodes_listsTheFleetWithRoles: `orama nodes --json` lists every core
-// node of the environment with its role and SSH user (docs/CLI_REFERENCE.md
+// node of the environment with its role and SSH user (docs/whitepaper/technical-reference/appendices/d-cli-reference.md
 // "orama nodes").
 func TestNodes_listsTheFleetWithRoles(t *testing.T) {
 	t.Parallel()
@@ -60,7 +60,7 @@ func TestNodes_listsTheFleetWithRoles(t *testing.T) {
 	}
 }
 
-// componentStates are the public component states (docs/MONITORING.md
+// componentStates are the public component states (website/src/docs/operator/monitoring.mdx
 // "Components").
 var componentStates = []string{"operational", "degraded", "outage", "unknown"}
 
@@ -91,7 +91,7 @@ type publicStatus struct {
 // TestPublicStatus_uptimeHistoryShape: /v1/status carries the public view:
 // the overall state, node counts without names, and each service with a
 // state, an uptime share (or none yet) and a history of UTC days, oldest
-// first, each with a share and the minutes sampled (docs/MONITORING.md
+// first, each with a share and the minutes sampled (website/src/docs/operator/monitoring.mdx
 // "Public status page", "Uptime history").
 func TestPublicStatus_uptimeHistoryShape(t *testing.T) {
 	t.Parallel()

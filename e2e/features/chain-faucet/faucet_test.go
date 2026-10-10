@@ -16,7 +16,7 @@ import (
 // signer is the node whose operator key signs the drips (chain.FaucetNode).
 func signer(t *testing.T, c *chain.Chain) fleet.Node { return c.FaucetNode(t) }
 
-// faucetParams are x/emission's faucet parameters (docs/CHAIN.md).
+// faucetParams are x/emission's faucet parameters (docs/whitepaper/technical-reference/appendices/e-chain-messages-and-queries.md).
 type faucetParams struct {
 	Params struct {
 		Enabled  bool      `json:"faucet_enabled"`

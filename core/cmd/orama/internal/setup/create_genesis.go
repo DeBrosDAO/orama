@@ -33,7 +33,7 @@ const (
 	// field would otherwise keep CometBFT's unlimited default.
 	consensusMaxGas = "100000000"
 	// voteExtensionsEnableHeight turns vote extensions on at height 2 (deploy.sh
-	// VOTE_EXTENSIONS_ENABLE_HEIGHT; docs/CHAIN.md, C13 inclusion lists): they
+	// VOTE_EXTENSIONS_ENABLE_HEIGHT; docs/whitepaper/technical-reference/vol2/39-chain-architecture.md, C13 inclusion lists): they
 	// are a genesis-only switch, height 2 leaves block 1 an ordinary block and
 	// exercises the enable transition.
 	voteExtensionsEnableHeight = "2"

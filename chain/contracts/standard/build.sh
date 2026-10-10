@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Reproducible build of the genesis standard contracts (docs/CHAIN.md, "Genesis standard contracts").
+# Reproducible build of the genesis standard contracts (docs/whitepaper/technical-reference/vol2/44-governance-and-contracts.md, "Genesis standard contracts").
 #
 # Every contract is compiled from a pinned upstream git commit, with a pinned Rust toolchain, and
 # post-processed the way the official cosmwasm/optimizer does (wasm-opt -Os --signext-lowering).

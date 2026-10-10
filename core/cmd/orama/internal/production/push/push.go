@@ -35,7 +35,7 @@ type Flags struct {
 const stageHint = "without --trust-signers each node verifies the archive with its installed orama (" + NodeOramaBinary +
 	" node stage-archive) against /etc/orama/archive-signers. A node on a release from before " +
 	"archive signing has no such command and no such file: push to it once with --trust-signers, which " +
-	"stages with the archive's own verified CLI (see docs/DEV_DEPLOY.md, \"Signed archives\")"
+	"stages with the archive's own verified CLI (see orama.network/docs/operator/signed-archives)"
 
 // errArchiveRequired names the archive to push explicitly: /tmp is shared, and
 // "the newest archive there" was a build from another checkout often enough.

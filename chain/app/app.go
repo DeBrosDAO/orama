@@ -406,7 +406,7 @@ func NewOramaApp(
 	// computes its burn amount from the validator's REAL bonded tokens rather than
 	// TokensFromConsensusPower(power) on the power CometBFT actually reports (security review B3):
 	// x/power's own CometBFT power is on a completely different, non-token-proportional scale (it is
-	// capped, redistributed, ramped and bootstrap-blended - see docs/CHAIN.md), so feeding it through
+	// capped, redistributed, ramped and bootstrap-blended - see docs/whitepaper/technical-reference/vol2/39-chain-architecture.md), so feeding it through
 	// the stock conversion would slash the wrong amount entirely.
 	app.SlashingKeeper = slashingkeeper.NewKeeper(
 		appCodec,
@@ -646,7 +646,7 @@ func NewOramaApp(
 	// current epoch number as its own genesis_epoch (see power/keeper.Keeper.InitGenesis) and
 	// returns the genesis CometBFT validator set (the bootstrap committee) - the only non-empty
 	// InitGenesis validator-update list in this app (genutil's gentx-derived list is always empty:
-	// a bootstrap-committee genesis has no gentxs - see docs/CHAIN.md).
+	// a bootstrap-committee genesis has no gentxs - see docs/whitepaper/technical-reference/vol2/39-chain-architecture.md).
 	genesisModuleOrder := []string{
 		authtypes.ModuleName,
 		banktypes.ModuleName,
@@ -892,7 +892,7 @@ func (app *OramaApp) GetKey(storeKey string) *storetypes.KVStoreKey {
 
 // SimulationManager returns nil: this app does not wire the SDK's randomized simulation
 // framework (plans/open-network/track-c-chain.md's own simulation requirement is covered by
-// x/emission's keeper-level Go tests instead - see docs/CHAIN.md deviations).
+// x/emission's keeper-level Go tests instead - see docs/whitepaper/technical-reference/vol2/39-chain-architecture.md deviations).
 func (app *OramaApp) SimulationManager() *module.SimulationManager {
 	return nil
 }

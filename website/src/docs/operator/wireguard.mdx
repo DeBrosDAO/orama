@@ -11,7 +11,7 @@ Each Orama node is assigned a private IP address on the `10.0.0.0/24` subnet. Al
 - **WireGuard** (UDP port 51820) -- the encrypted tunnel itself
 - **DNS** (port 53, TCP/UDP) -- only on nameserver nodes
 
-Internal service ports (the index services on 10100 to 10114, tenant namespaces on 10000 to 10099, the SFU on 20000 to 30099, the chain's loopback ports, and so on) are never exposed to the public internet: they listen on the overlay address or loopback. The only exception is TURN, which a namespace with WebRTC opens on purpose ([WebRTC](/docs/developer/webrtc#ports)).
+Internal service ports (the index services on 10100 to 10114, tenant namespaces on 10000 to 10099, the SFU on 20000 to 30099, the chain's loopback ports, and so on) are never exposed to the public internet: they listen on the overlay address or loopback. The only exception is TURN, which a namespace with WebRTC opens on purpose ([WebRTC](/docs/operator/webrtc-operations#port-allocation)).
 
 ## Network Topology
 

@@ -63,7 +63,7 @@ func unplant(t testing.TB, f *fleet.Fleet, n fleet.Node) {
 // the firewall without resetting it: a missing wanted rule comes back, a
 // tagged rule Orama no longer wants goes, an exact legacy rule goes, and the
 // operator's untagged rule and the global node's orama-global rule stay
-// (docs/SECURITY.md "Firewall: only Orama's rules, including the old ones").
+// (docs/whitepaper/technical-reference/vol1/30-install-and-upgrade.md "Firewall: only Orama's rules, including the old ones").
 func TestFirewallReconcile_upgradeConvergesOnlyOwnedRules(t *testing.T) {
 	f := harness.Fleet(t)
 	r := infra.RequireHealthy(t)

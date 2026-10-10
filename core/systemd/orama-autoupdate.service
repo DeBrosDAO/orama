@@ -10,7 +10,7 @@ Type=oneshot
 # (root's alone) and runs `orama node upgrade`, which restarts this node's
 # services. The agent decides nothing the cluster's policy has not allowed: it
 # does nothing unless the cluster stored a release repository and this node
-# adopted a release root (docs/DEV_DEPLOY.md, "Auto-update").
+# adopted a release root (docs/whitepaper/technical-reference/vol1/29-build-signing-and-release.md, "Auto-update").
 WorkingDirectory=/opt/orama
 ExecStart=/opt/orama/bin/orama node autoupdate run
 # An install waits for the node to rejoin the cluster, and may roll back and

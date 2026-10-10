@@ -71,7 +71,7 @@ covers:                           # what the tests exercise; unknown keys are re
   queries: ["orama.token.v1.Params"]           # <proto package>.<rpc> from query.proto
   units: ["orama-namespace-gateway@.service"]  # file names in core/systemd
   config: ["node.yaml:gateway.base_domain"]    # <file>:<key path>
-  claims: ["docs/AUTH.md#signing-in: presenting a refresh token twice is a replay"]
+  claims: ["docs/whitepaper/technical-reference/vol1/13-identity.md#refresh-tokens-and-sessions: presenting a refresh token twice is a replay"]
 ```
 
 `covers` ids map onto the coverage universe as `cli:<entry>`, `route:<entry>`,
@@ -79,8 +79,8 @@ covers:                           # what the tests exercise; unknown keys are re
 
 | Kind | Source of truth | Entry is |
 |------|-----------------|----------|
-| cli | every `### orama ...` heading of `docs/CLI_REFERENCE.md` (group commands included: test that `orama app` lists its subcommands) | `orama app env set` |
-| routes | every route row of `docs/API_SURFACE.md` (paths as written there; the doc has no method column) | `/v1/rqlite/query`, `/v1/auth/sessions/` |
+| cli | every `## orama ...` heading of `docs/whitepaper/technical-reference/appendices/d-cli-reference.md` (group commands included: test that `orama app` lists its subcommands) | `orama app env set` |
+| routes | every route row of `docs/whitepaper/technical-reference/appendices/i-api-surface.md` (paths as written there; the doc has no method column) | `/v1/rqlite/query`, `/v1/auth/sessions/` |
 | msgs | `service Msg` of `chain/proto/**/tx.proto` | `orama.token.v1.MsgMint` |
 | queries | `service Query` of `chain/proto/**/query.proto` | `orama.token.v1.Params` |
 | units | `core/systemd/*.service`, `*.timer` | `orama-turn.service` |
@@ -272,7 +272,7 @@ import (
 | `SkipNotApplicable(t, reason)` | the only allowed skip (counted as not covered) |
 | `RequireChain(t)` | not-applicable skip when the run has no chain. `scripts/chain-deploy.sh` enables each node's REST API (`[api] enable = true`, `127.0.0.1:31003`, checked by `chain-deploy.sh status`), which the gateway's `/v1/chain/*` and the CLI's `--node` paths read; reach it from a test with `Fleet.Tunnel(t, n, "127.0.0.1:31003")`. It also installs the chain indexer (`orama-global-indexer.service`, user `orama-indexer`, `127.0.0.1:31015`) beside every node, which the gateway's `/v1/chain/index/` routes read (`status` checks it); stagenet's deploy installs one on every node too, and the explorer test asks each node's gateway |
 | `ExtraNode(t, name, location) Extra` | a fresh server (nothing installed), created by the runner's broker and deleted at cleanup; `Extra{fleet.Node, HostKey}` (the node's fields are promoted: `extra.PublicIP`), HostKey the pinned `SHA256:...` fingerprint for `orama node setup --host-key`; `Fleet.Lookup` finds it while it lives |
-| `ExtraCluster(t, name) provision.EvalCluster` | a single-node eval cluster (docs/EVAL.md) on its own server: subdomain `e2e-<run>-<name>.<zone>` delegated to it, genesis with the real CLI, Let's Encrypt staging certificate, its own `orama network` entry (`EvalCluster.Env`, never made current) and CA file; `EvalCluster{Name, Env, BaseDomain, GatewayURL, CAFile, Node, HostKey}`; removed (DNS, server, env, CA file) at cleanup. `name`: 1-12 lowercase letters/digits, starting with a letter. Counts as one of `requires.extra_nodes` |
+| `ExtraCluster(t, name) provision.EvalCluster` | a single-node eval cluster (website/src/docs/operator/getting-started.mdx) on its own server: subdomain `e2e-<run>-<name>.<zone>` delegated to it, genesis with the real CLI, Let's Encrypt staging certificate, its own `orama network` entry (`EvalCluster.Env`, never made current) and CA file; `EvalCluster{Name, Env, BaseDomain, GatewayURL, CAFile, Node, HostKey}`; removed (DNS, server, env, CA file) at cleanup. `name`: 1-12 lowercase letters/digits, starting with a letter. Counts as one of `requires.extra_nodes` |
 | `CustomDomain(t, label) string` | `e2e-<run>-<label>.<zone>`: a name the run owns that Cloudflare itself serves (the run subdomain is delegated to the fleet, so a record under it is invisible to public resolvers) |
 | `DNSTXT(t, name, value)` | a TXT record through the broker, deleted (that value) at cleanup; `name` must be inside the run's subdomain or a `CustomDomain`. Unblocks `orama domain verify`: `harness.DNSTXT(t, "_orama-verify."+domain, token)` |
 | `Broker(t) *broker.Client` | the broker itself: `SetTXT`, `DeleteTXT`, `Records(ctx, under)`, `AddExtra`, `RemoveExtra`, `AddCluster`, `RemoveCluster` |
@@ -688,7 +688,7 @@ excuses such a socket only when the process is in an
 (`fleet.DeployPortMin/Max`, pinned to `privhelper.DeployPortMin/Max` by a test)
 ufw is active with a default deny of incoming traffic (`ufw status verbose`),
 and no ufw allow or limit rule opens it (a bare `Anywhere` rule opens every
-port; an `ALLOW FWD` rule opens nothing on the host); it logs each one. docs/SECURITY.md, "Tenant
+port; an `ALLOW FWD` rule opens nothing on the host); it logs each one. docs/whitepaper/technical-reference/vol1/11-app-deployments.md, "Tenant
 deployments", says why.
 
 **What the stagenet nodes have that Orama did not install.** The public-edge
@@ -871,8 +871,8 @@ call path and the mitigation, specifically) and a `review_by` date no more than
 A govulncheck run that fails or prints no `config` message is a failure, never
 a clean scan. The parsing and matching (`Parse`, `Called` and `Judge` in package
 `harness/vulnaccept`) have unit tests that need no fleet:
-`cd e2e && go test ./harness/vulnaccept/`. The reasons are the same analysis as
-"Chain dependency advisories" in `docs/SECURITY.md`; change both together.
+`cd e2e && go test ./harness/vulnaccept/`. The reasons are the analysis of the advisories
+(`e2e/features/scanners/govulncheck-accepted.yaml`); a new one is added there with its reason and review date.
 
 ## Coverage gate
 

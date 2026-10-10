@@ -261,7 +261,7 @@ The sweep only claims, because a teardown of unreachable nodes takes minutes. A 
 1. an address that is not `host:port`;
 2. a host outside the WireGuard overlay (`constants.WireGuardOverlay()`, 10.0.0.0/24);
 3. an address equal to a surviving member's raft address, since removing it would remove a live member;
-4. a removal after which `voters` would be fewer than `(voters+1)/2 + 1`, where `voters` counts survivors with a raft port. Without a leader the removal cannot commit; the error names the procedure "Emergency: namespace RQLite lost quorum" in `docs/NODE_REPLACEMENT.md`. `orama maint node recover-raft` recovers the platform cluster, not a namespace.
+4. a removal after which `voters` would be fewer than `(voters+1)/2 + 1`, where `voters` counts survivors with a raft port. Without a leader the removal cannot commit; the error names the procedure "Emergency: namespace RQLite lost quorum" in `website/src/docs/operator/node-replacement.mdx`. `orama maint node recover-raft` recovers the platform cluster, not a namespace.
 
 `removeDeadNodeFromRaft` then tries each surviving member's RQLite admin endpoint in turn (`AdminClient.Remove`, HTTP `DELETE /remove`, 30 s timeout) until one accepts. RQLite accepts removal of an id that is not in the configuration, so concurrent prunes of one member on several nodes do not fail each other. Survivors are members whose node is still `active`, so a second dead member is not counted as a voter that could commit the removal.
 
@@ -379,7 +379,7 @@ None of the in-memory items survives a restart. A restart resets the orphan stre
 
 If the node returns during the first minutes nothing is replaced. If it returns after being replaced, `HandleRecoveredNode` and, as backstop, its own orphan sweep tear down what it still holds.
 
-**Loss of a namespace's quorum.** Two of three members gone leaves no leader. The guard refuses any raft removal that cannot commit and the sweeps keep trying; the code does not recover this on its own. The manual procedure is in `docs/NODE_REPLACEMENT.md`, and the recovery chapter (33) covers the commands.
+**Loss of a namespace's quorum.** Two of three members gone leaves no leader. The guard refuses any raft removal that cannot commit and the sweeps keep trying; the code does not recover this on its own. The manual procedure is in `website/src/docs/operator/node-replacement.mdx`, and the recovery chapter (33) covers the commands.
 
 ## Failure modes
 
@@ -496,7 +496,6 @@ The loops run with the node's authority and act on registry content, so the trus
 - **Boot restore trusts a state file that a best-effort push refreshes.** A node with raft state takes its peers from the registry, but the join plan of a node without state comes from `cluster-state.json`, which `saveClusterStateToAllNodes` refreshes with signed requests that can fail on an unreachable node; the plan can name a departed member. Code: `core/pkg/namespace/cluster_manager.go:restoreClusterFromState`.
 - **A node absent for more than 24 h relies on the orphan sweep.** `HandleRecoveredNode` finds replaced namespaces from events in the last 24 h; beyond that only the orphan sweep on that node cleans up, and it needs two sweeps once the registry is reachable. Code: `core/pkg/namespace/cluster_recovery.go:HandleRecoveredNode`.
 - **Leader locality is in memory and one-shot.** The cooldown resets on restart, and raft re-elects freely on every restart, so a restarted distant node can become leader again and hold leadership for up to 90 s until the next check. Code: `core/pkg/namespace/leader_locality.go`.
-- **`docs/NODE_REPLACEMENT.md` still labels namespace rebalancing "not automatic enough"** in its replaced-layers table while its Phase C describes the reconciler that does it.
 
 ## Verify it yourself
 

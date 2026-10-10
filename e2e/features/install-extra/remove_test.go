@@ -26,7 +26,7 @@ func requireMember(t testing.TB, f *fleet.Fleet, extra harness.Extra, want int) 
 
 // removeDryRunChangesNothing: --dry-run prints the quorum impact of every
 // raft cluster the node votes in and the statements it would run, and
-// changes nothing (docs/CLI_REFERENCE.md "orama node remove").
+// changes nothing (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama node remove").
 func removeDryRunChangesNothing(t *testing.T, f *fleet.Fleet, extra harness.Extra) {
 	res := harness.CLI(t).MustOK(t, "node", "remove", "--env", f.State.Env, "--node", extra.PublicIP, "--dry-run")
 	for _, want := range []string{"Quorum after removing " + extra.PublicIP, "--dry-run, so nothing was changed",
@@ -43,7 +43,7 @@ func removeDryRunChangesNothing(t *testing.T, f *fleet.Fleet, extra harness.Extr
 
 // oramaRemoveDryRunChangesNothing: `orama remove --dry-run` prints the quorum
 // impact of every raft cluster the node votes in and every step it would take,
-// and changes nothing (docs/CLI_REFERENCE.md "orama remove"). A node without the
+// and changes nothing (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama remove"). A node without the
 // global layer has no chain step.
 func oramaRemoveDryRunChangesNothing(t *testing.T, f *fleet.Fleet, extra harness.Extra) {
 	res := harness.CLI(t).MustOK(t, "remove", "--env", f.State.Env, "--node", extra.PublicIP, "--dry-run")
@@ -103,7 +103,7 @@ func removeWithoutConfirmationAborts(t *testing.T, f *fleet.Fleet, extra harness
 // removeRetiresAndWipes: remove takes the node out of raft and the mesh on
 // every survivor, then wipes it: no /opt/orama, no units, no wg0, no trust
 // anchor, no orama-tagged firewall rule beyond SSH, and the operator's own
-// rule untouched (docs/CLI_REFERENCE.md "orama node remove", "orama node wipe").
+// rule untouched (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama node remove", "orama node wipe").
 func removeRetiresAndWipes(t *testing.T, f *fleet.Fleet, extra harness.Extra) {
 	f.MustExec(t, extra.Node, "ufw allow "+operatorPort+" comment "+operatorComment)
 	rep := monitor.Fetch(t, harness.CLI(t), f.State.Env)

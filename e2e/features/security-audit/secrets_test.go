@@ -12,7 +12,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/fleet"
 )
 
-// Root-only trees (docs/SECURITY.md "Tenant deployments", "Env files",
+// Root-only trees (docs/whitepaper/technical-reference/vol1/30-install-and-upgrade.md "Tenant deployments", "Env files",
 // "Which key signs a token").
 const (
 	unitEnvDir     = "/var/lib/orama-unit-env"
@@ -55,7 +55,7 @@ func scanFor(t *testing.T, f *fleet.Fleet, n fleet.Node, producer string) int {
 
 // TestSecrets_neverOnACommandLine: no process's argv carries the cluster
 // secret, the rqlite password, the API-key HMAC secret or the swarm key,
-// sampled several times (docs/SECURITY.md "Secrets never on a command line";
+// sampled several times (docs/whitepaper/technical-reference/vol1/30-install-and-upgrade.md "Secrets never on a command line";
 // rqlite credentials go to curl on stdin).
 func TestSecrets_neverOnACommandLine(t *testing.T) {
 	t.Parallel()
@@ -71,7 +71,7 @@ func TestSecrets_neverOnACommandLine(t *testing.T) {
 }
 
 // TestSecrets_neverInTheJournal: no journal line of the last hours carries
-// one of those secrets (docs/SECURITY.md: the report and the logs carry no
+// one of those secrets (docs/whitepaper/technical-reference/vol1/29-build-signing-and-release.md: the report and the logs carry no
 // secret material).
 func TestSecrets_neverInTheJournal(t *testing.T) {
 	t.Parallel()
@@ -86,7 +86,7 @@ func TestSecrets_neverInTheJournal(t *testing.T) {
 // TestSecrets_filesAndTreesClosed: secrets are the orama user's alone, the
 // node's own key 0600, wg0.conf root 0600, the unit-env tree root-owned and
 // written by nobody else, the deployment env tree and the index gateway's
-// signing keys root-only (docs/SECURITY.md "Install and upgrade never
+// signing keys root-only (docs/whitepaper/technical-reference/vol1/30-install-and-upgrade.md "Install and upgrade never
 // follow a symlink", "Env files", "What a gateway writes").
 func TestSecrets_filesAndTreesClosed(t *testing.T) {
 	t.Parallel()
@@ -112,7 +112,7 @@ func TestSecrets_filesAndTreesClosed(t *testing.T) {
 
 // TestUnits_pid1NeverOpensAnOramaPath: no installed unit has PID 1 read an
 // env file or credential, or open its output, under /opt/orama — a path the
-// orama user could swap for a symlink to a root-only file (docs/SECURITY.md
+// orama user could swap for a symlink to a root-only file (docs/whitepaper/technical-reference/vol1/05-privilege-and-filesystem-trust.md
 // "No unit reads a file the orama user can write as PID 1").
 func TestUnits_pid1NeverOpensAnOramaPath(t *testing.T) {
 	t.Parallel()

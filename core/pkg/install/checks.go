@@ -216,7 +216,7 @@ func (dc *DependencyChecker) CheckAll() ([]Dependency, error) {
 }
 
 // Installer resource floors. CheckDiskSpace, CheckRAM and CheckCPU use these
-// values, and docs/RUN_YOUR_OWN_CLUSTER.md quotes them. The disk and RAM
+// values, and website/src/docs/operator/run-your-own-cluster.mdx quotes them. The disk and RAM
 // units are 1024³ bytes; the error text calls that GB.
 const (
 	MinFreeDiskBytes = 10 * 1024 * 1024 * 1024

@@ -27,9 +27,9 @@ covers:
     - /v1/namespace/keys
     - /v1/namespace/keys/
   claims:
-    - "docs/API_SURFACE.md#cache: get/put/delete/mget/scan/health serve the namespace cache"
-    - "docs/ARCHITECTURE.md: a grant may be narrowed to cache:key=...; the cache endpoints apply it"
-    - "docs/ARCHITECTURE.md: a namespace cache is one Olric DMap with the dmap folded into the key, so every dmap shares one memory bound and a dmap name and its key share 255 bytes"
-    - "docs/CLI_REFERENCE.md#orama-members: runtime holds the data plane, reader holds nothing"
-    - "docs/AUTH.md#revoking: a logged-out session stops working on every gateway within the reload"
-    - "docs/SECURITY.md: a credential of another namespace is refused with NAMESPACE_MISMATCH"
+    - "docs/whitepaper/technical-reference/appendices/i-api-surface.md#cache: get/put/delete/mget/scan/health serve the namespace cache"
+    - "website/src/docs/contributor/architecture-reference.mdx: a grant may be narrowed to cache:key=...; the cache endpoints apply it"
+    - "website/src/docs/contributor/architecture-reference.mdx: a namespace cache is one Olric DMap with the dmap folded into the key, so every dmap shares one memory bound and a dmap name and its key share 255 bytes"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-members: runtime holds the data plane, reader holds nothing"
+    - "docs/whitepaper/technical-reference/vol1/13-identity.md#revocation: a logged-out session stops working on every gateway within the reload"
+    - "docs/whitepaper/technical-reference/vol1/18-cache.md: a credential of another namespace is refused with NAMESPACE_MISMATCH"

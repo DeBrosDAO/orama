@@ -17,11 +17,11 @@ import (
 )
 
 // oneShotViews are the monitor views this package owns (cluster, chain and
-// report are bootstrap's), docs/CLI_REFERENCE.md#orama-monitor.
+// report are bootstrap's), docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-monitor.
 var oneShotViews = []string{"alerts", "dns", "mesh", "namespaces", "node", "service", "traffic"}
 
 // verdictWords: "Every view starts with the verdict: ✓ All systems operational
-// or what is degraded" (docs/CLI_REFERENCE.md#orama-monitor).
+// or what is degraded" (docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-monitor).
 var verdictWords = []string{"operational", "degraded", "critical", "warning"}
 
 // TestMonitorViews_tableStartsWithVerdict: every one-shot view prints, and
@@ -63,7 +63,7 @@ type meshEntry struct {
 }
 
 // TestMonitorMesh_fullMeshOnEveryNode: every node's WireGuard interface is
-// up with a peer for each other node (docs/MONITORING.md: a fresh cluster
+// up with a peer for each other node (website/src/docs/operator/monitoring.mdx: a fresh cluster
 // reports a full WireGuard mesh).
 func TestMonitorMesh_fullMeshOnEveryNode(t *testing.T) {
 	t.Parallel()
@@ -175,7 +175,7 @@ type alertEntry struct {
 }
 
 // TestMonitorAlerts_noCriticalOnFreshCluster: a fresh cluster has no
-// critical alert (docs/MONITORING.md).
+// critical alert (website/src/docs/operator/monitoring.mdx).
 func TestMonitorAlerts_noCriticalOnFreshCluster(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -239,7 +239,7 @@ type trafficReport struct {
 }
 
 // TestMonitorTraffic_countsGatewayRequests: traffic is counted by the
-// gateways (docs/CLI_REFERENCE.md#orama-monitor), so requests we send show up
+// gateways (docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-monitor), so requests we send show up
 // in the totals of every reporting gateway.
 func TestMonitorTraffic_countsGatewayRequests(t *testing.T) {
 	t.Parallel()

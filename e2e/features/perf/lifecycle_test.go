@@ -24,7 +24,7 @@ const (
 	warmWorkers    = 5
 	warmInvokes    = 100
 	// warmInterval paces each worker to 5 invokes a second in all, half the
-	// gateway's sustained per-wallet limit of 10 a second (docs/SERVERLESS.md,
+	// gateway's sustained per-wallet limit of 10 a second (website/src/docs/developer/functions.mdx,
 	// "Invoke rate limits"). Faster, the gateway answers 429 once its
 	// 60-invoke burst is spent, and that measures the limiter, not the function.
 	warmInterval = time.Second

@@ -93,7 +93,7 @@ func TestStore_refusesAnAlreadySpentNullifier(t *testing.T) {
 	}
 }
 
-// The node's default database backend is pebbledb (docs/CHAIN.md); goleveldb is what the SDK
+// The node's default database backend is pebbledb (docs/whitepaper/technical-reference/vol2/39-chain-architecture.md); goleveldb is what the SDK
 // defaults to. The store must persist across a restart on both.
 func TestStore_emptyAndPersistence(t *testing.T) {
 	for _, backend := range []dbm.BackendType{dbm.GoLevelDBBackend, dbm.PebbleDBBackend} {

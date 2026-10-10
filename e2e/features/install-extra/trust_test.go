@@ -71,7 +71,7 @@ func pushRefused(t testing.TB, n fleet.Node, before infra.StagedState, archive s
 }
 
 // unsignedArchiveRefused: an archive without manifest.sig is
-// refused on the node, whatever else it holds (docs/SECURITY.md
+// refused on the node, whatever else it holds (docs/whitepaper/technical-reference/vol1/29-build-signing-and-release.md
 // "Verification": there is no unsigned escape hatch).
 func unsignedArchiveRefused(t *testing.T, f *fleet.Fleet, extra harness.Extra) {
 	n := extra.Node
@@ -128,7 +128,7 @@ func extraFileRefused(t *testing.T, f *fleet.Fleet, extra harness.Extra) {
 
 // trustSignersNeverChangesAnchor: --trust-signers only
 // creates a missing anchor; on a node that has one, a different list is
-// refused and the anchor is unchanged (docs/CLI_REFERENCE.md "orama maint push").
+// refused and the anchor is unchanged (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama maint push").
 func trustSignersNeverChangesAnchor(t *testing.T, f *fleet.Fleet, extra harness.Extra) {
 	n := extra.Node
 	before := target(t, n)

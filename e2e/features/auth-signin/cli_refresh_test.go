@@ -146,7 +146,7 @@ func whoamiExit(t testing.TB, cli *oramacli.Runner) oramacli.Result {
 
 // TestAuthRefresh_cliKeepsSessionOnTransientFailure: a 5xx, a 429, a 400 or an
 // unreachable gateway fails only that attempt and leaves the stored refresh
-// token untouched; the next attempt renews it (docs/AUTH.md#signing-in).
+// token untouched; the next attempt renews it (docs/whitepaper/technical-reference/vol1/13-identity.md#the-command-line-client).
 func TestAuthRefresh_cliKeepsSessionOnTransientFailure(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -184,7 +184,7 @@ func TestAuthRefresh_cliKeepsSessionOnTransientFailure(t *testing.T) {
 
 // TestAuthRefresh_cliEndsSessionOnRefusal: only the gateway refusing the
 // refresh token — 401 or 403 — ends the stored session and asks for
-// `orama auth login` (docs/AUTH.md#signing-in).
+// `orama auth login` (docs/whitepaper/technical-reference/vol1/13-identity.md#the-command-line-client).
 func TestAuthRefresh_cliEndsSessionOnRefusal(t *testing.T) {
 	t.Parallel()
 	for _, st := range []int{http.StatusUnauthorized, http.StatusForbidden} {
@@ -226,7 +226,7 @@ func expectSessionEnded(t testing.TB, cli *oramacli.Runner, gatewayURL string) {
 // TestAuthRefresh_parallelCLIsRenewOnce: several CLI processes finding the
 // same expired access token renew it once between them, under the flock on
 // credentials.json.lock; without it all but one would present a spent refresh
-// token and be refused as a replay (docs/AUTH.md#signing-in).
+// token and be refused as a replay (docs/whitepaper/technical-reference/vol1/13-identity.md#the-command-line-client).
 func TestAuthRefresh_parallelCLIsRenewOnce(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)

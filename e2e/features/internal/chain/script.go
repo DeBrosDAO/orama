@@ -76,7 +76,7 @@ flock -w %d 9 || { echo lock timeout >&2; exit 91; }
 
 // feeScript rewrites the fee of $D/u.json: base_fee*gas+delta, or an absolute
 // amount. The base fee is read here, under the key's lock, so it is the one
-// the next block charges unless that block is over half full (docs/CHAIN.md
+// the next block charges unless that block is over half full (docs/whitepaper/technical-reference/vol2/40-economics.md
 // "The base fee (EIP-1559-style)").
 func (c *Chain) feeScript(opts TxOptions) string {
 	base := c.OramadCmd("query", "fees", "base-fee", "--node", c.RPC(), "--output", "json")

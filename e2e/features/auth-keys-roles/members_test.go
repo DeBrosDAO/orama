@@ -18,7 +18,7 @@ import (
 const pathTransfer = pathMembers + "/transfer"
 
 // TestMembers_cliLifecycle drives `orama members` as the operator owning the
-// namespace: list, add with each role, the refusals, remove (docs/AUTH.md#roles).
+// namespace: list, add with each role, the refusals, remove (docs/whitepaper/technical-reference/vol1/14-authorization.md#roles-and-grants).
 func TestMembers_cliLifecycle(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -66,7 +66,7 @@ func TestMembers_cliLifecycle(t *testing.T) {
 
 // TestMembers_removalLandsOnTheNextRequest: a wallet's grant is resolved per
 // request, so taking it away refuses its very next request
-// (docs/AUTH.md#how-long-a-change-takes-to-land).
+// (docs/whitepaper/technical-reference/vol1/14-authorization.md#consistency-and-caching).
 func TestMembers_removalLandsOnTheNextRequest(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -87,7 +87,7 @@ func TestMembers_removalLandsOnTheNextRequest(t *testing.T) {
 // TestMembers_aNewRoleReplacesTheOld: adding a member again with another role
 // changes their role. It used to add a second grant beside the first and the
 // older won, so a developer demoted to reader kept the database
-// (docs/AUTH.md "A member holds one grant").
+// (docs/whitepaper/technical-reference/vol1/14-authorization.md "A member holds one grant").
 func TestMembers_aNewRoleReplacesTheOld(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)

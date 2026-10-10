@@ -25,7 +25,7 @@ const (
 )
 
 // The Orama Tor network is a second, separate Tor network built from upstream
-// Tor code (docs/TOR_NETWORK.md). The node's client above stays on the public
+// Tor code (website/src/docs/operator/tor-network.mdx). The node's client above stays on the public
 // Tor network, because the anon proxy needs public exits.
 const (
 	// TorNetworkFile is the name of the network description (directory

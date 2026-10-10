@@ -43,7 +43,7 @@ rotation, and from then on accepts releases signed under that root
 
 The build is reproducible: with SOURCE_DATE_EPOCH set (a release build sets it to
 the commit's time) two builds of one commit produce the same archive, byte for
-byte. See docs/DEV_DEPLOY.md, "Reproducible builds".
+byte. See docs/whitepaper/technical-reference/vol1/29-build-signing-and-release.md, "Reproducible builds".
 
 The resulting archive can be pushed to nodes with 'orama maint push'.
 

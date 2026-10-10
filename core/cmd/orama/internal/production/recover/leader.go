@@ -29,7 +29,7 @@ type nodeIndex struct {
 //
 // The command required --leader and described it as "the node with the highest
 // commit index", while never computing it. The only guidance anywhere was a
-// hand-rolled curl in NODE_REPLACEMENT.md, and the value decides which copy of
+// hand-rolled curl in website/src/docs/operator/node-replacement.mdx, and the value decides which copy of
 // the cluster's data survives — every other node's is deleted. Asking an
 // operator to work that out under the pressure of a lost quorum, by hand,
 // against six nodes, is how the wrong one gets named.

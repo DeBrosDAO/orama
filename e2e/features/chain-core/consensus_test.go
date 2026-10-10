@@ -15,7 +15,7 @@ const sampledBlocks = 5
 
 // TestConsensus_validatorsAgreeOnEveryBlock: every validator stores the same
 // block hash and app hash at the same heights, for the run's chain id, and
-// none is catching up (docs/CHAIN.md: one CometBFT network; a diverging
+// none is catching up (docs/whitepaper/technical-reference/vol2/37-global-nodes.md: one CometBFT network; a diverging
 // app hash is a consensus failure).
 func TestConsensus_validatorsAgreeOnEveryBlock(t *testing.T) {
 	t.Parallel()

@@ -15,7 +15,7 @@ How to build and test Orama from a checkout. Everything lives in one repository.
 | `os/` | OramaOS: agent and Buildroot image | Go, Buildroot |
 | `website/` | The website and these docs | TypeScript (pnpm) |
 | `e2e/` | The fleet end-to-end suite | Go |
-| `docs/` | Engineering docs (architecture, CLI reference, runbooks) | Markdown |
+| `docs/` | The whitepaper and the technical reference (`docs/whitepaper/`); every other doc is in `website/src/docs/` | Markdown |
 | `contracts/` | Request and response fixtures shared by Go and TypeScript tests | JSON |
 
 ## Prerequisites
@@ -25,7 +25,7 @@ How to build and test Orama from a checkout. Everything lives in one repository.
 | Go | 1.27.2 or newer | Everything in Go |
 | Node.js | 22.12 or newer (the repo pins 24 in `.nvmrc`) | The SDK and the website |
 | pnpm | Current | TypeScript packages |
-| Zig | 0.15.x (the minor release `vault/build.zig.zon` names; `ORAMA_ZIG` overrides) | `orama maint build` (it builds the vault), the vault |
+| Zig | 0.15.x (the minor release `vault/build.zig.zon` names; `ORAMA_ZIG` overrides) | `orama maint build` (it cross-compiles the vault, and the gateway with cgo through `zig cc`, static musl), the vault |
 | git, make | Current | Version stamps, the Makefiles |
 
 ```bash
@@ -36,7 +36,23 @@ go version        # 1.27.2 or newer
 zig version       # 0.15.x
 ```
 
-For a real cluster you also need [RootWallet](/docs/rootwallet/install) for signing and SSH keys.
+Zig is needed for `orama maint build`, not for running the unit tests: the gateway links `mattn/go-sqlite3` for namespace SQLite databases, which does not work in a `CGO_ENABLED=0` build. macOS or Linux works.
+
+## RootWallet and the deploy commands
+
+The RootWallet desktop app, open and unlocked, is required by every command in [Release and rollout](/docs/contributor/deployment) that reaches a node.
+
+There are no SSH keys on disk. Every command that reaches a node (`orama maint push`, `orama maint rollout`, `orama node setup`, `orama status report`, `orama ssh`) asks the RootWallet desktop app's agent for a wallet-derived key over a Unix socket at `~/.rootwallet/agent.sock`, writes it to a `0600` temp file for the length of the command, and wipes it afterwards. `RW_AGENT_SOCK` overrides the path.
+
+**Before a rollout: open the app and unlock it.** Then expect this:
+
+- **First run after a rebuild, one approval prompt.** Approval is keyed on the hash of the calling binary, so every `make build` produces a new `orama` that RootWallet has not seen before and asks about once.
+- **One unlock for the whole run.** The agent locks itself after 30 minutes of no traffic, and a six-node rolling upgrade spends far longer than that in SSH sessions the agent never sees. The CLI touches the agent every five minutes for as long as it holds keys, so the window stays open until the command finishes and closes immediately after.
+- **A command that seems to hang is usually a prompt.** Look at the desktop app. A first run against a locked wallet waits up to two minutes for approval and two more for the unlock before it gives up.
+
+If a command fails with a RootWallet error, the message says what to do; the codes are listed in [Troubleshooting](/docs/operator/troubleshooting#rootwallet-agent-locked-waiting-or-unreachable). For a real cluster you also need [RootWallet](/docs/rootwallet/install) installed.
+
+Every command and flag the CLI defines is in the [CLI overview](/docs/developer/cli-overview) and its generated pages, which are rendered from the command tree and checked by a test, so they cannot drift from the code. This page covers the workflows.
 
 ## Build and test
 
@@ -52,11 +68,11 @@ make lint
 
 | Task | Command |
 |---|---|
-| All unit tests | `make -C core test` (the root `make test` also runs the e2e coverage gate) |
+| All unit tests | `make -C core test`. The root `make test` is the full local gate: core, Caddy modules, the SDK unit tests (`make sdk-test`; `cd sdk && pnpm install --frozen-lockfile` first), the fleet-e2e lint and coverage gate, and the whitepaper checks |
 | One package | `cd core && go test ./pkg/path/to/package/...` |
 | One test | `go test ./pkg/path/... -run TestName` |
 | Race detector | `go test -race ./pkg/path/...` |
-| Regenerate the CLI reference | `make -C core docs` (a test fails if `docs/CLI_REFERENCE.md` drifts from the command tree) |
+| Regenerate the CLI reference | `make -C core docs` (a test fails if whitepaper appendix D, `docs/whitepaper/technical-reference/appendices/d-cli-reference.md`, drifts from the command tree) |
 | The chain | `cd chain && make build && make test` (see [Running a chain node](/docs/blockchain/running)) |
 | The SDK | `cd sdk && pnpm install && pnpm build && pnpm test` |
 | The vault | `cd vault && zig build && zig build test` |
@@ -69,8 +85,8 @@ make lint
 There is no local single-process mode that skips systemd. To exercise node code, use a sandbox ([Sandbox clusters](/docs/contributor/sandbox)) or the one-VPS evaluation path ([One-VPS evaluation](/docs/operator/one-vps)).
 
 ```bash
-orama env add dev https://cluster.example.com
-orama env use dev
+orama network add dev https://cluster.example.com
+orama network use dev
 orama auth login
 ```
 

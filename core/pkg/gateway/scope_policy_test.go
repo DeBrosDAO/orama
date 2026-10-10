@@ -485,7 +485,7 @@ func TestCredentialStaleness_isTheCachesTTL(t *testing.T) {
 	}
 }
 
-// A lobby session holds nothing (docs/AUTH.md, "The lobby"). It used to get
+// A lobby session holds nothing (docs/whitepaper/technical-reference/vol1/14-authorization.md, "The lobby"). It used to get
 // the data plane like any wallet session, so every signed-in wallet shared the
 // index namespace's cache, pub/sub and storage (stagenet e2e, 2026-09-30).
 func TestCallerPermissions_lobbySessionHoldsNothing(t *testing.T) {

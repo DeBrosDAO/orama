@@ -18,11 +18,19 @@ orama maint rollout --env <env> --yes                 # build + push + upgrade i
 orama maint rollout --env <env> --no-build --archive <path> --yes
 ```
 
+A network whose release channel is published (stagenet follows `nightly`) is upgraded with `orama upgrade` instead: it takes the newest signed release, stages it on every node and rolls it one node at a time ([Upgrades](/docs/operator/upgrades)). The commands above are for a build of your own. `--archive` is required for `push`: the newest archive in `/tmp` may be another checkout's build.
+
+Upgrading from 0.122.x the first time: see [First upgrade from 0.122.x](/docs/operator/upgrade-notes#first-upgrade-from-0122x).
+
 RootWallet must be open and unlocked for the whole run. The first run after a rebuild asks you to approve the new `orama` binary once (approval is keyed on the binary's hash).
 
 ## Reproducible builds
 
 Two `orama maint build` runs of one commit produce the same archive byte for byte, so the people who sign a release can each rebuild it and compare hashes before they sign. A release build sets the date from the commit: `export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)`. Go binaries are built with `-trimpath`, `-buildvcs=false`, a stripped linker and `-mod=readonly`. The third-party programs (Olric, IPFS Cluster, Caddy) are built from modules checked in to the repository, each with a `go.sum`, and CoreDNS, Kubo and RQLite are refused unless they match a pinned commit or SHA-256. The archive lists its entries in a fixed order with fixed owners, modes and times. A change to a pinned program means changing its version constant and its module together; a test holds the two. CI builds each published release's archive twice per architecture, fails if the two differ, and attaches the archive and its SHA-256 to the release. CI holds no signing key.
+
+What else fixes the bytes: the build date is `SOURCE_DATE_EPOCH` (seconds since the epoch) when it is set, else the time of the build, and a value that is not a count of seconds fails the build; the date goes into the manifest and the binaries' version strings. The vault is built with `zig build-exe -fstrip`, because unstripped it holds the path of zig's per-build cache directory. The archive's entries carry the build date as their time, root as owner and mode 0755 (executable files and directories) or 0644, and its gzip header names nothing and carries no time. `GOFLAGS`, `GOSUMDB`, `GONOSUMDB`, `GONOSUMCHECK`, `GOPRIVATE`, `GONOPROXY` and `GOINSECURE` are removed from the environment of every `go` command the build runs, so the environment cannot switch verification off. CoreDNS is cloned at its tag and refused unless the checkout is the commit pinned in `constants.CoreDNSCommit`; its own `go.sum` and `go.mod` decide its dependencies, so nothing is upgraded to `@latest`. The version each module requires is the constant in `core/pkg/constants/versions.go`, and the digests of Kubo and RQLite are in `constants/release_digests.go`.
+
+To bump a third-party program, change its constant, then in its module directory run `go get -tool <package>@<version>` (in `caddy/`, `go get github.com/caddyserver/caddy/v2@v<version>`) and commit the `go.mod` and `go.sum`. IPFS Cluster v1.1.6 requires a `cockroachdb/swiss` that does not compile with Go 1.27; its module pins a newer one, which is why `core/thirdparty/ipfs-cluster/go.mod` lists it. Beyond the pinned program, a module lists the fixed versions of the libraries that `govulncheck` reports reached (`pion/dtls`, `quic-go`, `webtransport-go` in IPFS Cluster's; `golang.org/x/net`, `grpc`, OpenTelemetry in Caddy's): the e2e `scanners` test runs `govulncheck` over `caddy/` and over each pinned program's main package, so a new advisory fails the gate until the module is bumped or the advisory is accepted with a reason in `e2e/features/scanners/govulncheck-accepted.yaml`.
 
 ## Releases, TUF and auto-update
 
@@ -73,14 +81,14 @@ See [Upgrades](/docs/operator/upgrades#automatic-updates) and [Build and sign](/
 - Unit tests and `make test` (including the coverage gate) pass.
 - Docs updated for any behaviour change, in the same change.
 - If the change touches inter-node coordination, secrets, namespaces or deployments, read the upgrade page's **mixed-version windows**: pause namespace and deployment create and delete during the roll, and do not add a node until every cluster you are upgrading is on the same version.
-- If the change adds a migration, it must be applied before the gateway that requires it starts; migrations take a cluster-wide lock, and the gateway refuses to start if its required schema is not applied (`orama node schema status`).
+- If the change adds a migration, it must be applied before the gateway that requires it starts; migrations take a cluster-wide lock, and the gateway refuses to start if its required schema is not applied (`orama maint node schema status`).
 - RQLite v10 is one way. Take a registry backup first.
 
 ## Verification between nodes
 
 ```bash
-orama monitor report --env <env> --node <ip>     # that node: services, RQLite state, WireGuard peers
-orama monitor report --env <env>                 # the cluster: leader stable, quorum ok, mesh ok, indices in sync
+orama status report --env <env> --node <ip>     # that node: services, RQLite state, WireGuard peers
+orama status report --env <env>                 # the cluster: leader stable, quorum ok, mesh ok, indices in sync
 ```
 
 Proceed only when both pass. `orama maint rollout` gates on the same signals itself and stops the moment a node fails to rejoin.
@@ -96,6 +104,56 @@ Proceed only when both pass. `orama maint rollout` gates on the same signals its
 ## Environments
 
 An environment is just a name for a cluster in your CLI. Promotion is rolling the same archive to the next one (`orama maint push --env <next> --archive <same path>`), which the nodes verify against their own trust anchor. Pushing the same archive to several clusters works only if each trusts the signer.
+
+## Stagenet: the chain and the global services
+
+The stagenet is five machines (`mew`, `mewtwo`, `gengar`, `magicarp`, `froakie`; ssh aliases from `~/.ssh/config`). `orama setup --create-network` makes it: it installs the signed release and the cluster node on all five, makes each machine's chain keys, builds the genesis from all five, starts the chains, registers the operator and the nodes, and writes `networks/stagenet/` for the maintainer to publish ([Create a network](/docs/operator/setup#create-a-network)). The global services run beside the cluster node, co-located in the `orama-global` network namespace ([Run a global node](/docs/blockchain/run-a-global-node#sharing-a-machine-with-a-cluster-node)).
+
+| Node | Public IP | WG overlay | Login | Provider (ASN) | OS / systemd | Chain id |
+|---|---|---|---|---|---|---|
+| `mew` | 57.129.166.16 | 10.0.0.1 | `ubuntu` | OVH (16276) | Ubuntu 26.04, systemd 259 with BPF_FRAMEWORK | `founder` |
+| `mewtwo` | 57.129.166.17 | 10.0.0.2 | `ubuntu` | OVH (16276) | Ubuntu 26.04, systemd 259 with BPF_FRAMEWORK | `founder-2` |
+| `gengar` | 161.97.184.199 | 10.0.0.3 | `root` | Contabo (51167) | Ubuntu 24.04, systemd 255 without BPF_FRAMEWORK | `founder-3` |
+| `magicarp` | 161.97.184.202 | 10.0.0.4 | `root` | Contabo (51167) | Ubuntu 24.04, systemd 255 without BPF_FRAMEWORK | `founder-4` |
+| `froakie` | 161.97.151.255 | 10.0.0.5 | `root` | Contabo (51167) | Ubuntu 24.04, systemd 255 without BPF_FRAMEWORK | `founder-5` |
+
+All five are chain validators: the bootstrap committee is the five of them. The last column is the node's id on the chain when the addresses are given to `orama setup` in this order with the default `--name founder` (not `seed`: the chain keeps `seed<N>` for the labels the zone publishes itself). Without BPF_FRAMEWORK systemd accepts `SocketBindDeny` but does not enforce it, so the deployment sandbox's bind check refuses a bind only on mew and mewtwo.
+
+The five are made with one command (every reset of the stagenet gets a new chain id, `orama-stagenet-N`):
+
+```bash
+orama setup --create-network stagenet --chain-id orama-stagenet-N --release-root ./release-root.json --yes \
+  --ip 57.129.166.16 --ip 57.129.166.17 --ip 161.97.184.199 --ip 161.97.184.202 --ip 161.97.151.255 \
+  --host-key 57.129.166.16=SHA256:... --host-key 57.129.166.17=SHA256:... --host-key 161.97.184.199=SHA256:... \
+  --host-key 161.97.184.202=SHA256:... --host-key 161.97.151.255=SHA256:...
+```
+
+`chain/scripts/stagenet/deploy.sh` is what is left of the old deploy script: the maintenance of the stagenet that runs. It refuses to run for a `CHAIN_ID` that does not contain `-stagenet-` or `-devnet-`, and it never starts, stops or reconfigures a cluster service.
+
+```bash
+cd chain/scripts/stagenet
+
+./deploy.sh reset      # remove any earlier global install (also the legacy direct-unit one) and its state; do it before the next creation
+./deploy.sh status
+./deploy.sh faucet     # once, after the creation: the public faucet on every node (key, funding, node.yaml, one restart at a time)
+./deploy.sh invariants
+./deploy.sh gen-shielded                      # optional: the shielded wallet scenario for this chain
+SHIELDED_SCENARIO=../../build/stagenet-shielded-scenario.json ./deploy.sh smoke   # gen-shielded prints this path
+```
+
+`reset` removes the `orama-global-*` units and state, the namespace, veth and nftables rulesets, the ufw rules tagged `orama-global`, puts `net.ipv4.ip_forward` back to the value the install recorded in `/var/lib/orama-global/netns-prior-ip-forward`, and removes the two lines (`role: both`, `global_netns`) the install added to the cluster's `/opt/orama/.orama/preferences.yaml`. `smoke` prints PASS, FAIL or SKIP for each check and exits non-zero if any failed. A SKIP names an environmental cause the script detected in the chain's state and is never used to hide a failure; the archive and storage checks SKIP on a network whose nodes run no archiver, which `orama setup` does not install.
+
+`faucet` (once, on a created network) switches the public faucet on node by node. On each node it runs `orama maint faucet init`, which makes the key its gateway signs `POST /v1/chain/faucet` drips with; funds that account with `FAUCET_FUND_NORAMA` through `orama chain faucet --env $ORAMA_ENV`, a drip signed on the node by its seat key (a genesis account is not an option: the chain refuses a genesis that does not start at zero supply); writes `chain.faucet.enabled: true` into the node's node.yaml (`remote/enable-faucet.sh`); and restarts the node with `orama node restart`, whose health gate decides when the next node may go (`docs/whitepaper/technical-reference/vol2/39-chain-architecture.md`, "Local and stagenet scripts"). The genesis `orama setup --create-network` builds sets the faucet's largest drip to 10,000 ORAMA, since one `orama setup` is funded by one drip and needs the validator's 1,000 ORAMA self-bond on top of its bonds and fees. A key, an account that already holds its funds and a node.yaml that already has the block are left as they are, so the command can be run again.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `CHAIN_ID` | `orama-stagenet-1` | must contain `-stagenet-` or `-devnet-` |
+| `VOTE_EXTENSIONS_ENABLE_HEIGHT` | `2` | the height vote extensions turn on at; `orama setup` writes 2 into the genesis it builds and `smoke` checks it |
+| `ORAMA_ENV` | `stagenet` | the CLI environment of this network (the one `orama setup` recorded, named after the network); `deploy.sh faucet` funds the faucet accounts through it |
+| `FAUCET_FUND_NORAMA` | `1000000000000` | what `deploy.sh faucet` gives each node's faucet account for the transaction fees of the drips its gateway signs (1,000 ORAMA) |
+| `CA_FILE` | `le-roots.pem in the operator's handoff directory` | CA bundle that signs the gateway's certificate (Let's Encrypt production's ISRG roots: stagenet serves production certificates) |
+| `GATEWAY_URL` | `https://stagenet.dbrsteting.bid` | the gateway `smoke` reads through |
+| `SHIELDED_SCENARIO` | unset | scenario JSON from `gen-shielded`; without it the shielded check is a SKIP |
 
 ## Test clusters
 

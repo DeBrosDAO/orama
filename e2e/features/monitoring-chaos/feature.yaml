@@ -20,5 +20,5 @@ covers:
   units:
     - orama-namespace-gateway@.service
   claims:
-    - "docs/MONITORING.md#alert-severities: clock skew beyond 5s warns and beyond 60s is critical; a failed unit, a stopped service and UFW inactive are alerted"
-    - "docs/MONITORING.md#in-cluster-failure-detection-the-ring-monitor: an unresponsive node is suspect after its heartbeat goes stale plus 3 misses and recovers; a restart of the cluster gateway raises nothing"
+    - "website/src/docs/operator/monitoring.mdx#alert-severities: clock skew beyond 5s warns and beyond 60s is critical; a failed unit, a stopped service and UFW inactive are alerted"
+    - "website/src/docs/operator/monitoring.mdx#in-cluster-failure-detection-the-ring-monitor: an unresponsive node is suspect after its heartbeat goes stale plus 3 misses and recovers; a restart of the cluster gateway raises nothing"

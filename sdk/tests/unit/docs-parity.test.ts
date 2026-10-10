@@ -16,8 +16,10 @@ import * as sdk from '../../src/index';
  */
 
 const repoRoot = resolve(__dirname, '../../..');
+/** The SDK reference page on the website (MDX). */
+const SDK_REFERENCE = 'website/src/docs/developer/sdk-reference.mdx';
 const docs = [
-  resolve(repoRoot, 'docs/TS_SDK.md'),
+  resolve(repoRoot, SDK_REFERENCE),
   resolve(repoRoot, 'sdk/README.md'),
   resolve(repoRoot, 'sdk/QUICKSTART.md'),
 ];
@@ -90,7 +92,7 @@ describe('the documentation matches the client', () => {
 });
 
 describe('the documented defaults match the code', () => {
-  const tsSdk = readFileSync(resolve(repoRoot, 'docs/TS_SDK.md'), 'utf8');
+  const tsSdk = readFileSync(resolve(repoRoot, SDK_REFERENCE), 'utf8');
   const http = readFileSync(resolve(repoRoot, 'sdk/src/core/http.ts'), 'utf8');
 
   /** The `??` default for a named HttpClient config field. */
@@ -99,28 +101,33 @@ describe('the documented defaults match the code', () => {
     return match?.[1].trim();
   }
 
+  /** The options-table row `| name | default | meaning |`. */
+  function configRow(field: string, value: string): RegExp {
+    return new RegExp(`\\| \`${field}\` \\| \`${value}\` \\|`);
+  }
+
   it('documents the real request timeout', () => {
     expect(defaultFor('timeout')).toBe('60000');
-    expect(tsSdk).toContain('| `timeout` | `number` | `60000` |');
+    expect(tsSdk).toMatch(configRow('timeout', '60000'));
   });
 
   it('documents the real retry count', () => {
     expect(defaultFor('maxRetries')).toBe('3');
-    expect(tsSdk).toContain('| `maxRetries` | `number` | `3` |');
+    expect(tsSdk).toMatch(configRow('maxRetries', '3'));
   });
 
   it('documents the real retry delay', () => {
     expect(defaultFor('retryDelayMs')).toBe('1000');
-    expect(tsSdk).toContain('| `retryDelayMs` | `number` | `1000` |');
+    expect(tsSdk).toMatch(configRow('retryDelayMs', '1000'));
   });
 });
 
 describe('the documented grants match the code', () => {
-  const tsSdk = readFileSync(resolve(repoRoot, 'docs/TS_SDK.md'), 'utf8');
+  const tsSdk = readFileSync(resolve(repoRoot, SDK_REFERENCE), 'utf8');
 
   it('lists every grant the SDK knows', () => {
     for (const scope of sdk.SCOPES) {
-      expect(tsSdk, `TS_SDK.md does not mention the "${scope}" grant`).toContain(`\`${scope}\``);
+      expect(tsSdk, `sdk-reference.mdx does not mention the "${scope}" grant`).toContain(`\`${scope}\``);
     }
   });
 });

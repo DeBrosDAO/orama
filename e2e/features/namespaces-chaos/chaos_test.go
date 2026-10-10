@@ -28,7 +28,7 @@ const (
 	// plus the probe in flight and NXDOMAIN/answer caching (30s).
 	dnsFlipBudget = 4 * time.Minute
 	// reconcileBudget: the tenant reconciler sweeps every 60s
-	// (docs/ARCHITECTURE.md "The tenant plane converges"); two sweeps and a
+	// (website/src/docs/contributor/architecture-reference.mdx "The tenant plane converges"); two sweeps and a
 	// restart.
 	reconcileBudget = 3 * time.Minute
 	// driftedPartitions is a partitionCount the spawner never writes (it
@@ -56,7 +56,7 @@ func advertised(t testing.TB, f *fleet.Fleet, host, ip string, want bool) func()
 // TestNamespaceHealth_dnsWithdrawAndRestore: a node whose namespace gateway
 // hangs withdraws itself from ns-<name> after three failed probes, and comes
 // back after three healthy ones once the gateway answers again
-// (docs/ARCHITECTURE.md; core/pkg/gateway/namespace_health.go).
+// (website/src/docs/contributor/architecture-reference.mdx; core/pkg/gateway/namespace_health.go).
 func TestNamespaceHealth_dnsWithdrawAndRestore(t *testing.T) {
 	f := harness.Fleet(t)
 	infra.HealthyAround(t)
@@ -150,7 +150,7 @@ var listenLine = regexp.MustCompile(`(?m)^listen_addr:\s*(\S+)\s*$`)
 // TestNamespaceReconciler_rewritesDriftedConfig: the reconciler rewrites a
 // gateway config that drifted and restarts the gateway onto it; it rewrites a
 // drifted Olric config without restarting Olric, which is clustered and
-// stateful (docs/ARCHITECTURE.md "The tenant plane converges").
+// stateful (website/src/docs/contributor/architecture-reference.mdx "The tenant plane converges").
 func TestNamespaceReconciler_rewritesDriftedConfig(t *testing.T) {
 	f := harness.Fleet(t)
 	infra.HealthyAround(t)

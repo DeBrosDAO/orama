@@ -41,7 +41,7 @@ func modulesDeclaringInvariants(t *testing.T) []string {
 }
 
 // TestInvariants_everyModuleAnswersOnEveryValidator: every module that
-// declares an Invariants query (docs/SECURITY_PLAYBOOKS.md: emission, fees,
+// declares an Invariants query (docs/whitepaper/technical-reference/vol2/39-chain-architecture.md: emission, fees,
 // storage, nodes, relay, houses, token, market, power, shielded) is the one
 // list every chain package's steps end with, answers on every validator, and
 // holds. A module that gains an Invariants query and is not added to the

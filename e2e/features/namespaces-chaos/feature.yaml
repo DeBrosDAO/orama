@@ -20,5 +20,5 @@ covers:
     - orama-namespace-olric@.service
     - orama-namespace-rqlite@.service
   claims:
-    - "docs/ARCHITECTURE.md: a node withdraws itself from a namespace's DNS after three failed probes and returns after three healthy ones; the last record is never withdrawn"
-    - "docs/ARCHITECTURE.md#the-tenant-plane-converges: the reconciler starts missing services and rewrites drifted configs; the gateway is restarted onto its config, Olric is not"
+    - "website/src/docs/contributor/architecture-reference.mdx: a node withdraws itself from a namespace's DNS after three failed probes and returns after three healthy ones; the last record is never withdrawn"
+    - "website/src/docs/contributor/architecture-reference.mdx#node-process-model: the reconciler starts missing services and rewrites drifted configs; the gateway is restarted onto its config, Olric is not"

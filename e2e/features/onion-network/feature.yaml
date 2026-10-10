@@ -1,6 +1,6 @@
 # Stage 8, track E6 and F9 of the Open Network plan: the `orama maint vpn` client and
 # onion transaction submission against an Orama Tor network
-# (docs/TOR_NETWORK.md). The refusals need no network: a public network is
+# (website/src/docs/operator/tor-network.mdx). The refusals need no network: a public network is
 # not joined, a missing tor is an error, a network that cannot be joined means
 # the transaction is not sent (and nothing goes to the clearnet). The tests
 # that need a live private Tor network (the stagenet one) read its network file
@@ -28,9 +28,9 @@ covers:
     - orama maint vpn up
     - orama maint vpn check
   claims:
-    - "docs/TOR_NETWORK.md#the-network-file: a network file that is not marked private is refused (the public network is not launched), whether it is named by the flag or by ORAMA_ONION_NETWORK"
-    - "docs/TOR_NETWORK.md#the-client-orama-vpn: orama maint vpn up exits with an error when tor stops; nothing is routed around the network"
-    - "docs/TOR_NETWORK.md#onion-transaction-submission: a network that cannot be joined returns the error and the transaction is not sent"
-    - "docs/TOR_NETWORK.md#onion-transaction-submission: --node with --onion-network is a usage error"
-    - "docs/TOR_NETWORK.md#the-client-orama-vpn: orama maint vpn check reads an account through a validator onion service's tx gate over the network (needs ORAMA_ONION_NETWORK)"
-    - "docs/TOR_NETWORK.md#onion-transaction-submission: the account read and the broadcast go over the validator onion service (needs ORAMA_ONION_NETWORK)"
+    - "website/src/docs/operator/tor-network.mdx#the-network-file: a network file that is not marked private is refused (the public network is not launched), whether it is named by the flag or by ORAMA_ONION_NETWORK"
+    - "website/src/docs/operator/tor-network.mdx#the-client-orama-vpn: orama maint vpn up exits with an error when tor stops; nothing is routed around the network"
+    - "website/src/docs/operator/tor-network.mdx#onion-transaction-submission: a network that cannot be joined returns the error and the transaction is not sent"
+    - "website/src/docs/operator/tor-network.mdx#onion-transaction-submission: --node with --onion-network is a usage error"
+    - "website/src/docs/operator/tor-network.mdx#the-client-orama-vpn: orama maint vpn check reads an account through a validator onion service's tx gate over the network (needs ORAMA_ONION_NETWORK)"
+    - "website/src/docs/operator/tor-network.mdx#onion-transaction-submission: the account read and the broadcast go over the validator onion service (needs ORAMA_ONION_NETWORK)"

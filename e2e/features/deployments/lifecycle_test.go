@@ -21,7 +21,7 @@ const deployTypeGo = "go-backend"
 // TestDeployLifecycle_updateRollbackVersions: an update bumps the version and
 // serves the new build; versions lists both; rollback serves the old build
 // again; list, get, logs, stats and events describe the app; delete removes it
-// everywhere (docs/CLI_REFERENCE.md "orama app", "orama deploy").
+// everywhere (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama app", "orama deploy").
 func TestDeployLifecycle_updateRollbackVersions(t *testing.T) {
 	t.Parallel()
 	tn := newTenant(t)

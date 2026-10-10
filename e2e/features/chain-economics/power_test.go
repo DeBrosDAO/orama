@@ -36,7 +36,7 @@ type powerParams struct {
 }
 
 // TestPower_paramsAreTheDocumentedDefaults: x/power runs with the documented
-// genesis defaults (docs/CHAIN.md "x/power"; x/power/types/params.go), with
+// genesis defaults (docs/whitepaper/technical-reference/vol2/39-chain-architecture.md "x/power"; x/power/types/params.go), with
 // min_committee_size lowered to the run's committee (chain-deploy.sh
 // --min-committee-size).
 func TestPower_paramsAreTheDocumentedDefaults(t *testing.T) {
@@ -207,7 +207,7 @@ type lambdaView struct {
 // hand-over gate it stays at or under pre_gate_lambda_cap (0.95); it is
 // recomputed only at an epoch close (last_updated_epoch never ahead of the
 // current epoch); the cap is the normal 5% (500 bps) with fewer than 60
-// validators (docs/CHAIN.md "The power formula").
+// validators (docs/whitepaper/technical-reference/vol2/39-chain-architecture.md "The power formula").
 func TestPower_lambdaIsMonotonicAndCapped(t *testing.T) {
 	t.Parallel()
 	c := chain.New(t)

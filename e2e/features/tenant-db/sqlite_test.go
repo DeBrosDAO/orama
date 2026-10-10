@@ -17,7 +17,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/ns"
 )
 
-// Per-application SQLite routes (docs/API_SURFACE.md "Application databases");
+// Per-application SQLite routes (docs/whitepaper/technical-reference/appendices/i-api-surface.md "Application databases");
 // shapes are core/pkg/gateway/handlers/sqlite.
 const (
 	pathSQLCreate  = "/v1/db/sqlite/create"
@@ -27,7 +27,7 @@ const (
 	pathSQLBackup  = "/v1/db/sqlite/backup"
 	pathSQLBackups = "/v1/db/sqlite/backups"
 	// sqliteBase is where a node keeps tenant databases:
-	// <oramaDir>/data/sqlite/<ns>/<db>.db (docs/ARCHITECTURE.md "What a gateway writes").
+	// <oramaDir>/data/sqlite/<ns>/<db>.db (website/src/docs/contributor/architecture-reference.mdx "What a gateway writes").
 	sqliteBase = "/opt/orama/.orama/data/sqlite"
 	// cleanupBudget bounds one cleanup call.
 	cleanupBudget = time.Minute

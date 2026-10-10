@@ -10,7 +10,7 @@ import (
 
 // Two builds of one release must produce the same archive, byte for byte, so
 // that the people who sign a release can each rebuild it and compare hashes
-// before they sign (docs/DEV_DEPLOY.md, "Reproducible builds"). What would
+// before they sign (docs/whitepaper/technical-reference/vol1/29-build-signing-and-release.md, "Reproducible builds"). What would
 // differ between two builds is fixed here: the build date, the Go flags that
 // leak paths and VCS state into a binary, the environment variables that
 // switch off module checksum verification, and the tar and gzip headers.

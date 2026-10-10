@@ -20,7 +20,7 @@ import (
 	orerrors "github.com/DeBrosOfficial/network/pkg/errors"
 )
 
-// Pin states the SDK reports (docs/GO_CLIENT_SDK.md "Check Pin Status").
+// Pin states the SDK reports (website/src/docs/developer/go-sdk.mdx "Check Pin Status").
 var pinStates = map[string]bool{"pinned": true, "pinning": true, "queued": true, "unpinned": true, "error": true}
 
 // payloadBytes spans several IPFS chunks' worth of random bytes.
@@ -51,7 +51,7 @@ func getAll(t testing.TB, c client.NetworkClient, cid string) []byte {
 	return data
 }
 
-// TestGoClientStorage_uploadGetPinStatusUnpin walks docs/GO_CLIENT_SDK.md
+// TestGoClientStorage_uploadGetPinStatusUnpin walks website/src/docs/developer/go-sdk.mdx
 // "Storage Client" end to end as the namespace owner: Upload returns a CID
 // and size, Get returns the same bytes, Pin and Status report a documented
 // state that becomes pinned, and Unpin succeeds.
@@ -119,7 +119,7 @@ func TestGoClientStorage_emptyAndUnicodeNames(t *testing.T) {
 
 // TestGoClientStorage_garbageTokenIsTypedUnauthorized: "All client methods
 // return typed errors" and errors.IsUnauthorized recognises an auth failure
-// (docs/GO_CLIENT_SDK.md "Error Handling").
+// (website/src/docs/developer/go-sdk.mdx "Error Handling").
 func TestGoClientStorage_garbageTokenIsTypedUnauthorized(t *testing.T) {
 	t.Parallel()
 	n := tenancy.Namespace(t, harness.Fleet(t), ns.Options{})
@@ -145,7 +145,7 @@ func forgedJWT(namespace string) string {
 // TestGoClientStorage_runtimeKeyAloneRefused: storage requires a genuine
 // logged-in user; an app-runtime API key alone reaches none of it
 // (core/pkg/gateway/route_policy.go "storage, webrtc and proxy additionally
-// require a genuine logged-in user"). docs/GO_CLIENT_SDK.md's Quick Start
+// require a genuine logged-in user"). website/src/docs/developer/go-sdk.mdx's Quick Start
 // configures only an API key for its upload, which this contradicts.
 func TestGoClientStorage_runtimeKeyAloneRefused(t *testing.T) {
 	t.Parallel()

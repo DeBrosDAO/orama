@@ -17,7 +17,7 @@ import (
 
 // Sandbox nodes get their certificates from Let's Encrypt staging
 // (sandboxACMECA), which no system trusts. The CLI trusts staging's roots for
-// the sandbox domain only, through the environment's CA file (docs/SANDBOX.md).
+// the sandbox domain only, through the environment's CA file (website/src/docs/contributor/sandbox.mdx).
 //
 // The roots ship in the binary rather than being fetched when a sandbox is
 // created: nothing on the network can then change what is trusted, and create

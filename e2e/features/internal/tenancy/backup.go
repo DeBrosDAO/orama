@@ -16,7 +16,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/nsbackup"
 )
 
-// Backup routes (docs/API_SURFACE.md "Namespace management"); shapes are
+// Backup routes (docs/whitepaper/technical-reference/appendices/i-api-surface.md "Namespace management"); shapes are
 // core/pkg/gateway/handlers/backup and the frame format core/pkg/nsbackup.
 // namespace-backup and namespace-backup-chaos share them.
 const (

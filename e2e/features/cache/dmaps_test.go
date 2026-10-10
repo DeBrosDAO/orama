@@ -53,7 +53,7 @@ func TestCache_manyDMapsStayApart(t *testing.T) {
 
 // TestCache_keyLimitSharesBytesWithTheDMapName: a dmap name and its key share
 // Olric's 255 bytes, so the longest key shrinks with the name; the 413 states
-// the limit that applies (docs/TS_SDK.md "Cache").
+// the limit that applies (website/src/docs/developer/sdk-reference.mdx "Cache").
 func TestCache_keyLimitSharesBytesWithTheDMapName(t *testing.T) {
 	t.Parallel()
 	n := tenancy.Namespace(t, harness.Fleet(t), ns.Options{})

@@ -25,8 +25,8 @@ type whoami struct {
 // its token at /v1/auth/renew with the token it holds, and the renewed token
 // is accepted by the gateway and keeps the app working. Taking the grant down
 // to reader reaches the app on redeploy and its data calls are refused;
-// granting runtime again restores it (docs/DEPLOYMENT_GUIDE.md "Your app's
-// own credential", docs/AUTH.md "A workload's identity").
+// granting runtime again restores it (website/src/docs/developer/deployments.mdx "Your app's
+// own credential", docs/whitepaper/technical-reference/vol1/12-gateway-architecture.md "A workload's identity").
 func TestReferenceNodeAPI_workloadIdentityRenewsAndGrantsEnforced(t *testing.T) {
 	t.Parallel()
 	tn, u := deployTodoAPI(t)
@@ -89,7 +89,7 @@ func redeployAs(t *testing.T, tn *realistic.Tenant, u, role, version string) {
 // with. An app deployed before it is granted anything is refused (403, it is
 // known), the runtime grant reaches it on every node within the grant cache's
 // seconds with no redeploy and no renewal, and taking it down to reader refuses
-// it again the same way (docs/AUTH.md "A workload's identity").
+// it again the same way (docs/whitepaper/technical-reference/vol1/14-authorization.md "A workload's identity").
 func TestReferenceNodeAPI_grantFollowsARunningAppWithoutARedeploy(t *testing.T) {
 	t.Parallel()
 	realistic.RequireTinyGo(t)

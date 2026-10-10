@@ -21,8 +21,8 @@ const statusCSP = "default-src 'none'; script-src 'self'; style-src 'self'; " +
 // TestStatusPage_htmlForBrowsersJSONForTheRest: /status is the page to a
 // browser and the /v1/status JSON to anything else, with Vary: Accept so a
 // shared cache keeps them apart; the page loads only its own script and
-// stylesheet under an exact CSP (docs/MONITORING.md "Public status page";
-// docs/API_SURFACE.md "/status").
+// stylesheet under an exact CSP (website/src/docs/operator/monitoring.mdx "Public status page";
+// docs/whitepaper/technical-reference/appendices/i-api-surface.md "/status").
 func TestStatusPage_htmlForBrowsersJSONForTheRest(t *testing.T) {
 	t.Parallel()
 	c := harness.GW(t)
@@ -90,7 +90,7 @@ func TestStatusPage_assetsServedUnderTheCSP(t *testing.T) {
 
 // TestStatusPage_subdomainStatusIsTheDeployments: only the bare base domain
 // serves the platform's page; on any other name /status belongs to that
-// name's deployment, and with none it is not found (docs/MONITORING.md
+// name's deployment, and with none it is not found (website/src/docs/operator/monitoring.mdx
 // "Public status page").
 func TestStatusPage_subdomainStatusIsTheDeployments(t *testing.T) {
 	t.Parallel()

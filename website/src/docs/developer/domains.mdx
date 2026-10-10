@@ -18,7 +18,7 @@ myapp-f3o4if.cluster.example.com
 
 The random suffix ensures uniqueness across all namespaces. You can also specify a custom subdomain with `--subdomain`. The base domain belongs to the cluster: its operator chose it and delegated it to the cluster's nameservers ([DNS and nameservers](/docs/operator/nameserver)). `orama network list` shows the gateway URL, whose host is the base domain.
 
-A deployment name is 1 to 56 characters of letters, digits, `-` and `_`, starting with a letter or digit. It becomes one DNS label and part of the unit that runs it, so anything else is refused with `400`. See [Deployments](/docs/developer/deployments#names-and-limits).
+A deployment name is 1 to 56 characters of letters, digits, `-` and `_`, starting with a letter or digit. It becomes one DNS label and part of the unit that runs it, so anything else is refused with `400`. See [Deployments](/docs/developer/deployments#deployment-names).
 
 The bare `<app-name>.<base-domain>` is only the address of a deployment created before subdomains existed, which has none. A deployment that has a subdomain is not served at its bare name, because names are unique per namespace and not across namespaces, so the bare host would not say whose deployment it is. If two namespaces still hold a subdomain-less deployment of the same name, the bare host answers `404` for both until one of them is deleted.
 
@@ -65,6 +65,8 @@ The proxy hop adds minimal latency because all inter-node traffic travels over W
 - **High availability.** If DNS resolves to any healthy node, the request succeeds regardless of where the app is hosted.
 - **Simple DNS.** All nodes share the same set of domains. DNS can round-robin across all nameservers without knowing which node hosts which app.
 - **Transparent to clients.** The client always talks HTTPS to a single endpoint. The internal routing is invisible.
+
+Each node that forwards keeps a circuit breaker per app and node. Five failures in a row of the node itself (connection refused or reset, a timeout, or a 502/503/504 the platform produced because it could not reach your process) stop that node forwarding your app to that node for 30 seconds, then one request tests it. Your app's own error responses never count, so an app that returns 503 does not affect your other apps or anyone else's on the same node.
 
 ---
 
@@ -151,6 +153,10 @@ Every subcommand takes `--json`. `verify --wait` re-asks the gateway every 10 se
 | `DELETE` | `/v1/deployments/domains/remove?domain=` | Remove a custom domain (`POST` also accepted) |
 
 `list` takes an optional `?deployment_name=` to narrow it to one app; without it, every domain in the namespace is returned. Methods are enforced -- a request with the wrong verb gets a `405` naming what the endpoint takes.
+
+### Ownership rules
+
+Adding a domain proves nothing, so it does not reserve the name. Only a **verified** domain, or a pending one of your own namespace, refuses an add (`409 Domain already in use`, the same answer whichever namespace holds it). A pending row of another namespace is replaced by your add, and a pending row expires 72 hours after it was added. If two namespaces add the same name, the last add holds the single row, and only its token verifies: re-run `orama domain add` and use the token it prints. `verify --wait` only retries "the record is not visible yet"; a domain that was never added fails immediately.
 
 ### Flow
 

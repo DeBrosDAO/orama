@@ -101,7 +101,7 @@ func createAll(t testing.TB, f *fleet.Fleet, owner *gw.User, count int) []*ns.Na
 }
 
 // TestNamespaceCapacity_walletQuota: a wallet at its cap is refused
-// NAMESPACE_QUOTA before anything is provisioned (docs/API_SURFACE.md
+// NAMESPACE_QUOTA before anything is provisioned (docs/whitepaper/technical-reference/appendices/i-api-surface.md
 // "Namespace management": per-wallet cap defaults to 10).
 func TestNamespaceCapacity_walletQuota(t *testing.T) {
 	f := harness.Fleet(t)

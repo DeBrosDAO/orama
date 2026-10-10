@@ -11,7 +11,7 @@ package push
 // can push to it but cannot re-point or delete it.
 //
 // Nothing here records which account a topic belongs to. What the gateway can
-// still link is described in docs/PUSH_NOTIFICATIONS.md: the provider token is
+// still link is described in website/src/docs/developer/push-notifications.mdx: the provider token is
 // itself a stable device identifier.
 
 import (

@@ -79,7 +79,7 @@ Every node is a member of the registry's Raft group, holds the RQLite credential
 ## What this does not defend against
 
 - **A RAM snapshot** of a running node, including a hypervisor or hosting-provider snapshot, and anything that reads the memory the gateway holds while it combines vault shares.
-- **Ubuntu node operators and provider access.** Zero operator access and disk encryption apply to OramaOS only. Ubuntu disk encryption is a design ([Disk encryption design](https://github.com/DeBrosDAO/orama/blob/nightly/docs/DISK_ENCRYPTION.md)).
+- **Ubuntu node operators and provider access.** Zero operator access and disk encryption apply to OramaOS only. Ubuntu disk encryption is a design ([Disk encryption and reboot](/docs/operator/orama-os#disk-encryption-and-reboot)).
 - **dm-verity at boot** (hashes may exist in the OramaOS image; boot does not enforce them).
 - **A captured disk snapshot of a node.** Your application data in RQLite is plaintext. The secrets the platform stores (function secrets, push credentials, deployment environments) are encrypted, but under a key derived from the cluster secret, which sits on the same node, so a snapshot of an Ubuntu node exposes the cluster's shared secrets.
 - **Immediate erasure.** A SQL `DELETE` is a Raft log entry; the original `INSERT` stays in the log until size-driven compaction. IPFS content is reclaimed by garbage collection every six hours, or at once with `?immediate=true`.

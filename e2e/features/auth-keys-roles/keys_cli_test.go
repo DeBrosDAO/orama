@@ -52,7 +52,7 @@ func cliKeyCreate(t testing.TB, cli *oramacli.Runner, args ...string) (string, s
 
 // TestNamespaceKeys_cliLifecycle: create shows the key once, list never
 // again, rotate mints a successor, revoke ends it; malformed flags are
-// refused (docs/CLI_REFERENCE.md "orama namespace keys").
+// refused (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama namespace keys").
 func TestNamespaceKeys_cliLifecycle(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)

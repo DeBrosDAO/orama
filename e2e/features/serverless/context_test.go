@@ -21,7 +21,7 @@ const pathWSConnections = "/v1/serverless/ws/connections"
 
 // TestContext_deviceID: get_caller_device_id is the session's device
 // thumbprint for a device-bound session and empty otherwise
-// (docs/SERVERLESS.md#context; AUTH.md#devices).
+// (website/src/docs/developer/functions.mdx#context; docs/whitepaper/technical-reference/vol1/13-identity.md#devices).
 func TestContext_deviceID(t *testing.T) {
 	t.Parallel()
 	fx := setup(t)
@@ -49,7 +49,7 @@ func TestContext_deviceID(t *testing.T) {
 }
 
 // TestWSConnections_ownedRead: the socket registry answers the namespace's
-// fn:read holders and refuses anonymous callers (docs/API_SURFACE.md#functions).
+// fn:read holders and refuses anonymous callers (docs/whitepaper/technical-reference/appendices/i-api-surface.md#functions).
 func TestWSConnections_ownedRead(t *testing.T) {
 	t.Parallel()
 	fx := setup(t)
@@ -131,7 +131,7 @@ func deployForm(t *testing.T, name string, wasm []byte, fields map[string]string
 
 // TestDirectInvoke_path: POST /v1/invoke/<namespace>/<name>[@N] is the SDK's
 // endpoint; a public function answers anonymously on the main gateway, a
-// malformed path is 400 and a wrong method 405 (docs/SERVERLESS.md#http-api-reference).
+// malformed path is 400 and a wrong method 405 (website/src/docs/developer/functions.mdx#http-api-reference).
 func TestDirectInvoke_path(t *testing.T) {
 	t.Parallel()
 	fx := setup(t)

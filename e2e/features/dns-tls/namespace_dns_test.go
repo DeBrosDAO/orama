@@ -41,7 +41,7 @@ func hosting(t *testing.T, f *fleet.Fleet, name string) []fleet.Node {
 // TestNamespaceDNS_hostAndWildcardNameItsNodes: ns-<ns>.<base>, a name under
 // its deployment wildcard and a name several labels below it all resolve, on
 // every nameserver, to exactly the nodes serving the namespace, with the
-// namespace records' 60s TTL (docs/NAMESERVER_SETUP.md "Record Lifecycle";
+// namespace records' 60s TTL (website/src/docs/operator/nameserver.mdx "Record Lifecycle";
 // core/pkg/namespace/dns_manager.go).
 func TestNamespaceDNS_hostAndWildcardNameItsNodes(t *testing.T) {
 	t.Parallel()
@@ -64,7 +64,7 @@ func TestNamespaceDNS_hostAndWildcardNameItsNodes(t *testing.T) {
 
 // TestNamespaceDNS_unknownNamespaceFallsToTheBase: a namespace host nobody
 // created is answered by the base wildcard — the nameservers — which is why
-// the purge never empties a namespace host (docs/NAMESERVER_SETUP.md, the
+// the purge never empties a namespace host (website/src/docs/operator/nameserver.mdx, the
 // gateway-host purge guard). The gateway there does not serve it.
 func TestNamespaceDNS_unknownNamespaceFallsToTheBase(t *testing.T) {
 	t.Parallel()
@@ -82,7 +82,7 @@ func TestNamespaceDNS_unknownNamespaceFallsToTheBase(t *testing.T) {
 // TestNamespaceDNS_turnHostsFollowWebRTC: with WebRTC enabled the namespace
 // gets turn.ns-<ns> (plain TURN) and turn-<ns> (TURNS, covered by the base
 // wildcard certificate), both naming exactly the nodes that hold a TURN
-// allocation, TTL 60 (docs/NAMESERVER_SETUP.md; core/pkg/namespace
+// allocation, TTL 60 (website/src/docs/operator/nameserver.mdx; core/pkg/namespace
 // dns_manager.go CreateTURNRecords). Before, turn.ns-<ns> is only the
 // namespace's own wildcard (the walk outward).
 func TestNamespaceDNS_turnHostsFollowWebRTC(t *testing.T) {
@@ -151,7 +151,7 @@ func turnRows(t *testing.T, f *fleet.Fleet, name, tlsHost string) []string {
 }
 
 // enableWebRTC turns WebRTC on for n (created ViaOperator) and off again at
-// cleanup (docs/CLI_REFERENCE.md "orama namespace enable").
+// cleanup (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama namespace enable").
 func enableWebRTC(t *testing.T, n *ns.Namespace) {
 	t.Helper()
 	n.CLI.MustOK(t, "namespace", "enable", "webrtc", "--namespace", n.Name)

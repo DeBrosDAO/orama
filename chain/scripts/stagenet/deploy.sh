@@ -225,7 +225,7 @@ cmd_status() {
 }
 
 # INVARIANT_MODULES are the modules whose `oramad query <module> invariants` must hold on every
-# node after a deploy (docs/SECURITY_PLAYBOOKS.md). A literal list: nothing from remote output is
+# node after a deploy (docs/whitepaper/technical-reference/vol2/39-chain-architecture.md). A literal list: nothing from remote output is
 # spliced into the remote command. The same list is stagenetctl's (scripts/stagenet/smoke).
 #
 # Every module that holds or moves norama has an invariants query and is listed here:
@@ -244,7 +244,7 @@ cmd_invariants() {
 			local out
 			# stdout only: a warning on stderr must not be parsed as the answer. The query runs as the ssh
 			# login user, an allowed chain client: the co-located host rules drop the chain's own account
-			# (RUN_A_GLOBAL_NODE.md), and a query needs nothing from the chain's home.
+			# (website/src/docs/blockchain/run-a-global-node.mdx), and a query needs nothing from the chain's home.
 			if ! out="$(remote_run "$alias" "$BIN_DIR/oramad" query "$m" invariants --node "$RPC_ADDR" --output json)"; then
 				printf '%-9s %-9s query failed: %s\n' "$name" "$m" "$out"
 				failed=1

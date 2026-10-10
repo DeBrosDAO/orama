@@ -74,7 +74,7 @@ func jsonTail(t testing.TB, out string) inspectReport {
 
 // TestInspect_checksEveryNodeOverSSH: inspect SSHes into every node of the
 // environment and reports every check it ran; its exit code says whether any
-// failed (docs/CLI_REFERENCE.md#orama-maint-inspect; a failed check is a failed
+// failed (docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-maint-inspect; a failed check is a failed
 // command, inspect_command.go).
 func TestInspect_checksEveryNodeOverSSH(t *testing.T) {
 	t.Parallel()
@@ -121,7 +121,7 @@ func TestInspect_jsonFormatIsPureJSON(t *testing.T) {
 }
 
 // TestInspect_writesResultsDirectory: --output saves the results as markdown
-// in the directory (docs/CLI_REFERENCE.md#orama-maint-inspect).
+// in the directory (docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-maint-inspect).
 func TestInspect_writesResultsDirectory(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)

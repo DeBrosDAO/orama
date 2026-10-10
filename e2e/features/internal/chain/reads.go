@@ -22,7 +22,7 @@ type EpochState struct {
 	CumulativeFaucetMinted      Int `json:"cumulative_faucet_minted"`
 }
 
-// ExpectedSupply is the bank supply the epoch state accounts for (docs/CHAIN.md "Invariants"):
+// ExpectedSupply is the bank supply the epoch state accounts for (docs/whitepaper/technical-reference/vol2/40-economics.md "Invariants"):
 // genesis supply plus every mint (the epoch, development, service and test-network faucet ones)
 // minus the burns.
 func (e EpochState) ExpectedSupply() Int {

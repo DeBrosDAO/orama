@@ -1,17 +1,17 @@
 # Run your own cluster
 
-> **Reference.** To join the network, start with the Get started page (`website/src/docs/start/get-started.mdx`, published at `/docs/start/get-started`). This page is reference for running your own cluster.
+> **Reference.** To join the network, start with [Get started](/docs/start/get-started). This page is reference for running your own cluster.
 
 A private Orama cluster is three or more Linux machines that you install with
 `orama node setup`, plus a domain whose nameserver records you can publish.
 (`orama setup --cluster-only --domain <domain>` does the same for every machine
 you give it, prints the NS and glue records the domain needs and waits until
 they resolve; `orama setup` without `--cluster-only` also joins the network's
-chain. Its reference is the website's "Join with orama setup".)
+chain. Its reference is [Join with orama setup](/docs/operator/setup).)
 The installer refuses a machine that fails the checks in
 `core/pkg/install/checks.go`. This page is that sequence. It does not create
 servers: `orama maint sandbox create` does, on Hetzner, and
-[SANDBOX.md](SANDBOX.md) is that command.
+[Sandbox](/docs/contributor/sandbox) is that command.
 
 ## What you need
 
@@ -30,7 +30,7 @@ the registrar. For a name under a zone you already host (`stagenet.example.com`)
 the glue is an ordinary A record in the parent zone. `--cloudflare-token-file`
 writes that parent zone when it is hosted at Cloudflare, and it refuses a
 registry TLD (a parent with no dot, such as `com`). The record format is
-[NAMESERVER_SETUP.md](NAMESERVER_SETUP.md).
+[Nameserver](/docs/operator/nameserver).
 
 **On the machine you type from.** The RootWallet desktop app, open and
 unlocked. `orama node setup` and `orama auth login` ask its agent for a key
@@ -123,7 +123,7 @@ static` publishes a directory (any directory with an `index.html`; `./site` here
 as the deployment `www`.
 
 Further nameserver detail, including installing by hand on the VPS with
-`orama maint node install`, is [NAMESERVER_SETUP.md](NAMESERVER_SETUP.md).
+`orama maint node install`, is [Nameserver](/docs/operator/nameserver).
 
 ## Check it
 
@@ -140,7 +140,7 @@ and its RQLite is Leader or Follower; all three of yours should say so.
 
 Every command in Install, Use it and Check it is executed, in this order, by
 `make e2e-cluster` against machines the repo's owner provides
-(`core/e2e/clusterguide`, see [DEV_DEPLOY.md](DEV_DEPLOY.md), "Cluster guide
+(`core/e2e/clusterguide`, see [Testing](/docs/contributor/testing#cluster-guide-e2e), "Cluster guide
 e2e"). Change a command here and that test fails until its plan matches.
 
 ## Keep it updated
@@ -157,14 +157,14 @@ orama maint cluster settings show
 ```
 
 With `notify`, the default, every node looks every 15 minutes, verifies what it
-finds against the release root it adopted at install, and `orama monitor` shows
+finds against the release root it adopted at install, and `orama status` shows
 a newer release as information (a release that does not verify, or that a node
 rolled back, as a warning). Nothing is installed. With `orama maint cluster settings
 set auto-update auto` the nodes install it themselves, one at a time, followers
 first and the leader last, only while the cluster is healthy and the hour is
 inside `update-window`, and a release that fails on one node is not tried on the
 others. How it decides, and what it does when an install fails, is
-[DEV_DEPLOY.md](DEV_DEPLOY.md), "Auto-update".
+[Upgrades](/docs/operator/upgrades#automatic-updates).
 
 ## Building from source
 
@@ -179,7 +179,7 @@ orama maint build
 
 `orama maint build` prints the archive's path. The build is reproducible, so a second
 build of the same commit with `SOURCE_DATE_EPOCH` set to the commit's time gives
-the same archive, byte for byte (DEV_DEPLOY.md, "Reproducible builds").
+the same archive, byte for byte ([Build and sign](/docs/operator/build-and-sign#reproducible-builds)).
 
 ## A sealed backup
 

@@ -10,7 +10,7 @@ import (
 )
 
 // TestConformance_nodeAndMonitorCommands runs the generic checks (help
-// matches docs/CLI_REFERENCE.md, --json accepted, unknown flags and
+// matches docs/whitepaper/technical-reference/appendices/d-cli-reference.md, --json accepted, unknown flags and
 // subcommands are usage errors, required positional arguments enforced) on
 // every `orama node`, `orama monitor`, `orama nodes` and `orama status`
 // command. Help and flag errors never reach a node, so the destructive node

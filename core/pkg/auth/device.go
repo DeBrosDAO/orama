@@ -16,7 +16,7 @@ import (
 //
 // The client half of the device authorization grant. The waiting machine asks
 // for a code and polls; a human approves that code from somewhere their wallet
-// already is. See docs/AUTH.md for the exchange, and the gateway's
+// already is. See docs/whitepaper/technical-reference/vol1/13-identity.md for the exchange, and the gateway's
 // pkg/gateway/auth/device.go for what it is protecting against.
 
 // DeviceLogin is a pending login this machine is waiting on.

@@ -17,7 +17,7 @@ type Flags struct {
 	Unsigned bool
 	// Signers, when set, goes into the signed manifest: a node that verifies
 	// the archive against its current trust anchor then trusts exactly these
-	// addresses (signer rotation, docs/SECURITY.md).
+	// addresses (signer rotation, docs/whitepaper/technical-reference/vol1/16-secrets-and-keys.md).
 	Signers []string
 	// SkipGlobalLayer leaves out the chain node (oramad, its verifier,
 	// orama-global) and the cosmovisor release. The archive then serves a

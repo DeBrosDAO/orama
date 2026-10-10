@@ -26,7 +26,7 @@ var caPEM []byte
 
 // gateway is this app's client of its namespace gateway, as itself: the
 // workload token the platform hands it, renewed before it expires
-// (docs/DEPLOYMENT_GUIDE.md "Your app's own credential").
+// (website/src/docs/developer/deployments.mdx "Your app's own credential").
 type gateway struct {
 	base   string
 	http   *http.Client

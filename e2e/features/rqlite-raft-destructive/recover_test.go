@@ -22,7 +22,7 @@ import (
 // TestRecoverRaft_refusalsChangeNothing: recover-raft refuses a missing
 // --env, a node that is not in the environment and a malformed raft address,
 // and without --force it prints its plan and declines with the aborted exit
-// code, leaving the cluster as it was (docs/CLI_REFERENCE.md "orama node
+// code, leaving the cluster as it was (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama node
 // recover-raft"; clierr CodeAborted).
 func TestRecoverRaft_refusalsChangeNothing(t *testing.T) {
 	f := harness.Fleet(t)
@@ -53,7 +53,7 @@ func TestRecoverRaft_refusalsChangeNothing(t *testing.T) {
 // surviving leader with --leader-raft-addr: the followers are wiped and
 // re-sync from it, every node keeps its raft id, all of them converge again,
 // and data written before the loss (an invite, a namespace) is still there
-// (docs/CLI_REFERENCE.md "orama maint node recover-raft": use --leader-raft-addr
+// (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama maint node recover-raft": use --leader-raft-addr
 // when quorum is already lost).
 func TestRecoverRaft_afterQuorumLossKeepsTheLeadersData(t *testing.T) {
 	f := harness.Fleet(t)
@@ -83,7 +83,7 @@ func TestRecoverRaft_afterQuorumLossKeepsTheLeadersData(t *testing.T) {
 		// The recovery keeps the leader's raft term: a cluster restarted below
 		// the term of its own recovery snapshot serves that snapshot as the
 		// newest forever, and a lagging node never catches up
-		// (docs/COMMON_PROBLEMS.md #21).
+		// (website/src/docs/operator/troubleshooting.mdx #21).
 		if rq := e.Report.RQLite; rq.LastSnapshotTerm > rq.Term {
 			t.Errorf("%s holds a snapshot of term %d above its raft term %d after the recovery", e.Host, rq.LastSnapshotTerm, rq.Term)
 		}

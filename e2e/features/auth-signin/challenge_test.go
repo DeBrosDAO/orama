@@ -22,7 +22,7 @@ const lobbyResource = "urn:orama:namespace:" + lobby
 
 // TestChallenge_messageShape checks the EIP-4361 message the gateway issues:
 // its own domain, the wallet, a single-use nonce, a five-minute window and the
-// namespace it signs in to (docs/AUTH.md#signing-in, "#the-lobby").
+// namespace it signs in to (docs/whitepaper/technical-reference/vol1/13-identity.md#vocabulary, "#the-lobby").
 func TestChallenge_messageShape(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -67,7 +67,7 @@ func TestChallenge_twoChallengesNeverShareANonce(t *testing.T) {
 }
 
 // TestChallenge_solanaMessage checks SIWS: chain_type SOL yields a Solana
-// message for the base58 address (docs/AUTH.md#the-two-identities).
+// message for the base58 address (docs/whitepaper/technical-reference/vol1/13-identity.md#verifying-and-spending-the-nonce).
 func TestChallenge_solanaMessage(t *testing.T) {
 	t.Parallel()
 	sol, err := wallet.NewSolana()
@@ -86,7 +86,7 @@ func TestChallenge_solanaMessage(t *testing.T) {
 
 // TestChallenge_unknownNamespace: a challenge for a namespace that does not
 // exist answers NAMESPACE_UNKNOWN (404) naming it, and creates nothing
-// ("resolving a name does not create it", docs/AUTH.md#where-this-is-all-kept).
+// ("resolving a name does not create it", docs/whitepaper/technical-reference/vol1/13-identity.md#issuing-a-challenge).
 func TestChallenge_unknownNamespace(t *testing.T) {
 	t.Parallel()
 	c := harness.GW(t)

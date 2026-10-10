@@ -22,7 +22,7 @@ const (
 	distribution = "cosmos.distribution.v1beta1.Query"
 	wasm         = "cosmwasm.wasm.v1.Query"
 
-	// The gateway's limits, docs/CHAIN.md "Simulate and broadcast".
+	// The gateway's limits, docs/whitepaper/technical-reference/vol2/39-chain-architecture.md "Simulate and broadcast".
 	maxTxBytes   = 1 << 20
 	maxPageLimit = 100
 	// txLogLeaks are what a refusal's log must not carry: a filesystem path, a source file, an IP address.

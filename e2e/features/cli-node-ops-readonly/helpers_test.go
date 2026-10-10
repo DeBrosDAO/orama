@@ -26,7 +26,7 @@ const (
 	cliBudget = 5 * time.Minute
 	// telemetryBudget: node reports are gathered every 10s and a view may be
 	// served from a gateway whose snapshot is up to MaxReportAgeSec old
-	// (docs/MONITORING.md), so a change shows within about a minute.
+	// (website/src/docs/operator/monitoring.mdx), so a change shows within about a minute.
 	telemetryBudget = 3 * time.Minute
 	pollEvery       = 5 * time.Second
 )

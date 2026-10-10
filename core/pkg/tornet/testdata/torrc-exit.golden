@@ -1,5 +1,5 @@
 # Managed by Orama Network: rewritten on every `orama global install`.
-# Relay of the Orama Tor network orama-teststage (docs/TOR_NETWORK.md).
+# Relay of the Orama Tor network orama-teststage (orama.network/docs/operator/tor-network).
 DataDirectory /var/lib/orama-global/tor-relay
 Log notice stdout
 SafeLogging 1

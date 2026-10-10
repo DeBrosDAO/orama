@@ -80,7 +80,7 @@ func TestJoin_malformedRequestsRefused(t *testing.T) {
 }
 
 // TestJoin_expiredTokenRefused: an invite minted on the node with a short
-// life is refused once it has passed, with "has expired" (docs/CLI_REFERENCE.md
+// life is refused once it has passed, with "has expired" (docs/whitepaper/technical-reference/appendices/d-cli-reference.md
 // "orama node invite" --expiry).
 func TestJoin_expiredTokenRefused(t *testing.T) {
 	t.Parallel()
@@ -170,7 +170,7 @@ func TestJoin_liveIdentityRefusedTokenKept(t *testing.T) {
 
 // TestNodeInvite_localMint: `orama node invite` on a node mints a one-hour
 // invite by default, stored hashed, printing the whole install command; --raw
-// prints only the invite (docs/CLI_REFERENCE.md "orama node invite").
+// prints only the invite (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama node invite").
 func TestNodeInvite_localMint(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)

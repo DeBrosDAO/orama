@@ -75,11 +75,11 @@ func TestClassifyBatchError_statementErrors(t *testing.T) {
 
 // The 100-statement cap is the limit that bit in production: a write whose size
 // scales with group fan-out crossed it and failed deterministically at 101.
-// Pin it so a change is a deliberate, documented decision — docs/SERVERLESS.md
+// Pin it so a change is a deliberate, documented decision — website/src/docs/developer/functions.mdx
 // publishes this number to tenants.
 func TestMaxBatchOps_isThePublishedLimit(t *testing.T) {
 	if MaxBatchOps != 100 {
-		t.Errorf("MaxBatchOps = %d, want 100 (docs/SERVERLESS.md publishes this to tenants)", MaxBatchOps)
+		t.Errorf("MaxBatchOps = %d, want 100 (website/src/docs/developer/functions.mdx publishes this to tenants)", MaxBatchOps)
 	}
 }
 
