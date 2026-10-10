@@ -16,10 +16,11 @@ import (
 	"github.com/DeBrosOfficial/network/chain/x/fees/types"
 )
 
-// Keeper is x/fees's keeper. It has no authority address and no Msg service: fees are paid
-// through the ante handler, earnings are credited by other modules' keepers (via CreditEarnings),
-// and deposits are locked/released by their owning module's keeper - never by a user-signed
-// message (plans/open-network.md D18).
+// Keeper is x/fees's keeper. It has no authority address: fees are paid through the ante handler,
+// earnings are credited by other modules' keepers (via CreditEarnings), and deposits are
+// locked/released by their owning module's keeper. The one user-signed message is
+// MsgWithdrawEarnings, which moves the signer's own earnings to the signer's own bank balance
+// (plans/open-network.md D18).
 type Keeper struct {
 	storeService storetypes.KVStoreService
 	bankKeeper   types.BankKeeper

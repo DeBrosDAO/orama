@@ -261,6 +261,67 @@ func TestWalletFlow_publicSendCannotSpendEarnings(t *testing.T) {
 	f.requireInvariants()
 }
 
+func TestWalletFlow_withdrawnEarningsAreAPublicBalanceThatCanBeSent(t *testing.T) {
+	f := newFlow(t)
+	alice, bob := f.newWallet(), f.newWallet()
+	f.fundEarnings(alice, flowCredit)
+
+	requireOK(t, f.deliver(alice, &feestypes.MsgWithdrawEarnings{Signer: alice.addr.String(), Amount: norama(100)}))
+
+	require.Equal(t, norama(100).String(), f.bank(alice.addr, params.BaseDenom).String(), "the withdrawal credits the signer's own bank balance")
+	require.Equal(t, norama(flowCredit-100).SubRaw(feeOf(1)).String(), f.earnings(alice.addr).String(), "earnings fell by the amount and the fee, which the bank balance did not cover at the time")
+	f.requireInvariants()
+
+	requireOK(t, f.deliver(alice, banktypes.NewMsgSend(alice.addr, bob.addr, sdk.NewCoins(sdk.NewCoin(params.BaseDenom, norama(60))))))
+	require.Equal(t, norama(60).String(), f.bank(bob.addr, params.BaseDenom).String(), "withdrawn earnings can be paid to another user")
+	require.True(t, f.earnings(bob.addr).IsZero())
+	f.requireInvariants()
+}
+
+func TestWalletFlow_withdrawMoreThanTheEarningsIsRefused(t *testing.T) {
+	f := newFlow(t)
+	alice := f.newWallet()
+	f.fundEarnings(alice, 10)
+
+	res := f.deliver(alice, &feestypes.MsgWithdrawEarnings{Signer: alice.addr.String(), Amount: norama(11)})
+
+	requireRejected(t, res, "insufficient earnings")
+	require.True(t, f.bank(alice.addr, params.BaseDenom).IsZero(), "a refused withdrawal credits nothing")
+	f.requireInvariants()
+}
+
+func TestWalletFlow_withdrawNamesItsSignerAsTheOnlyAccountItMoves(t *testing.T) {
+	f := newFlow(t)
+	alice, mallory := f.newWallet(), f.newWallet()
+	f.fundEarnings(alice, flowCredit)
+
+	// The message's signer is the account whose earnings it moves; a key that is not that account
+	// cannot sign it, so a withdrawal cannot spend someone else's earnings.
+	_, err := f.builder.Build(mallory.acc, oramatx.Unsigned{
+		ChainID: testChainID, AccountNumber: 1, Sequence: 0, GasLimit: flowGas,
+		Fee:  sdk.NewCoins(sdk.NewInt64Coin(params.BaseDenom, int64(flowGas))),
+		Msgs: []sdk.Msg{&feestypes.MsgWithdrawEarnings{Signer: alice.addr.String(), Amount: norama(100)}},
+	})
+
+	require.ErrorContains(t, err, "not the signer")
+	require.Equal(t, norama(flowCredit).String(), f.earnings(alice.addr).String())
+}
+
+func TestWalletFlow_withdrawEverythingLeavesNoLedgerEntry(t *testing.T) {
+	f := newFlow(t)
+	alice := f.newWallet()
+	f.fundBank(alice, 5)
+	f.fundEarnings(alice, 20)
+
+	requireOK(t, f.deliver(alice, &feestypes.MsgWithdrawEarnings{Signer: alice.addr.String(), Amount: norama(20)}))
+
+	require.True(t, f.earnings(alice.addr).IsZero())
+	has, err := f.app.FeesKeeper.Earnings.Has(f.app.NewContext(true), alice.addr.String())
+	require.NoError(t, err)
+	require.False(t, has)
+	f.requireInvariants()
+}
+
 // The wallet builds and signs the shielded messages with the same builder as every other message.
 // A node with neither verifier linked, which is what these tests run, refuses every bundle: the
 // fee is taken, the pool is untouched, nothing is accepted without both verifiers (an orchardffi

@@ -1,6 +1,7 @@
 import * as archive from "./gen/orama/archive/v1/tx";
 import * as cnft from "./gen/orama/cnft/v1/tx";
 import * as emission from "./gen/orama/emission/v1/tx";
+import * as fees from "./gen/orama/fees/v1/tx";
 import * as houses from "./gen/orama/houses/v1/tx";
 import * as market from "./gen/orama/market/v1/tx";
 import * as nodes from "./gen/orama/nodes/v1/tx";
@@ -318,6 +319,13 @@ export const MSG = {
   ),
   cnftRecordSnapshot: defineMsg("/orama.cnft.v1.MsgRecordSnapshot", cnft.MsgRecordSnapshot, (m) =>
     desc("Record tree snapshot", `Record snapshot ${m.cid} of tree ${m.treeId}`),
+  ),
+
+  // ---- x/fees ----
+  feesWithdrawEarnings: defineMsg("/orama.fees.v1.MsgWithdrawEarnings", fees.MsgWithdrawEarnings, (m) =>
+    desc("Withdraw earnings", `Move ${norama(m.amount)} of ${m.signer}'s earnings to its own bank balance`, [
+      "The balance becomes spendable and can be sent publicly. It always goes to the signer.",
+    ]),
   ),
 
   // ---- x/emission ----

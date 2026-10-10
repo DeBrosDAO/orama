@@ -17,7 +17,7 @@ First, supply has to be a function of the epoch number alone. The schedule count
 
 Second, the validators who secure the chain should not also decide what the storage, relay and development shares are worth. Those shares are written as ceilings per epoch and minted only when a module proves work against them. What nobody claims is never minted, so the real supply is at most the schedule and usually below it.
 
-Third, a payout should not be aimed at a chosen address. Every protocol payment lands in the recipient's earnings ledger inside `x/fees` (see [chain architecture](39-chain-architecture.md#the-bank-send-restriction)). Earnings can pay fees, bonds, deposits and shielding, and nothing else. That is a spam rule: a payment cannot be aimed at a chosen address, and a reward is not a spendable balance until its owner moves it. Users can pay each other in the open with an ordinary bank send, or privately through the pool.
+Third, a payout should not be aimed at a chosen address. Every protocol payment lands in the recipient's earnings ledger inside `x/fees` (see [chain architecture](39-chain-architecture.md#the-bank-send-restriction)). Earnings pay fees, bonds, deposits and shielding, and their owner can withdraw them to the owner's own bank balance with `MsgWithdrawEarnings`. That is a spam rule: a payment cannot be aimed at a chosen address, and a reward is not a spendable balance until its owner moves it. Users can pay each other in the open with an ordinary bank send, or privately through the pool.
 
 Fourth, fees must be priced by load and must not enrich whoever orders the block. The base fee follows the EIP-1559 shape and is burned entirely. Only the voluntary tip reaches the proposer, and a tip has to come from a bank balance: a tip is a payment, and earnings pay fees and bonds.
 
@@ -140,7 +140,7 @@ The tip is paid to the proposer's operator account only. Delegators share the ep
 
 Every module that pays a protocol reward calls `CreditEarnings` with its own module account as the sender: `x/power` for the epoch reward, `x/storage` and `x/relay` for service payments, `x/houses` for development spends, `x/market` for sale proceeds and royalties, and `x/shielded` for a signer-less transfer's tip (`chain/x/fees/keeper/earnings.go:CreditEarnings`). The coins move into the `fees` account and the ledger entry grows; the invariant is that the sum of earnings plus fee-only balances equals the `fees` account's balance. A ledger row that reaches zero is deleted, because a zero row would fail genesis validation on export.
 
-What earnings can be spent on is the whole restriction:
+What earnings can be spent on is the whole restriction. The owner can always turn earnings into a bank balance, and a bank balance can be sent in the open, so the restriction stops a payer from aiming a reward, not an owner from using one:
 
 | Use | Mechanism |
 |---|---|
@@ -149,6 +149,7 @@ What earnings can be spent on is the whole restriction:
 | Bonding a node role, creating a token, opening a storage deal | the same call, inside those handlers |
 | A state deposit | `fundDeposit`: bank balance first, then the owner's earnings |
 | Shielding | `x/shielded`'s `MsgShieldEarnings` debits the signer's earnings into the pool |
+| A public balance | `x/fees`'s `MsgWithdrawEarnings` debits the signer's earnings and sends the same amount to the signer's own bank balance (`chain/x/fees/keeper/withdraw.go:WithdrawEarnings`) |
 | A node's hot key | `FundFeeBalance` moves earnings to another address's fee-only balance; `x/nodes`'s `MsgFundHotKey` is its only caller |
 | A contract paying a user | `PayEarnings`, from the contract's bank balance into the recipient's earnings |
 
@@ -261,7 +262,7 @@ The `emission` module account holds nothing between blocks except development mi
 
 **Who can mint.** Only `x/emission` holds `Minter` on norama, and its mint paths are the epoch close, the three ceiling-bounded service mints and the faucet. `x/token` also holds `Minter`, but its bank keeper is wrapped with a mint restriction that refuses norama (`TestGetMaccPerms_onlyEmissionMintsNorama`). No message can change the schedule, the split's bounds, the base-fee parameters or the deposit fraction: the stock modules' authority is the hash of a module name that is never registered, and the three modules here have no authority at all. The one lever is the emission split, and it is bounded: each share within 10 points of canonical, the upgrade timelock in `x/houses` (60 days at the defaults, never less), no way to touch the halving table or the tail.
 
-**Who sees what.** Every ledger is public state. Earnings are not hidden; they cannot be paid to a chosen address. A payout is a ledger credit, a user-to-user bank send of an existing balance is public, and value reaches a plain user balance by a deliberate release path: node and stake unbonding returning to the owner, the faucet on a test network, and the owner moving earnings to the owner's own balance. The private path between users is a shielded transfer.
+**Who sees what.** Every ledger is public state. Earnings are not hidden; they cannot be paid to a chosen address. A payout is a ledger credit, a user-to-user bank send of an existing balance is public, and value reaches a plain user balance by a deliberate release path: node and stake unbonding returning to the owner, the faucet on a test network, and `MsgWithdrawEarnings`, by which the owner moves earnings to the owner's own balance. The private path between users is a shielded transfer.
 
 **An attacker as a validator or proposer.** A proposer chooses transaction order and receives tips, but cannot raise the base fee by stuffing its own blocks without paying it, because the base fee is burned and the fee a stuffing transaction pays is above the floor. A proposer cannot take other people's tips: the tip is credited to the proposer of the block that contains the transaction, resolved from the header. A supermajority that manipulated timestamps cannot close an epoch before 14,400 blocks. A validator whose commission is 100% takes the whole epoch reward of its delegators: commission has no cap in the economics code (it is the stock staking module's rule, `min_commission_rate` 0).
 
@@ -297,7 +298,7 @@ The `emission` module account holds nothing between blocks except development mi
 
 ### Earnings restricted to the signer's own uses
 
-*Chosen:* a ledger usable for fees, bonds, deposits and shielding, with a top-up inside message handlers. *Rejected:* an ordinary bank balance, or a transferable earnings token. *Why:* a reward must not be aimed at a chosen address, and a spendable reward credited by a proposer or a contract would be.
+*Chosen:* a ledger usable for fees, bonds, deposits and shielding, with a top-up inside message handlers and a withdrawal that only its owner can make, to the owner. *Rejected:* an ordinary bank balance, or a transferable earnings token. *Why:* a reward must not be aimed at a chosen address, and a spendable reward credited by a proposer or a contract would be.
 
 ### The tip is paid from the bank balance only
 
@@ -335,7 +336,7 @@ The `emission` module account holds nothing between blocks except development mi
 
 - `chain/x/emission/keeper/`: `TestShouldCloseEpoch_bothSatisfied`, `TestShouldCloseEpoch_exactBoundaryIsSatisfied`, `TestAdvanceBlock_noCatchUpAfterLongGap`, `TestAdvanceBlock_prunesCeilingsOutsideWindow`, `TestCheckSupplyInvariant_simulated4000EpochRun`, `TestCheckSupplyInvariant_breaksWhenSupplyDrifts`, `TestInitGenesis_rejectsNonzeroSupplyWhenBootstrapStakeNotAllowed`, `TestInitGenesis_exportReimportRoundTripDoesNotStallOnHeight`, `TestInitGenesis_reconcileBurnsAfterASlashKeepsInvariantHolding`, `TestMintDevelopmentSpend_mintsOnlyRemainingCeiling`, `TestMintStorageService_refusesPastTheCeilingAndBadAmounts`, `TestMintRelayReward_refusesASecondMintPastTheCeiling`, `TestCloseEpoch_usesTheEnactedSplit`, `TestFaucet_refusedOnProductionChainID`, `TestFaucet_epochCapRefusesThenResetsWhenEpochCloses`.
 - `chain/x/emission/types/`: the schedule and split tests, including `TestCumulativeScheduleMax_epoch3650Equals21_000_640Orama` and `TestSplitEpochMint_exactDivision`.
-- `chain/x/fees/`: `TestNextBaseFee_neverBelowFloor`, `TestNextBaseFee_risesWhenFull`, `TestSettleFee_tipMustComeFromBankNeverEarnings`, `TestSettleFee_baseFeeFallsBackToEarningsWhenBankIsShort`, `TestSettleFee_feeGranterCannotUseEarningsForBase`, `TestSettleFee_hotKeyPaysTheBaseFeeFromItsFeeBalance`, `TestFundSpendFromEarnings_isDiscardedWithAFailedMessageBranch`, `TestReleaseDeposit_refundsAndBurnsExactSplit`, `TestSlashDeposit_burnsAtMostWhatTheDepositHolds`, `TestCheckInvariants_breakWhenTheLedgerDrifts`, `TestFeeDecorator_tipReachesTheProposer`.
+- `chain/x/fees/`: `TestNextBaseFee_neverBelowFloor`, `TestNextBaseFee_risesWhenFull`, `TestSettleFee_tipMustComeFromBankNeverEarnings`, `TestWithdrawEarnings_movesEarningsToTheOwnersBankBalance`, `TestWithdrawEarnings_moreThanTheBalanceMovesNothing`, `TestSettleFee_baseFeeFallsBackToEarningsWhenBankIsShort`, `TestSettleFee_feeGranterCannotUseEarningsForBase`, `TestSettleFee_hotKeyPaysTheBaseFeeFromItsFeeBalance`, `TestFundSpendFromEarnings_isDiscardedWithAFailedMessageBranch`, `TestReleaseDeposit_refundsAndBurnsExactSplit`, `TestSlashDeposit_burnsAtMostWhatTheDepositHolds`, `TestCheckInvariants_breakWhenTheLedgerDrifts`, `TestFeeDecorator_tipReachesTheProposer`.
 - `chain/x/token/`: `TestCreate_burnsFeeAndLocksDeposit`, `TestTransferHook_gasCapFailsTheTransfer`, `TestTransferHook_aHookWritesOnlyWhenTheTransferSucceeds`, `TestSendRestriction_powersHoldOnABankSend`, `TestSetShieldable_refusesFrozenCapableToken`, `TestDeleteToken_refundsDeposit`, `TestInvariants_breakWhenRecordsDrift`.
 - `chain/app/`: `TestGetMaccPerms_onlyEmissionMintsNorama`, `TestOramaApp_zeroSupplyGenesisProducesBlocksAndPaysEarnings`, `TestEarningsFundOwnTokenCreation`, `TestLockedGenesis_testnetRelaxesOnlyTheClockAndCommittee`.
 

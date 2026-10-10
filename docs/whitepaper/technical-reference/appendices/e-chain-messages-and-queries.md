@@ -85,7 +85,11 @@ Source: `chain/proto/orama/emission/v1/query.proto`
 
 ### Messages
 
-`x/fees` has no Msg service.
+Source: `chain/proto/orama/fees/v1/tx.proto`
+
+| Msg | Request fields | Description |
+|---|---|---|
+| `WithdrawEarnings` | `signer string`, `amount string` | MsgWithdrawEarnings moves amount from the signer's own earnings account to the signer's own bank balance, where an ordinary public MsgSend can spend it. The destination is never a field: it is always the signer, so earnings cannot be aimed at another address by this message. The amount is positive and at most the signer's earnings balance; a larger amount fails the whole message and moves nothing. |
 
 ### Queries
 

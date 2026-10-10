@@ -32,8 +32,19 @@ Earnings can pay:
 - deposits
 - a move into the shielded pool (`MsgShieldEarnings`)
 - funding a node's hot key (`MsgFundHotKey`)
+- a move to the signer's own bank balance (`MsgWithdrawEarnings`)
 
-Earnings cannot pay a tip and cannot be sent to another user. Bonding and deal messages top up a shortfall in the signer's bank balance from the signer's own earnings inside the same message, all or nothing.
+Earnings cannot pay a tip and cannot be sent to another user directly. Bonding and deal messages top up a shortfall in the signer's bank balance from the signer's own earnings inside the same message, all or nothing.
+
+### Withdrawing earnings
+
+`MsgWithdrawEarnings` moves an amount from the signer's earnings to the signer's own bank balance. The amount is a positive whole number of norama and no more than the signer's earnings; a larger amount fails the whole message and moves nothing. The destination is the signer, never a field, so the message cannot aim earnings at another address. From the bank balance an ordinary `MsgSend` pays anyone publicly, a tip can be paid, and the shielded `MsgShield` can move it into the pool. The message emits a `withdraw_earnings` event with the signer, the amount and the earnings left. Withdrawn coins leave the earnings ledger and the `fees` module account together, so `oramad query fees invariants` still holds.
+
+```bash
+oramad tx fees withdraw-earnings 5000000000 --from <key>
+```
+
+The amount is in norama (1 ORAMA is 1,000,000,000). A withdrawal pays its own base fee like any transaction.
 
 ## Hot-key fee balances
 

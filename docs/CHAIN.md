@@ -959,6 +959,13 @@ touch the ledger. `SettleFee` also adds the fee to three counters: collected, bu
 
 A balance debited back to zero is removed from the earnings map rather than stored as a zero row.
 
+`MsgWithdrawEarnings{signer, amount}` (`x/fees`, `oramad tx fees withdraw-earnings`) moves `amount` from the
+signer's own earnings to the signer's own bank balance: `Keeper.WithdrawEarnings` debits the ledger and sends
+the same coins from the `fees` module account in one step, so the first invariant still holds. The amount is a
+positive integer no larger than the signer's earnings (a larger one fails the message and moves nothing), the
+destination is the signer and not a field, and the message emits `withdraw_earnings` with the signer, the amount
+and the earnings left. A fee-only balance is not earnings and cannot be withdrawn.
+
 Earnings today pay **tx fees** (the ante decorator), fund the signer's own **bond** and **storage deal and token fees** (inside the
 message handlers: staking, `x/nodes` `MsgBondNode`, `x/storage` `MsgCreateDeal`/`MsgExtendDeal` for
 the signer's own funds, never a grantor's, and `x/token` `MsgCreateToken`; each calls `FundSpendFromEarnings`

@@ -14,6 +14,7 @@
     "/orama.cnft.v1.MsgTransfer",
     "/orama.cnft.v1.MsgUpdateMetadata",
     "/orama.emission.v1.MsgFaucet",
+    "/orama.fees.v1.MsgWithdrawEarnings",
     "/orama.houses.v1.MsgExecuteProposal",
     "/orama.houses.v1.MsgLockHouseBond",
     "/orama.houses.v1.MsgSubmitProposal",
