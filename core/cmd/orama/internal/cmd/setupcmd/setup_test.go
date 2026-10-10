@@ -375,3 +375,14 @@ func TestChoicesFrom_marksAnAnnouncedNetwork(t *testing.T) {
 		t.Fatalf("%+v, %v", got, err)
 	}
 }
+
+// An announced network supplies the chain id and the release root of a creation; the host-key check
+// runs before that is resolved, so it must not check the creation itself. It used to, and refused
+// `orama setup --create-network stagenet --yes ...` with "needs --chain-id".
+func TestRequireHostKeys_anAnnouncedCreationIsNotCheckedYet(t *testing.T) {
+	create := setup.Options{IPs: []string{"203.0.113.10"}, Yes: true, HostKeys: map[string]string{"": "SHA256:a"},
+		Create: &setup.CreateOptions{Name: "stagenet"}}
+	if err := requireHostKeys(create, false); err != nil {
+		t.Fatalf("a creation whose chain id the announcement supplies was refused: %v", err)
+	}
+}

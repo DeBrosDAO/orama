@@ -82,9 +82,18 @@ func requireHostKeys(opts setup.Options, tty bool) error {
 	if tty && !opts.Yes {
 		return nil
 	}
-	if err := opts.Normalize(); err != nil {
+	// The machines and their host keys are all this check needs. A creation is checked later, once
+	// its announcement has filled in what the flags left out (setup.ResolveAnnounced): checking it
+	// here refused an announced network for a chain id it supplies.
+	machines := opts
+	if machines.Create != nil && strings.TrimSpace(machines.Name) == "" {
+		machines.Name = setup.DefaultCreateNodeName // what the creation would default it to
+	}
+	machines.Create = nil
+	if err := machines.Normalize(); err != nil {
 		return err
 	}
+	opts = machines
 	for _, ip := range opts.IPs {
 		if opts.HostKeys[ip] == "" && opts.HostKeys[""] == "" {
 			return clierr.Usage("no --host-key for %s: unattended, setup trusts only a host key it was given.\n"+
