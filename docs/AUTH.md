@@ -988,7 +988,7 @@ about it — plus the fields that make it actionable.
 | `ORIGIN_NOT_ALLOWED` | a WebSocket upgrade whose `Origin` is not this host or a name under it (403) |
 | `OWNERSHIP_REQUIRED` | the credential holds no grant in this namespace |
 | `NOT_AN_OPERATOR` | the wallet is not on the cluster's operator list |
-| `NAMESPACE_QUOTA` | the wallet already owns as many namespaces as one wallet may (403): a create is refused it; the body carries `wallet` and `limit` |
+| `NAMESPACE_QUOTA` | the wallet already owns as many namespaces as one wallet may (403): a create is refused it; the message names the cap, the body carries no other field |
 | `TRANSFER_REFUSED` | a transfer the recipient cannot take (403), for example a wallet at its namespace cap. It names neither the wallet nor the limit; the owner keeps the namespace, and the reason is in the audit trail |
 | `DESTINATION_NOT_ALLOWED` | the proxy refused the destination |
 | `RELAY_DESTINATION_NOT_ALLOWED` | the relay (`/v1/proxy/relay`) reaches only a host under its allowed suffixes, on port 443, never an IP literal (400) |

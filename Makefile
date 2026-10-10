@@ -44,8 +44,11 @@ sdk: sdk-build
 sdk-build:
 	cd sdk && pnpm install && pnpm build
 
+# sdk-test is part of `make test`: the SDK's unit tests include checks against the
+# gateway's Go source (the auth error codes), so a gateway change can break them.
 sdk-test:
-	cd sdk && pnpm test
+	@test -d sdk/node_modules || { echo "sdk/node_modules is missing: run 'cd sdk && pnpm install --frozen-lockfile' first, then make test again"; exit 1; }
+	pnpm --dir sdk test
 
 # === Vault (Zig) ===
 .PHONY: vault vault-build vault-test
@@ -119,7 +122,7 @@ whitepaper-short: whitepaper-diagrams whitepaper-short-check
 whitepaper: whitepaper-diagrams whitepaper-gen whitepaper-check
 	cd core && go run ./tools/whitepaper build
 
-test: core-test caddy-test e2e-lint e2e-coverage e2e-test-unit whitepaper-check
+test: core-test caddy-test sdk-test e2e-lint e2e-coverage e2e-test-unit whitepaper-check
 clean: core-clean
 
 help:
@@ -131,4 +134,6 @@ help:
 	@echo "  OS:            make os-build"
 	@echo "  Fleet e2e:     make e2e-fleet | e2e-coverage | e2e-lint | e2e-test-unit"
 	@echo ""
-	@echo "  Aggregate:     make build | test | clean  (delegates to core)"
+	@echo "  SDK (TS):      make sdk-build | sdk-test"
+	@echo ""
+	@echo "  Aggregate:     make build | clean  (delegates to core); make test runs core, caddy, SDK unit, fleet-e2e lint/coverage and whitepaper checks"
