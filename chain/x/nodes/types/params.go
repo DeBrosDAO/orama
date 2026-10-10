@@ -62,6 +62,12 @@ var DefaultBondPerGiB = math.NewInt(params.NoramaPerOrama)
 // signed the final integer.
 var DefaultDepositPerByte = math.NewInt(68_359)
 
+// DefaultNameDeposit is the genesis deposit for a node identification name: 1 ORAMA, locked while
+// the name is held and returned in full on release or retire. Like the role bonds it is a
+// placeholder until G1 signs a number; it prices holding a name, not claiming one, because a
+// released name costs nothing.
+var DefaultNameDeposit = math.NewInt(params.NoramaPerOrama)
+
 // AllRoles is every role a node may register, in enum order.
 func AllRoles() []Role {
 	return []Role{RoleValidator, RoleStorage, RoleRelay, RoleExit, RoleDirauth, RoleArchiver}
@@ -77,6 +83,7 @@ func NewParams(
 	minServiceVolumeBytes uint64,
 	maxEndpoints, maxBindings uint32,
 	networkIdentityLockSeconds int64,
+	nameDeposit math.Int,
 ) Params {
 	return Params{
 		MinBond:                minBond,
@@ -89,6 +96,7 @@ func NewParams(
 		MaxBindings:            maxBindings,
 
 		NetworkIdentityLockSeconds: networkIdentityLockSeconds,
+		NameDeposit:                nameDeposit,
 	}
 }
 
@@ -109,6 +117,7 @@ func DefaultParams() Params {
 		DefaultMaxEndpoints,
 		DefaultMaxBindings,
 		DefaultNetworkIdentityLockSeconds,
+		DefaultNameDeposit,
 	)
 }
 
@@ -162,6 +171,9 @@ func (p Params) Validate() error {
 	}
 	if p.NetworkIdentityLockSeconds < 0 {
 		return fmt.Errorf("network_identity_lock_seconds must not be negative, got %d", p.NetworkIdentityLockSeconds)
+	}
+	if p.NameDeposit.IsNil() || !p.NameDeposit.IsPositive() {
+		return fmt.Errorf("name_deposit must be a positive integer")
 	}
 	if p.MaxBindings == 0 || p.MaxBindings > absoluteBindingCap {
 		return fmt.Errorf("max_bindings must be in [1, %d], got %d", absoluteBindingCap, p.MaxBindings)

@@ -91,6 +91,11 @@ func (q queryServer) ValidatorPower(goCtx context.Context, req *types.QueryValid
 		}
 	}
 
+	operator, err := q.Keeper.validatorOperator(ctx, valAddr)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
 	// BootstrapShare/CappedShare/PowerShare are not recomputed for a query (that requires the same
 	// full block-universe computation EndBlock does, which needs an EmissionKeeper the query
 	// server does not hold); only the last CometBFT power actually assigned is returned. A future
@@ -101,6 +106,7 @@ func (q queryServer) ValidatorPower(goCtx context.Context, req *types.QueryValid
 		CappedShare:     math.LegacyZeroDec(),
 		PowerShare:      math.LegacyZeroDec(),
 		CometPower:      power,
+		Operator:        operator,
 	}, nil
 }
 

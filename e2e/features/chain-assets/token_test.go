@@ -165,12 +165,10 @@ func TestToken_messagesNeedAnExistingToken(t *testing.T) {
 	c.RequireInvariants(t, "refused token messages")
 }
 
-// TestToken_bankSendOfUnknownFactoryDenomIsNotANoramaPayment: the norama send
-// restriction does not apply to a factory denom, and x/token's bank restriction
-// governs only tokens that exist: a user-to-user MsgSend of a factory denom
-// nobody created is refused only for the missing balance, not as a public
-// norama payment.
-func TestToken_bankSendOfUnknownFactoryDenomIsNotANoramaPayment(t *testing.T) {
+// TestToken_bankSendOfUnknownFactoryDenomIsRefusedForTheBalance: x/token's bank
+// restriction governs only tokens that exist: a user-to-user MsgSend of a
+// factory denom nobody created is refused only for the missing balance.
+func TestToken_bankSendOfUnknownFactoryDenomIsRefusedForTheBalance(t *testing.T) {
 	t.Parallel()
 	c := chain.New(t)
 	k := c.FundedValidator(t, 0, chain.Orama(1))
@@ -180,9 +178,6 @@ func TestToken_bankSendOfUnknownFactoryDenomIsNotANoramaPayment(t *testing.T) {
 		"amount": []any{map[string]any{"denom": denom, "amount": "1"}}})
 	r := c.Submit(t, k, chain.TxOptions{}, send)
 	chain.RequireRefused(t, "send of a factory denom", r, "insufficient funds")
-	if strings.Contains(r.Log, "public user-to-user norama transfer is refused") {
-		t.Errorf("the norama restriction refused a factory denom: %s", r.Log)
-	}
 }
 
 // TestToken_bankSendHoldsTokenPowers: a token's pause holds on a plain x/bank

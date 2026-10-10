@@ -21,6 +21,8 @@ func RegisterLegacyAminoCodec(cdc *codec.LegacyAmino) {
 	legacy.RegisterAminoMsg(cdc, &MsgRegisterCluster{}, "orama/nodes/MsgRegisterCluster")
 	legacy.RegisterAminoMsg(cdc, &MsgUpdateCluster{}, "orama/nodes/MsgUpdateCluster")
 	legacy.RegisterAminoMsg(cdc, &MsgRetireCluster{}, "orama/nodes/MsgRetireCluster")
+	legacy.RegisterAminoMsg(cdc, &MsgClaimNodeName{}, "orama/nodes/MsgClaimNodeName")
+	legacy.RegisterAminoMsg(cdc, &MsgReleaseNodeName{}, "orama/nodes/MsgReleaseNodeName")
 }
 
 // RegisterInterfaces registers x/nodes messages as sdk.Msg implementations.
@@ -37,6 +39,8 @@ func RegisterInterfaces(registry cdctypes.InterfaceRegistry) {
 		&MsgRegisterCluster{},
 		&MsgUpdateCluster{},
 		&MsgRetireCluster{},
+		&MsgClaimNodeName{},
+		&MsgReleaseNodeName{},
 	)
 	msgservice.RegisterMsgServiceDesc(registry, &_Msg_serviceDesc)
 }

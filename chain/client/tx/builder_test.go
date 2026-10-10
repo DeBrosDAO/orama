@@ -148,9 +148,8 @@ func TestDeriveAccount_appliesParamsCoinTypeAndPrefixes(t *testing.T) {
 }
 
 // TestBuild_encodesUserNoramaMsgSend encodes a norama MsgSend from one user
-// account to another and reads it back. It does not broadcast the transaction
-// and does not claim the chain accepts the payment: any send restriction is
-// the app's, and this test only checks the encoding.
+// account to another and reads it back. It does not broadcast the transaction;
+// it only checks the encoding.
 func TestBuild_encodesUserNoramaMsgSend(t *testing.T) {
 	b := newBuilder(t)
 	from := mustAccount(t)

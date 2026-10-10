@@ -8,7 +8,7 @@
 
 ## The shielded pool
 
-A public chain leaks who pays whom. Orama closes that for its own money in two steps. `NoramaSendRestriction` refuses a bank send of norama unless one side is a module account or the receiver is a contract, so one user cannot pay another in the open. The way to pay a person is the pool, a single balance of norama held by the `shielded` module account and spent as Orchard-style notes. Inside the pool the chain sees nullifiers, note commitments, a value balance, an anchor and a proof. It never sees an amount, sender or recipient.
+A public chain leaks who pays whom. Orama lets a user choose. A bank send of norama between users is an ordinary public payment. The private way to pay a person is the pool, a single balance of norama held by the `shielded` module account and spent as Orchard-style notes. Inside the pool the chain sees nullifiers, note commitments, a value balance, an anchor and a proof. It never sees an amount, sender or recipient.
 
 ![The shielded pool: wallet, transactions, the admission pipeline, the two verifiers and the state](../technical-reference/diagrams/ch43-overview.svg)
 
@@ -52,7 +52,7 @@ A proposal that hits a read fault is rolled back and retried, and fails after fi
 
 Contracts run on CosmWasm through wasmd, with `x/wasmpolicy` around it:
 
-- **No public payment graph.** A contract may not send norama to a user and may not wrap norama as a token. It pays users through an earnings binding.
+- **Norama stays norama.** A contract may hold and pay norama like any account, but may not wrap it as a token. It can pay a user's earnings through an earnings binding.
 - **Closed uploads.** Until a sunset height (3,162,240 blocks), only genesis code and governed hashes may be stored. Five audited standard contracts, including `cw20-base` and `cw721-base`, ship at genesis.
 - **Priced state.** A metered store counts bytes added and removed, and the caller locks a refundable deposit of 68,359 norama per byte, capped at 10 ORAMA per transaction. A shrink refunds 99%.
 - **No IBC, no stargate, no staking.** A contract is always the signer of what it sends, since no binding has a sender field, and reaches Orama's modules only through bindings for tokens, NFTs, the market, storage and earnings. The shielded binding returns `NOT_LINKED`.

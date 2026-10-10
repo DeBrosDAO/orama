@@ -18,11 +18,11 @@ A genesis can include five standard contracts, stored as codes 1 to 5 and none i
 | 4 | Fixed multisig (`cw3-fixed-multisig` 2.0.0) | cw-plus v2.0.0 |
 | 5 | Vesting (`cw-vesting` 2.7.1) | dao-contracts v2.7.1 |
 
-They are pinned to upstream commits with patches. A manifest (`chain/contracts/standard/manifest.json`) carries the hashes and `make contracts-verify` checks them. Because contracts cannot send ORAMA to users, native ORAMA cannot be paid out by the multisig or the escrow and cannot be vested. Tokens work.
+They are pinned to upstream commits with patches. A manifest (`chain/contracts/standard/manifest.json`) carries the hashes and `make contracts-verify` checks them. A contract can hold and pay out native ORAMA, so the multisig and the escrow release it to users. The vesting contract cannot vest native ORAMA, because it sets a distribution withdraw address and contracts may not; it vests tokens.
 
 ## The send rule
 
-A user can pay a contract. A contract cannot bank-send `norama` to a user. The one way a contract pays a user is the `earnings.pay` binding, which credits the user's earnings account.
+A contract is an ordinary account for payments: a user can pay a contract, and a contract can bank-send `norama` to a user or to another contract. Nobody can bank-send to a module account. A contract that wants a payout to land in a user's earnings account, where it can pay fees and bonds, uses the `earnings.pay` binding instead.
 
 ## Orama bindings
 

@@ -44,6 +44,16 @@ type relayNodes struct {
 	nodes nodeskeeper.Keeper
 }
 
+// NodeLive reports whether a relay's node can still earn: a node that retired, was tombstoned or is
+// jailed is paid nothing, so a relay stops earning the epoch its node leaves.
+func (r relayNodes) NodeLive(ctx context.Context, nodeID string) (bool, error) {
+	node, err := r.nodes.GetNode(sdk.UnwrapSDKContext(ctx), nodeID)
+	if err != nil {
+		return false, err
+	}
+	return node.Status == nodestypes.NodeStatusRegistered || node.Status == nodestypes.NodeStatusActive, nil
+}
+
 func (r relayNodes) RelayBinding(ctx context.Context, nodeID string) ([]byte, sdk.AccAddress, string, error) {
 	node, err := r.nodes.GetNode(sdk.UnwrapSDKContext(ctx), nodeID)
 	if err != nil {

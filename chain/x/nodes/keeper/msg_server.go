@@ -99,3 +99,17 @@ func (m msgServer) RetireCluster(goCtx context.Context, msg *types.MsgRetireClus
 	}
 	return &types.MsgRetireClusterResponse{}, nil
 }
+
+func (m msgServer) ClaimNodeName(goCtx context.Context, msg *types.MsgClaimNodeName) (*types.MsgClaimNodeNameResponse, error) {
+	if err := m.Keeper.ClaimNodeName(sdk.UnwrapSDKContext(goCtx), msg); err != nil {
+		return nil, err
+	}
+	return &types.MsgClaimNodeNameResponse{}, nil
+}
+
+func (m msgServer) ReleaseNodeName(goCtx context.Context, msg *types.MsgReleaseNodeName) (*types.MsgReleaseNodeNameResponse, error) {
+	if err := m.Keeper.ReleaseNodeName(sdk.UnwrapSDKContext(goCtx), msg); err != nil {
+		return nil, err
+	}
+	return &types.MsgReleaseNodeNameResponse{}, nil
+}

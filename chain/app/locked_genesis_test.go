@@ -90,6 +90,8 @@ var lockedRows = []lockedRow{
 	{"nodes", "max_bindings", "8", "track-c C6 record bound (code default)"},
 	{"nodes", "network_identity_lock_seconds", "1209600", "14 days, the D17 parameter timelock; track-c C5/C7 give no number for how long a declared /16 and ASN must stand (launch default), " + citeG1},
 
+	{"nodes", "name_deposit", "1000000000", "epic 3306 D1: 1 ORAMA locked per identification name, returned on release or retire; " + citeG1},
+
 	// x/storage: C7, G1.
 	{"storage", "min_deal_bytes", "1024", citeC7},
 	{"storage", "deal_fee", "1000", citeC7},

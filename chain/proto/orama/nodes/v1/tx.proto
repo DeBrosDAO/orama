@@ -26,6 +26,8 @@ service Msg {
   rpc RegisterCluster(MsgRegisterCluster) returns (MsgRegisterClusterResponse);
   rpc UpdateCluster(MsgUpdateCluster) returns (MsgUpdateClusterResponse);
   rpc RetireCluster(MsgRetireCluster) returns (MsgRetireClusterResponse);
+  rpc ClaimNodeName(MsgClaimNodeName) returns (MsgClaimNodeNameResponse);
+  rpc ReleaseNodeName(MsgReleaseNodeName) returns (MsgReleaseNodeNameResponse);
 }
 
 message MsgRegisterOperator {
@@ -189,3 +191,30 @@ message MsgRetireCluster {
 }
 
 message MsgRetireClusterResponse {}
+
+// MsgClaimNodeName claims name for one of the operator's nodes and locks
+// name_deposit. A node holds at most one name, and a name belongs to one node
+// (first come, first served). The name is a DNS label of 3 to 32 characters
+// from a-z, 0-9 and '-', without a leading or trailing '-', and not reserved.
+message MsgClaimNodeName {
+  option (cosmos.msg.v1.signer) = "operator";
+  option (amino.name) = "orama/nodes/MsgClaimNodeName";
+
+  string operator = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  string node_id = 2;
+  string name = 3;
+}
+
+message MsgClaimNodeNameResponse {}
+
+// MsgReleaseNodeName gives the node's name up and returns its deposit to the
+// operator. A node that retires releases its name the same way.
+message MsgReleaseNodeName {
+  option (cosmos.msg.v1.signer) = "operator";
+  option (amino.name) = "orama/nodes/MsgReleaseNodeName";
+
+  string operator = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  string node_id = 2;
+}
+
+message MsgReleaseNodeNameResponse {}

@@ -20,4 +20,5 @@ message GenesisState {
   // next_unbonding_id is the next id the unbonding queue will assign.
   // Zero means the queue has never issued an id.
   uint64 next_unbonding_id = 8;
+  repeated NodeName node_names = 9 [(gogoproto.nullable) = false];
 }

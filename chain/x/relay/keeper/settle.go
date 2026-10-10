@@ -262,6 +262,13 @@ func (k Keeper) scoreRelays(ctx sdk.Context, params types.Params, reports []type
 		if !found || relay.Jailed || !identitiesMatch(relay, b.ids) {
 			continue
 		}
+		live, err := k.nodes.NodeLive(ctx, relay.NodeId)
+		if err != nil {
+			return nil, fmt.Errorf("settle epoch: failed to check node %s of relay: %w", relay.NodeId, err)
+		}
+		if !live {
+			continue
+		}
 		if medianDec(b.uptimes).LT(params.MinUptimeFraction) {
 			continue
 		}

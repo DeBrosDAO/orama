@@ -44,7 +44,7 @@ func TestReadArchiveManifest_ReturnsTheManifestBytes(t *testing.T) {
 func TestReadArchiveManifest_ArchiveWithoutManifestIsNamed(t *testing.T) {
 	path := writeManifestArchive(t, map[string]string{"bin/orama": "ELF"})
 	_, err := ReadArchiveManifest(path)
-	if err == nil || !strings.Contains(err.Error(), "not an orama build archive") {
+	if err == nil || !strings.Contains(err.Error(), "not an Orama release archive") {
 		t.Fatalf("expected a not-an-archive error, got %v", err)
 	}
 }

@@ -19,6 +19,7 @@ import (
 	"github.com/cosmos/cosmos-sdk/crypto/keys/ed25519"
 	simtestutil "github.com/cosmos/cosmos-sdk/testutil/sims"
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
 	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
 	bankkeeper "github.com/cosmos/cosmos-sdk/x/bank/keeper"
 	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
@@ -34,7 +35,6 @@ import (
 	"github.com/DeBrosOfficial/network/chain/app/params"
 	emissiontypes "github.com/DeBrosOfficial/network/chain/x/emission/types"
 	powertypes "github.com/DeBrosOfficial/network/chain/x/power/types"
-	shieldedpolicy "github.com/DeBrosOfficial/network/chain/x/shielded/policy"
 	"github.com/DeBrosOfficial/network/chain/x/shielded/verify"
 	tokentypes "github.com/DeBrosOfficial/network/chain/x/token/types"
 )
@@ -124,20 +124,21 @@ func TestOramaApp_buildsAndValidatesDefaultGenesis(t *testing.T) {
 	require.True(t, distrGenState.Params.CommunityTax.IsZero(), "community_tax must default to zero: there is no spend path for it")
 }
 
-func TestUserToUserNoramaSendIsRefused(t *testing.T) {
+func TestBankKeeper_userToUserNoramaSendIsAllowed(t *testing.T) {
 	oramaApp := buildTestApp(t)
 	ctx := sdk.NewContext(oramaApp.CommitMultiStore(), cmtprototypes.Header{}, true, oramaApp.Logger())
 	from := sdk.AccAddress(bytes.Repeat([]byte{1}, 20))
 	to := sdk.AccAddress(bytes.Repeat([]byte{2}, 20))
-	err := oramaApp.BankKeeper.SendCoins(ctx, from, to, sdk.NewCoins(sdk.NewInt64Coin(params.BaseDenom, 1)))
-	require.ErrorIs(t, err, shieldedpolicy.ErrPublicPayment)
+	one := sdk.NewCoins(sdk.NewInt64Coin(params.BaseDenom, 1))
+	require.NoError(t, oramaApp.BankKeeper.MintCoins(ctx, emissiontypes.ModuleName, one))
+	require.NoError(t, oramaApp.BankKeeper.SendCoinsFromModuleToAccount(ctx, emissiontypes.ModuleName, from, one))
 
-	err = oramaApp.BankKeeper.SendCoins(ctx, from, to, sdk.NewCoins(sdk.NewInt64Coin("ufoo", 1)))
-	require.NotErrorIs(t, err, shieldedpolicy.ErrPublicPayment)
+	require.NoError(t, oramaApp.BankKeeper.SendCoins(ctx, from, to, one))
+	require.True(t, oramaApp.BankKeeper.GetBalance(ctx, from, params.BaseDenom).IsZero())
+	require.Equal(t, int64(1), oramaApp.BankKeeper.GetBalance(ctx, to, params.BaseDenom).Amount.Int64())
 
-	module := authtypes.NewModuleAddress(emissiontypes.ModuleName)
-	err = oramaApp.BankKeeper.SendCoins(ctx, module, to, sdk.NewCoins(sdk.NewInt64Coin(params.BaseDenom, 1)))
-	require.NotErrorIs(t, err, shieldedpolicy.ErrPublicPayment)
+	err := oramaApp.BankKeeper.SendCoins(ctx, from, to, one)
+	require.ErrorIs(t, err, sdkerrors.ErrInsufficientFunds, "a public send is limited by the sender's balance, nothing else")
 }
 
 // TestOramaApp_zeroSupplyGenesisProducesBlocksAndPaysEarnings drives InitChain, from an exactly

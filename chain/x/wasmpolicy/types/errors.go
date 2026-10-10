@@ -16,9 +16,6 @@ var (
 	// InitGenesis is the only writer, and it refuses a second write.
 	ErrSunsetImmutable = errors.Register(ModuleName, 2, "upload_sunset_height cannot be changed by a message")
 
-	// ErrContractNorama is returned when a contract bank-sends norama to a user account.
-	ErrContractNorama = errors.Register(ModuleName, 3, "contract cannot bank-send norama to a user account")
-
 	// ErrIBCDisabled is returned when a contract message tries to open or use an IBC channel.
 	ErrIBCDisabled = errors.Register(ModuleName, 4, "contract cannot open an IBC channel")
 

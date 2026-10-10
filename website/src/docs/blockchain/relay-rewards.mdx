@@ -18,7 +18,7 @@ Reporters are the directory authorities' measurement software. A report from any
 
 ## How a reward is computed
 
-For each relay fingerprint, take the median of the reported weights, uptime and exit flag across at least a quorum of reporters. A relay is paid only if it is registered, not jailed, its ed25519 id matches, and its median uptime is at least 0.9.
+For each relay fingerprint, take the median of the reported weights, uptime and exit flag across at least a quorum of reporters. A relay is paid only if it is registered, not jailed, its ed25519 id matches, its median uptime is at least 0.9, and its node is still live: a node that retired, was tombstoned or is jailed earns nothing until it is back.
 
 ```
 amount = min(median weight, per_relay_cap)       x 2 if the relay is an exit
@@ -26,7 +26,7 @@ amount = min(median weight, per_relay_cap)       x 2 if the relay is an exit
          then scaled down to the epoch's relay ceiling
 ```
 
-The weight comes from the authority's *measured* bandwidth. A relay no authority measured weighs 0 and earns nothing, and the measurement software is not installed anywhere yet (see below).
+The weight is in norama: the reporter reports the authority's *measured* bandwidth times 1,000,000 norama, so a measured value of 1,000 is 1 ORAMA for the epoch and the per-relay cap of 100 ORAMA is reached at 100,000. A relay no authority measured weighs 0 and earns nothing, and the measurement software is not installed anywhere yet (see below).
 
 | Parameter | Value |
 |---|---|

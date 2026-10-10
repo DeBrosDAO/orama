@@ -2,14 +2,13 @@
 // v0.54.4 simapp reference (github.com/cosmos/cosmos-sdk/tree/v0.54.4/simapp), trimmed to the
 // module list decided in plans/open-network/track-c-chain.md (C1) and with x/emission added.
 //
-// Wired: auth, bank (norama user-to-user sends refused), staking, slashing, distribution,
+// Wired: auth, bank (norama moves publicly or through the shielded pool), staking, slashing, distribution,
 // consensus params, upgrade, genutil, evidence, feegrant, x/emission, x/fees, x/power,
 // wasmpolicy, and — when this binary is built with cgo and libwasmvm — wasmd's x/wasm.
 // A -tags nowasm (or CGO_ENABLED=0) binary does not link the VM and refuses to start a node
 // whose genesis or options claim the wasm module.
 //
-// Bank send restriction: a wasm contract cannot send norama to a user account. It can send
-// norama to the fees and fees_deposits module accounts. IBC is not a wired module.
+// IBC is not a wired module.
 //
 // Deliberately not wired (plans/open-network/track-c-chain.md C1 "Not wired"): x/mint (replaced
 // by x/emission), x/gov (no governance module exists yet; see the "authority" discussion below),
@@ -18,7 +17,6 @@
 package app
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -126,7 +124,6 @@ import (
 	shieldedante "github.com/DeBrosOfficial/network/chain/x/shielded/ante"
 	shieldedkeeper "github.com/DeBrosOfficial/network/chain/x/shielded/keeper"
 	"github.com/DeBrosOfficial/network/chain/x/shielded/nullifier"
-	shieldedpolicy "github.com/DeBrosOfficial/network/chain/x/shielded/policy"
 	shieldedtypes "github.com/DeBrosOfficial/network/chain/x/shielded/types"
 	"github.com/DeBrosOfficial/network/chain/x/shielded/verify"
 	"github.com/DeBrosOfficial/network/chain/x/storage"
@@ -246,16 +243,12 @@ type OramaApp struct {
 	ShieldedVerifiers []verify.Verifier
 	nullifierStore    *nullifier.Store
 
-	// isContract reports whether an address is a wasm contract, or is being funded as one by
-	// wasmd's instantiate. It is set by installWasm and is always false without the wasm VM.
-	isContract func(ctx context.Context, addr sdk.AccAddress) bool
 	// tokenHook is x/token's transfer hook; installWasm binds it to the wasm keeper.
 	tokenHook *contractTransferHook
 	//lint:ignore SA1019 module.NewManager accepts only the legacy module.AppModule; the modules are wired through it
 	wasmModules      []module.AppModule
 	wasmGenesisOrder []string
 	uploadSunset     wasmpolicyante.UploadSunsetDecorator
-	contractSend     wasmpolicyante.ContractSendDecorator
 	// wasmKeeper is the wasmd keeper when libwasmvm is linked, nil otherwise.
 	// The concrete type stays in the cgo file so app.go does not import wasmd.
 	wasmKeeper any
@@ -376,14 +369,6 @@ func NewOramaApp(
 		UnreachableAuthority(),
 		logger,
 	)
-	// A user cannot bank-send norama to another user. Module accounts still can.
-	// Shielded bundles are a separate path (x/shielded).
-	// isContract is bound by installWasm, after the wasm keeper exists; the restriction only runs
-	// once blocks do.
-	app.BankKeeper.AppendSendRestriction(shieldedpolicy.NoramaSendRestriction(BlockedAddresses(), func(ctx context.Context, addr sdk.AccAddress) bool {
-		return app.isContract(ctx, addr)
-	}))
-
 	enabledSignModes := append(authtx.DefaultSignModes, sigtypes.SignMode_SIGN_MODE_TEXTUAL)
 	txConfigOpts := authtx.ConfigOptions{
 		EnabledSignModes:           enabledSignModes,
@@ -499,6 +484,8 @@ func NewOramaApp(
 		app.FeesKeeper,
 		app.AccountKeeper,
 	)
+	// A validator counts toward the operator of the node that binds its consensus key.
+	app.PowerKeeper = app.PowerKeeper.WithOperators(app.NodesKeeper)
 	app.CnftKeeper = cnftkeeper.NewKeeper(
 		appCodec,
 		runtime.NewKVStoreService(keys[cnfttypes.StoreKey]),
@@ -568,7 +555,6 @@ func NewOramaApp(
 	/****  Module Options ****/
 
 	app.installWasm(keys, appOpts)
-	app.BankKeeper.AppendSendRestriction(app.contractSend.Restrict)
 	// A factory token's pause, freeze, non-transferable flag and transfer fee hold on a bank send too.
 	app.BankKeeper.AppendSendRestriction(app.TokenKeeper.SendRestriction)
 
@@ -766,7 +752,6 @@ func (app *OramaApp) setAnteHandler(txConfig client.TxConfig) {
 		// A shielded message is the only message of its tx: refused here, before any fee is taken.
 		shieldedante.ShapeDecorator{},
 		app.uploadSunset,
-		app.contractSend,
 		wasmpolicyante.NewDepositPayerDecorator(),
 		ante.NewTxTimeoutHeightDecorator(),
 		ante.NewValidateMemoDecorator(app.AccountKeeper),
@@ -970,9 +955,9 @@ func ModuleAccountPerms() map[string][]string {
 	return perms
 }
 
-// BlockedAddresses returns every module account address. A user cannot pay one of these
-// directly. User-to-user norama sends are refused by the shielded send restriction. A contract
-// cannot pay a user through the bank; the contract restriction allows fees and fees_deposits.
+// BlockedAddresses returns every module account address. Nobody can pay one of these with a
+// bank message, so a public transfer can never reach the earnings or deposit ledgers' module
+// accounts and unbalance them. Norama moves between plain accounts and contracts publicly.
 func BlockedAddresses() map[string]bool {
 	modAccAddrs := make(map[string]bool)
 	for acc := range ModuleAccountPerms() {

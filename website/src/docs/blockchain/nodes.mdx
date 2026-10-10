@@ -24,8 +24,9 @@ All are signed by the owning operator. None needs an authority.
 | `DeclareCapacity` | A STORAGE node says how many bytes it will hold |
 | `FundHotKey` | Moves earnings into the hot key's fee-only balance |
 | `RegisterCluster`, `UpdateCluster`, `RetireCluster` | Manage the optional public cluster row |
+| `ClaimNodeName` / `ReleaseNodeName` | Claim or give up a node's identification name |
 
-**Bindings.** A node proves control of each service key by signing `orama-global-bind-v1|chain-id|operator|service|hex(pubkey)` with that key (secp256k1 or ed25519). Exactly one `hot-key` binding is required. The hot key must differ from the operator key and from any other live node's hot key. `orama global bind` produces a binding.
+**Bindings.** A node proves control of each service key by signing `orama-global-bind-v1|chain-id|operator|service|hex(pubkey)` with that key (secp256k1 or ed25519). Exactly one `hot-key` binding is required. A node that runs a validator also binds the validator's ed25519 consensus key under the service name `consensus` (optional, at most one): that binding is what attributes the validator to this node's operator for the per-operator power cap, see [Validators](/docs/blockchain/validators). Retiring the node, or rotating the key away, unlinks the validator. The hot key must differ from the operator key and from any other live node's hot key. `orama global bind` produces a binding.
 
 ## Parameters (production genesis values)
 
@@ -37,6 +38,7 @@ All are signed by the owning operator. None needs an authority.
 | `deposit_per_byte` | 68,359 norama |
 | `probation_capacity_bytes` | 1 GiB |
 | `max_endpoints`, `max_bindings` | 8 each |
+| `name_deposit` | 1 ORAMA (code default) |
 | Network identity lock | 14 days (code default) |
 
 A node counts as *active for a role* only while the node is active and that role's bond is at least `min_bond`. A pending unbonding stops counting immediately.
@@ -51,6 +53,22 @@ For protocol deals and for house eligibility the chain needs to know where a nod
 - One literal IP belongs to one live node.
 
 A node with no literal-IP endpoint or no declared ASN cannot take a protocol-deal slot, and an operator without both cannot be eligible for the operator house.
+
+## Identification names
+
+An operator can claim a name for one of its nodes with `MsgClaimNodeName`. The name is the DNS label of `<name>.<network>.orama.network`: an address record (A or AAAA) for each literal IP among the node's endpoints. It identifies the node and nothing more. There is no NS record and no glue, so a name delegates nothing; a private cluster keeps using its developer's own domain.
+
+The chain enforces:
+
+- **Shape.** Lowercase letters, digits and `-`, 3 to 32 characters, no leading or trailing `-`, and no `xn--` prefix.
+- **Reserved names.** `seed` and every numbered seed (`seed1`, `seed2`, ...), `ns` names (`ns1`, ...), `www`, `api`, `admin`, `gateway`, `explorer`, `status`, `releases`, `mail` and a list of other labels people trust by habit (`ReservedNames` in `chain/x/nodes/types/name.go`) cannot be claimed.
+- **First come, first served.** A name belongs to the first node that claims it, until it is released.
+- **One name per node.** A node that already holds a name must release it before it claims another.
+- **A refundable deposit.** `name_deposit` is locked in the nodes module account (from the operator's bank balance, topped up from the operator's own earnings if it is short) and returned in full by `ReleaseNodeName` or when the node retires or is tombstoned. Releasing a name costs nothing, so the deposit prices holding a name, not claiming one.
+
+Only the node's own operator can claim or release its name. A name with no literal-IP endpoint on its node resolves to no address until the node registers one. `oramad tx nodes claim-name <node-id> <name>` and `release-name <node-id>` send the messages; the events are `claim_node_name` and `release_node_name` (with the reason `release`, `retire` or `tombstone`).
+
+Three queries read the names, and the gateway serves all three. `NodeByName` returns the node a name identifies with the literal IPs of its endpoints. `NameOfNode` returns the name a node holds and its deposit. `NodeNames` pages through every claim in name order, at most 1,000 names a page; it pages by the key the previous page returned, and refuses an offset and computes no total. The service that serves the records pages through it.
 
 ## What happens every block
 
@@ -74,4 +92,4 @@ The fee-free registration quota planned for registering nodes is not in the code
 
 ## Queries
 
-`params`, `operator`, `node`, `cluster`, `unbondings` and `invariants` on `oramad query nodes`. The query behind `unbondings` is `NodeUnbondings` (`orama chain query orama.nodes.v1.Query/NodeUnbondings`, the SDK's `nodeUnbondings`); it returns at most 1,000 entries. The gateway serves all of them except `Invariants`.
+`params`, `operator`, `node`, `cluster`, `unbondings`, `node-by-name`, `name-of-node`, `node-names` and `invariants` on `oramad query nodes`. The query behind `unbondings` is `NodeUnbondings` (`orama chain query orama.nodes.v1.Query/NodeUnbondings`, the SDK's `nodeUnbondings`); it returns at most 1,000 entries. The gateway serves all of them except `Invariants`.

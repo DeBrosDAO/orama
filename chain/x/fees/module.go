@@ -30,25 +30,29 @@ var (
 	_ module.AppModuleBasic = AppModuleBasic{}
 	_ module.HasGenesis     = AppModule{}
 	_ module.HasName        = AppModule{}
-	_ module.HasServices    = AppModule{}
+	_ module.AppModuleBasic = AppModuleBasic{}
 
 	_ appmodule.AppModule     = AppModule{}
 	_ appmodule.HasEndBlocker = AppModule{}
 )
 
-// AppModuleBasic defines the basic application module used by x/fees. There is no Msg service and
-// nothing to register on the legacy Amino codec or the interface registry: fees are paid through
-// the ante handler, and earnings/deposits are moved only by other modules' keeper calls.
+// AppModuleBasic defines the basic application module used by x/fees. Its one Msg is
+// MsgWithdrawEarnings; fees are paid through the ante handler, and earnings are credited and
+// deposits are locked only by other modules' keeper calls.
 type AppModuleBasic struct{}
 
 // Name returns the module's name.
 func (AppModuleBasic) Name() string { return types.ModuleName }
 
-// RegisterLegacyAminoCodec is a no-op: x/fees has no Msg types.
-func (AppModuleBasic) RegisterLegacyAminoCodec(*codec.LegacyAmino) {}
+// RegisterLegacyAminoCodec registers x/fees' amino types.
+func (AppModuleBasic) RegisterLegacyAminoCodec(cdc *codec.LegacyAmino) {
+	types.RegisterLegacyAminoCodec(cdc)
+}
 
-// RegisterInterfaces is a no-op: x/fees has no Any-packed types.
-func (AppModuleBasic) RegisterInterfaces(cdctypes.InterfaceRegistry) {}
+// RegisterInterfaces registers x/fees' protobuf interfaces.
+func (AppModuleBasic) RegisterInterfaces(reg cdctypes.InterfaceRegistry) {
+	types.RegisterInterfaces(reg)
+}
 
 // RegisterGRPCGatewayRoutes serves x/fees's queries over REST (the paths are the google.api.http
 // annotations of proto/orama/fees/v1/query.proto).
@@ -93,8 +97,9 @@ func (AppModule) IsOnePerModuleType() {}
 // IsAppModule implements the appmodule.AppModule interface.
 func (AppModule) IsAppModule() {}
 
-// RegisterServices registers x/fees's gRPC query service. There is no Msg service.
+// RegisterServices registers x/fees' Msg and query servers.
 func (am AppModule) RegisterServices(cfg module.Configurator) {
+	types.RegisterMsgServer(cfg.MsgServer(), keeper.NewMsgServerImpl(am.keeper))
 	types.RegisterQueryServer(cfg.QueryServer(), keeper.NewQueryServerImpl(am.keeper))
 }
 
@@ -128,4 +133,9 @@ func (am AppModule) EndBlock(ctx context.Context) error {
 // GetQueryCmd returns x/fees's CLI query commands.
 func (AppModule) GetQueryCmd() *cobra.Command {
 	return cli.GetQueryCmd()
+}
+
+// GetTxCmd returns x/fees' CLI transaction commands.
+func (AppModule) GetTxCmd() *cobra.Command {
+	return cli.GetTxCmd()
 }

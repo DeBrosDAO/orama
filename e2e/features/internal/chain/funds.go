@@ -19,9 +19,9 @@ package chain
 //     (x/fees/ante/bond_topup.go), and the signer's own state deposits
 //     (x/fees/keeper/deposits.go LockDeposit: token metadata, x/nodes node
 //     and cluster rows, x/cnft trees).
-//   - Apart from the faucet below, nothing credits a public bank balance
-//     within a run: a user-to-user norama send is refused, rewards and tips
-//     land in earnings, and an undelegation matures after the staking
+//   - Apart from the faucet below and a public user-to-user send of funds a
+//     key already holds, nothing credits a public bank balance within a run:
+//     rewards and tips land in earnings, and an undelegation matures after the staking
 //     unbonding time (SDK default, 21 days). So a payment that must come from
 //     a BANK balance (a tip, x/token's creation fee
 //     (x/token/keeper/create.go), MsgBondNode (x/nodes/keeper/msg.go),

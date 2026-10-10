@@ -30,8 +30,8 @@ func (k Keeper) CreditEarnings(ctx context.Context, senderModule string, addr sd
 }
 
 // PayEarnings moves amt from payer's bank balance into x/fees's module account and credits it to
-// recipient's earnings ledger entry. It is the one way a contract pays a user in norama: the
-// payment lands in the recipient's earnings, never as a public user balance (C9).
+// recipient's earnings ledger entry. It is how a contract pays a user's earnings (C9); a plain
+// bank send pays the user's public balance instead.
 func (k Keeper) PayEarnings(ctx context.Context, payer, recipient sdk.AccAddress, amt sdk.Coin) error {
 	if !amt.IsPositive() {
 		return fmt.Errorf("earnings payment must be positive, got %s", amt)

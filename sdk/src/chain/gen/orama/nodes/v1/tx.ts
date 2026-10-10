@@ -153,6 +153,33 @@ export interface MsgRetireCluster {
 export interface MsgRetireClusterResponse {
 }
 
+/**
+ * MsgClaimNodeName claims name for one of the operator's nodes and locks
+ * name_deposit. A node holds at most one name, and a name belongs to one node
+ * (first come, first served). The name is a DNS label of 3 to 32 characters
+ * from a-z, 0-9 and '-', without a leading or trailing '-', and not reserved.
+ */
+export interface MsgClaimNodeName {
+  operator: string;
+  nodeId: string;
+  name: string;
+}
+
+export interface MsgClaimNodeNameResponse {
+}
+
+/**
+ * MsgReleaseNodeName gives the node's name up and returns its deposit to the
+ * operator. A node that retires releases its name the same way.
+ */
+export interface MsgReleaseNodeName {
+  operator: string;
+  nodeId: string;
+}
+
+export interface MsgReleaseNodeNameResponse {
+}
+
 function createBaseMsgRegisterOperator(): MsgRegisterOperator {
   return { operator: "" };
 }
@@ -2182,6 +2209,304 @@ export const MsgRetireClusterResponse: MessageFns<MsgRetireClusterResponse> = {
   },
   fromPartial<I extends Exact<DeepPartial<MsgRetireClusterResponse>, I>>(_: I): MsgRetireClusterResponse {
     const message = createBaseMsgRetireClusterResponse();
+    return message;
+  },
+};
+
+function createBaseMsgClaimNodeName(): MsgClaimNodeName {
+  return { operator: "", nodeId: "", name: "" };
+}
+
+export const MsgClaimNodeName: MessageFns<MsgClaimNodeName> = {
+  encode(message: MsgClaimNodeName, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.operator !== "") {
+      writer.uint32(10).string(message.operator);
+    }
+    if (message.nodeId !== "") {
+      writer.uint32(18).string(message.nodeId);
+    }
+    if (message.name !== "") {
+      writer.uint32(26).string(message.name);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): MsgClaimNodeName {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseMsgClaimNodeName();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.operator = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.nodeId = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.name = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): MsgClaimNodeName {
+    return {
+      operator: isSet(object.operator) ? globalThis.String(object.operator) : "",
+      nodeId: isSet(object.nodeId)
+        ? globalThis.String(object.nodeId)
+        : isSet(object.node_id)
+        ? globalThis.String(object.node_id)
+        : "",
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+    };
+  },
+
+  toJSON(message: MsgClaimNodeName): unknown {
+    const obj: any = {};
+    if (message.operator !== "") {
+      obj.operator = message.operator;
+    }
+    if (message.nodeId !== "") {
+      obj.nodeId = message.nodeId;
+    }
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<MsgClaimNodeName>, I>>(base?: I): MsgClaimNodeName {
+    return MsgClaimNodeName.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<MsgClaimNodeName>, I>>(object: I): MsgClaimNodeName {
+    const message = createBaseMsgClaimNodeName();
+    message.operator = object.operator ?? "";
+    message.nodeId = object.nodeId ?? "";
+    message.name = object.name ?? "";
+    return message;
+  },
+};
+
+function createBaseMsgClaimNodeNameResponse(): MsgClaimNodeNameResponse {
+  return {};
+}
+
+export const MsgClaimNodeNameResponse: MessageFns<MsgClaimNodeNameResponse> = {
+  encode(_: MsgClaimNodeNameResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): MsgClaimNodeNameResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseMsgClaimNodeNameResponse();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(_: any): MsgClaimNodeNameResponse {
+    return {};
+  },
+
+  toJSON(_: MsgClaimNodeNameResponse): unknown {
+    const obj: any = {};
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<MsgClaimNodeNameResponse>, I>>(base?: I): MsgClaimNodeNameResponse {
+    return MsgClaimNodeNameResponse.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<MsgClaimNodeNameResponse>, I>>(_: I): MsgClaimNodeNameResponse {
+    const message = createBaseMsgClaimNodeNameResponse();
+    return message;
+  },
+};
+
+function createBaseMsgReleaseNodeName(): MsgReleaseNodeName {
+  return { operator: "", nodeId: "" };
+}
+
+export const MsgReleaseNodeName: MessageFns<MsgReleaseNodeName> = {
+  encode(message: MsgReleaseNodeName, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.operator !== "") {
+      writer.uint32(10).string(message.operator);
+    }
+    if (message.nodeId !== "") {
+      writer.uint32(18).string(message.nodeId);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): MsgReleaseNodeName {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseMsgReleaseNodeName();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.operator = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.nodeId = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): MsgReleaseNodeName {
+    return {
+      operator: isSet(object.operator) ? globalThis.String(object.operator) : "",
+      nodeId: isSet(object.nodeId)
+        ? globalThis.String(object.nodeId)
+        : isSet(object.node_id)
+        ? globalThis.String(object.node_id)
+        : "",
+    };
+  },
+
+  toJSON(message: MsgReleaseNodeName): unknown {
+    const obj: any = {};
+    if (message.operator !== "") {
+      obj.operator = message.operator;
+    }
+    if (message.nodeId !== "") {
+      obj.nodeId = message.nodeId;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<MsgReleaseNodeName>, I>>(base?: I): MsgReleaseNodeName {
+    return MsgReleaseNodeName.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<MsgReleaseNodeName>, I>>(object: I): MsgReleaseNodeName {
+    const message = createBaseMsgReleaseNodeName();
+    message.operator = object.operator ?? "";
+    message.nodeId = object.nodeId ?? "";
+    return message;
+  },
+};
+
+function createBaseMsgReleaseNodeNameResponse(): MsgReleaseNodeNameResponse {
+  return {};
+}
+
+export const MsgReleaseNodeNameResponse: MessageFns<MsgReleaseNodeNameResponse> = {
+  encode(_: MsgReleaseNodeNameResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): MsgReleaseNodeNameResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseMsgReleaseNodeNameResponse();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(_: any): MsgReleaseNodeNameResponse {
+    return {};
+  },
+
+  toJSON(_: MsgReleaseNodeNameResponse): unknown {
+    const obj: any = {};
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<MsgReleaseNodeNameResponse>, I>>(base?: I): MsgReleaseNodeNameResponse {
+    return MsgReleaseNodeNameResponse.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<MsgReleaseNodeNameResponse>, I>>(_: I): MsgReleaseNodeNameResponse {
+    const message = createBaseMsgReleaseNodeNameResponse();
     return message;
   },
 };

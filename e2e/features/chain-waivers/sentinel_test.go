@@ -197,20 +197,6 @@ func TestInclusion_voteExtensionsAreTheDeploysSwitch(t *testing.T) {
 	}
 }
 
-// TestUnwired_noPublicPaymentPath: with the norama send restriction a user
-// cannot pay another user in the public denom (docs/CHAIN.md "Denom and
-// accounts"); the private path between users is x/shielded, tested by
-// chain-shielded.
-func TestUnwired_noPublicPaymentPath(t *testing.T) {
-	t.Parallel()
-	c := chain.New(t)
-	a := c.FundedValidator(t, 1, chain.Orama(1))
-	b := c.Validator(t, c.Node(t, 2))
-	send := chain.NewMsg("/cosmos.bank.v1beta1.MsgSend", map[string]any{"from_address": a.Address, "to_address": b.Address,
-		"amount": []any{map[string]any{"denom": chain.Denom, "amount": "1"}}})
-	chain.RequireRefused(t, "user-to-user norama", c.Submit(t, a, chain.TxOptions{}, send), "public user-to-user norama transfer is refused")
-}
-
 func findString(v any, key string) (string, bool) {
 	switch x := v.(type) {
 	case map[string]any:

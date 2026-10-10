@@ -57,7 +57,7 @@ rw stake delegate <validator> 10 --chain orama
 rw vote <proposal> yes --chain orama --house token
 ```
 
-**Public ORAMA sends are blocked**, because the chain refuses user-to-user public transfers. The wallet stops them before signing. Shielded transfers are not built in the wallet, and the agent refuses shielded messages. In release builds, balance and sends wait on the read proxy's wallet routes, and the apps say "ORAMA wallet routes are not available on this network yet" until then. Address and history still show.
+**The wallet does not send ORAMA publicly yet.** The chain accepts public user-to-user ORAMA transfers (a plain `MsgSend` between accounts), but this wallet still stops them before signing; the send flow follows. Shielded transfers are not built in the wallet, and the agent refuses shielded messages. In release builds, balance and sends wait on the read proxy's wallet routes, and the apps say "ORAMA wallet routes are not available on this network yet" until then. Address and history still show.
 
 Signing: desktop signs through the agent after an approval window decodes the transaction; mobile signs locally after a password and a decoded confirmation; the CLI prompts for the password and a decoded review. See [The agent](/docs/rootwallet/agent).
 

@@ -128,7 +128,7 @@ func TestBindings_aContractCanIssueAPublicIOUForOramaItHolds(t *testing.T) {
 	require.True(t, b.balance(b.carol.addr, iou).Equal(math.NewInt(400_000_000)), "the IOU moves between users publicly")
 }
 
-func TestBindings_earningsPaymentIsTheOnlyNoramaPathToAUser(t *testing.T) {
+func TestBindings_earningsPayLandsInEarningsAndABankSendInTheBalance(t *testing.T) {
 	b := newBindingChain(t)
 	pay := int64(5 * params.NoramaPerOrama)
 	before, err := b.app.FeesKeeper.GetEarnings(b.ctx(), b.carol.addr)
@@ -144,15 +144,21 @@ func TestBindings_earningsPaymentIsTheOnlyNoramaPathToAUser(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, inv.EarningsMatchModule && inv.DepositsMatchModule, inv.Detail)
 
-	// The same amount as a bank send is refused, and so is more than the contract holds.
+	// A bank send pays the user's public balance instead, and leaves their earnings alone. More than
+	// the contract holds is refused.
+	balanceBefore := b.balance(b.carol.addr, params.BaseDenom)
 	send := map[string]any{"bank": map[string]any{"send": map[string]any{"to_address": b.carol.addr.String(), "amount": []map[string]string{{"denom": params.BaseDenom, "amount": "1"}}}}}
 	res := b.exec(b.alice, b.relay, map[string]any{"dispatch": map[string]any{"msgs": []any{send}}}, nil)
-	require.NotZero(t, res.Code)
+	require.Zero(t, res.Code, res.Log)
+	require.True(t, b.balance(b.carol.addr, params.BaseDenom).Sub(balanceBefore).Equal(math.NewInt(1)))
+	unchanged, err := b.app.FeesKeeper.GetEarnings(b.ctx(), b.carol.addr)
+	require.NoError(t, err)
+	require.True(t, unchanged.Equal(after))
 	b.bindFails(b.alice, map[string]any{"earnings": map[string]any{"pay": map[string]any{"recipient": b.carol.addr.String(), "amount": "999999999999999"}}}, "insufficient")
 }
 
-// TestBindings_bypassAttemptsAreRefused tries every other way a contract could put norama into a
-// user's public balance or reach a module without a binding.
+// TestBindings_bypassAttemptsAreRefused tries every way a contract could reach a module account or
+// a raw message without a binding.
 func TestBindings_bypassAttemptsAreRefused(t *testing.T) {
 	b := newBindingChain(t)
 	user := b.carol.addr.String()
@@ -162,7 +168,6 @@ func TestBindings_bypassAttemptsAreRefused(t *testing.T) {
 		msg  map[string]any
 		want string
 	}{
-		"bank send to a user": {map[string]any{"bank": map[string]any{"send": map[string]any{"to_address": user, "amount": oneNorama}}}, "norama transfer is refused"},
 		"any: a raw MsgSend": {map[string]any{"any": map[string]any{
 			"type_url": "/cosmos.bank.v1beta1.MsgSend",
 			"value":    "",

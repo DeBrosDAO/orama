@@ -23,7 +23,7 @@ func GetTxCmd() *cobra.Command {
 		SuggestionsMinimumDistance: 2,
 		RunE:                       client.ValidateCmd,
 	}
-	cmd.AddCommand(GetCmdFundHotKey())
+	cmd.AddCommand(GetCmdFundHotKey(), GetCmdClaimNodeName(), GetCmdReleaseNodeName())
 	return cmd
 }
 
@@ -51,6 +51,56 @@ func GetCmdFundHotKey() *cobra.Command {
 				NodeId:   args[0],
 				Amount:   amount,
 			}
+			if err := msg.ValidateBasic(); err != nil {
+				return err
+			}
+			return tx.GenerateOrBroadcastTxCLI(clientCtx, cmd.Flags(), msg)
+		},
+	}
+	flags.AddTxFlagsToCmd(cmd)
+	return cmd
+}
+
+// GetCmdClaimNodeName implements `oramad tx nodes claim-name`. The signer (--from) is the node's
+// operator.
+func GetCmdClaimNodeName() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "claim-name [node-id] [name]",
+		Short: "Claim an identification name for one of your nodes",
+		Long: "Claims name, one DNS label of 3 to 32 characters (a-z, 0-9 and '-'), for the signer's own " +
+			"node and locks the name deposit, which is returned when the name is released or the node " +
+			"retires. The network serves <name>.<network>.orama.network as an address record for the " +
+			"node's IP: the name identifies the node and delegates nothing. A node holds one name and " +
+			"a name belongs to one node, first come first served.",
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			clientCtx, err := client.GetClientTxContext(cmd)
+			if err != nil {
+				return fmt.Errorf("failed to get client context: %w", err)
+			}
+			msg := &types.MsgClaimNodeName{Operator: clientCtx.GetFromAddress().String(), NodeId: args[0], Name: args[1]}
+			if err := msg.ValidateBasic(); err != nil {
+				return err
+			}
+			return tx.GenerateOrBroadcastTxCLI(clientCtx, cmd.Flags(), msg)
+		},
+	}
+	flags.AddTxFlagsToCmd(cmd)
+	return cmd
+}
+
+// GetCmdReleaseNodeName implements `oramad tx nodes release-name`.
+func GetCmdReleaseNodeName() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "release-name [node-id]",
+		Short: "Release your node's identification name and take the deposit back",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			clientCtx, err := client.GetClientTxContext(cmd)
+			if err != nil {
+				return fmt.Errorf("failed to get client context: %w", err)
+			}
+			msg := &types.MsgReleaseNodeName{Operator: clientCtx.GetFromAddress().String(), NodeId: args[0]}
 			if err := msg.ValidateBasic(); err != nil {
 				return err
 			}

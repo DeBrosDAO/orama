@@ -1,0 +1,30 @@
+# Stage 8, epic 3306 D1: node identification names on the live run chain. An
+# operator claims <name> for one of its nodes with MsgClaimNodeName and locks the
+# name deposit; the name is one DNS label (a-z, 0-9 and '-', 3 to 32 characters,
+# no leading or trailing '-', not reserved), first come first served, one per
+# node. NodeByName answers the node with the literal IPs among its endpoints,
+# NameOfNode the node's name, NodeNames pages through every claim in name
+# order (the DNS sync loop's read). MsgReleaseNodeName and retiring the node
+# return the deposit and free the name. The refusals are the claim of a
+# reserved, malformed or taken name, a second name for a node, and a release
+# of a name the node does not hold.
+id: chain-node-names
+title: Node identification names
+area: chain
+subtasks: [3333]
+stage: 8
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: true
+covers:
+  msgs:
+    - orama.nodes.v1.MsgClaimNodeName
+    - orama.nodes.v1.MsgReleaseNodeName
+  queries:
+    - orama.nodes.v1.NodeByName
+    - orama.nodes.v1.NameOfNode
+    - orama.nodes.v1.NodeNames
+  claims:
+    - "docs/CHAIN.md#x-nodes: a node holds at most one identification name, a name belongs to one node (first come first served), a reserved or malformed name is refused, and the deposit is returned on release or retire"

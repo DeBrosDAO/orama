@@ -307,6 +307,12 @@ export interface Params {
    * new node and any later change start the clock again. 0 turns the lock off.
    */
   networkIdentityLockSeconds: bigint;
+  /**
+   * name_deposit is the norama an operator locks in the nodes module account
+   * to claim a node's identification name. It is returned in full when the
+   * name is released or the node retires.
+   */
+  nameDeposit: string;
 }
 
 /** RoleBond is one role's norama amount (a minimum, or a node's current bond). */
@@ -433,6 +439,20 @@ export interface ServiceDay {
   relay: boolean;
 }
 
+/**
+ * NodeName is the identification name an operator claimed for one node. The
+ * name is one DNS label under the network's domain, <name>.<network>.orama.network,
+ * and an A or AAAA record for each literal IP among the node's endpoints. It
+ * identifies the node and delegates nothing: there is no NS record or glue.
+ */
+export interface NodeName {
+  name: string;
+  nodeId: string;
+  operator: string;
+  /** deposit is the norama locked for the claim: name_deposit when it was claimed. */
+  deposit: string;
+}
+
 function createBaseParams(): Params {
   return {
     minBond: [],
@@ -444,6 +464,7 @@ function createBaseParams(): Params {
     maxEndpoints: 0,
     maxBindings: 0,
     networkIdentityLockSeconds: 0n,
+    nameDeposit: "",
   };
 }
 
@@ -489,6 +510,9 @@ export const Params: MessageFns<Params> = {
         );
       }
       writer.uint32(72).int64(message.networkIdentityLockSeconds);
+    }
+    if (message.nameDeposit !== "") {
+      writer.uint32(82).string(message.nameDeposit);
     }
     return writer;
   },
@@ -578,6 +602,14 @@ export const Params: MessageFns<Params> = {
             message.networkIdentityLockSeconds = reader.int64() as bigint;
             continue;
           }
+          case 10: {
+            if (tag !== 82) {
+              break;
+            }
+
+            message.nameDeposit = reader.string();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -637,6 +669,11 @@ export const Params: MessageFns<Params> = {
         : isSet(object.network_identity_lock_seconds)
         ? BigInt(object.network_identity_lock_seconds)
         : 0n,
+      nameDeposit: isSet(object.nameDeposit)
+        ? globalThis.String(object.nameDeposit)
+        : isSet(object.name_deposit)
+        ? globalThis.String(object.name_deposit)
+        : "",
     };
   },
 
@@ -669,6 +706,9 @@ export const Params: MessageFns<Params> = {
     if (message.networkIdentityLockSeconds !== 0n) {
       obj.networkIdentityLockSeconds = message.networkIdentityLockSeconds.toString();
     }
+    if (message.nameDeposit !== "") {
+      obj.nameDeposit = message.nameDeposit;
+    }
     return obj;
   },
 
@@ -697,6 +737,7 @@ export const Params: MessageFns<Params> = {
       (object.networkIdentityLockSeconds !== undefined && object.networkIdentityLockSeconds !== null)
         ? BigInt(object.networkIdentityLockSeconds)
         : 0n;
+    message.nameDeposit = object.nameDeposit ?? "";
     return message;
   },
 };
@@ -2105,6 +2146,127 @@ export const ServiceDay: MessageFns<ServiceDay> = {
       ? BigInt(object.volumeBytes)
       : 0n;
     message.relay = object.relay ?? false;
+    return message;
+  },
+};
+
+function createBaseNodeName(): NodeName {
+  return { name: "", nodeId: "", operator: "", deposit: "" };
+}
+
+export const NodeName: MessageFns<NodeName> = {
+  encode(message: NodeName, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.name !== "") {
+      writer.uint32(10).string(message.name);
+    }
+    if (message.nodeId !== "") {
+      writer.uint32(18).string(message.nodeId);
+    }
+    if (message.operator !== "") {
+      writer.uint32(26).string(message.operator);
+    }
+    if (message.deposit !== "") {
+      writer.uint32(34).string(message.deposit);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): NodeName {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseNodeName();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.name = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.nodeId = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.operator = reader.string();
+            continue;
+          }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+
+            message.deposit = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): NodeName {
+    return {
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+      nodeId: isSet(object.nodeId)
+        ? globalThis.String(object.nodeId)
+        : isSet(object.node_id)
+        ? globalThis.String(object.node_id)
+        : "",
+      operator: isSet(object.operator) ? globalThis.String(object.operator) : "",
+      deposit: isSet(object.deposit) ? globalThis.String(object.deposit) : "",
+    };
+  },
+
+  toJSON(message: NodeName): unknown {
+    const obj: any = {};
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    if (message.nodeId !== "") {
+      obj.nodeId = message.nodeId;
+    }
+    if (message.operator !== "") {
+      obj.operator = message.operator;
+    }
+    if (message.deposit !== "") {
+      obj.deposit = message.deposit;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<NodeName>, I>>(base?: I): NodeName {
+    return NodeName.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<NodeName>, I>>(object: I): NodeName {
+    const message = createBaseNodeName();
+    message.name = object.name ?? "";
+    message.nodeId = object.nodeId ?? "";
+    message.operator = object.operator ?? "";
+    message.deposit = object.deposit ?? "";
     return message;
   },
 };

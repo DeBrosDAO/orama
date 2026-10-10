@@ -45,6 +45,7 @@ type boundNode struct {
 	pub      []byte
 	operator sdk.AccAddress
 	ipv4     string
+	left     bool
 }
 
 type fakeNodes struct {
@@ -65,6 +66,29 @@ func (n *fakeNodes) RelayBinding(_ context.Context, nodeID string) ([]byte, sdk.
 		return nil, nil, "", errNotFound(nodeID)
 	}
 	return append([]byte(nil), node.pub...), node.operator, node.ipv4, nil
+}
+
+// NodeLive is true until the test marks the node as having left (retired, tombstoned or jailed).
+func (n *fakeNodes) NodeLive(_ context.Context, nodeID string) (bool, error) {
+	node, ok := n.byID[nodeID]
+	if !ok {
+		return false, errNotFound(nodeID)
+	}
+	return !node.left, nil
+}
+
+// leave marks the node as no longer live.
+func (n *fakeNodes) leave(nodeID string) {
+	node := n.byID[nodeID]
+	node.left = true
+	n.byID[nodeID] = node
+}
+
+// rejoin marks the node as live again (an unjailed node).
+func (n *fakeNodes) rejoin(nodeID string) {
+	node := n.byID[nodeID]
+	node.left = false
+	n.byID[nodeID] = node
 }
 
 type errNotFound string

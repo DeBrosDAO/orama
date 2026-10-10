@@ -17,7 +17,7 @@ Every module in `chain/x/`, what it does and whether it is live. "Live" means wi
 | `market` | Fixed-price listings and bids for cNFTs with creator royalties. | Live. Same page |
 | `shielded` | The Ironwood shielded pool. | Implemented. Accepts bundles only on nodes with both verifiers. See [Shielded](/docs/blockchain/shielded) |
 | `wasm` | CosmWasm contracts. | Live in cgo builds only. See [Contracts](/docs/blockchain/contracts) |
-| `wasmpolicy` | Rules around contracts: upload closed until a sunset height, no contract-to-user ORAMA sends, state deposits. | Always wired |
+| `wasmpolicy` | Rules around contracts: upload closed until a sunset height, state deposits. | Always wired |
 | `wasmbindings` | The Orama calls a contract may make (tokens, NFTs, market, storage deals, earnings). | Linked in cgo builds |
 | `inclusion` | Inclusion lists through vote extensions so a proposer cannot censor a transaction. | Wired, off until genesis sets a start height |
 | `confidential` | Attestation boundary for confidential compute. | Fails closed on every input. Not wired |

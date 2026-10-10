@@ -662,7 +662,7 @@ console.log(result.txHash, describeTx(signed.txBytes).messages[0].summary);
 `broadcast`. The Orama modules' own queries are on a node's REST API ([CHAIN.md](CHAIN.md#module-queries-over-rest)), not on the gateway's; the gateway serves
 each module's Query service at `/v1/chain/query/<package.Service>/<Method>`, and the client reads it
 through `gatewayURL`: `moduleQuery(service, method, request, { height })` for any embedded query, and typed
-reads for x/nodes (`nodesParams`, `operator`, `node`, `nodeCluster`, `nodeUnbondings`), x/storage
+reads for x/nodes (`nodesParams`, `operator`, `node`, `nodeCluster`, `nodeUnbondings`, `nodeByName`, `nameOfNode`, `nodeNames`), x/storage
 (`storageParams`, `deal`, `slot`, `storageAuthorization`, `storageChallenges`, `storageEpochMint`,
 `storageQueue`), x/fees (`feesParams`, `baseFee`, `earnings`, `feesDeposit`), x/archive (`archiveParams`,
 `archiveRange`, `lastArchivedHeight`, `retainHeight`) and x/relay (`relayParams`, `relayReporters`, `relay`,
