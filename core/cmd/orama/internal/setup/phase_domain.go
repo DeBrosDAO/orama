@@ -23,6 +23,9 @@ func (r *runner) domainBeforeJoin(ctx context.Context, n *nodeRun) error {
 	err := r.d.Domain.Wait(ctx, r.via, r.opts.Domain, r.d.Timing.DNSPoll, r.d.Timing.DNSDeadline)
 	if err != nil {
 		r.emit("", StepDNS, StateFailed, err.Error())
+		// The records printed before the wait may not have been readable yet;
+		// print them again so the error's "the records above" names them.
+		r.announceDomain(ctx)
 		return fmt.Errorf("%s is not delegated yet: %w\n  %s cannot join before it is: an invite pins the certificate the cluster serves for %s, which it is issued once the domain is delegated to it; create the records above, then run `%s`, which resumes at this step",
 			r.opts.Domain, err, n.plan.IP, r.opts.Domain, r.resumeCommand())
 	}

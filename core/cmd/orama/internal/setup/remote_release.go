@@ -219,8 +219,12 @@ func (m *sshMachine) StageFetched(ctx context.Context, f *FetchedRelease, e *End
 }
 
 // prepareEndorsed puts the signed manifest on the machine and has it make the
-// endorsed archive.
+// endorsed archive. The directory goes into root shell text here, so it is
+// checked here too, whatever the caller checked.
 func (m *sshMachine) prepareEndorsed(ctx context.Context, f *FetchedRelease, e *Endorsement) error {
+	if !psetup.ValidArchiveDir(f.Dir) {
+		return fmt.Errorf("the archive directory %q is not one setup makes", f.Dir)
+	}
 	signed := []struct {
 		name string
 		body []byte

@@ -63,6 +63,7 @@ func TestUnitCommands_areNodeLocal(t *testing.T) {
 var unitCommands = []string{
 	"node autoupdate run",
 	"node ipfs-gc",
+	"global validator check-sign-floor",
 	"global tor archive",
 	"global tor monitor",
 	"global txgate",
@@ -104,10 +105,11 @@ func TestUnitCommands_everyExecStartResolves(t *testing.T) {
 func TestUnitCommands_movedPathsAreHiddenAliasesOfTheMaintCommand(t *testing.T) {
 	root := newRootCmd()
 	for oldPath, canonical := range map[string]string{
-		"node autoupdate run": "maint node autoupdate run",
-		"global tor archive":  "maint global tor archive",
-		"global tor monitor":  "maint global tor monitor",
-		"global txgate":       "maint global txgate",
+		"node autoupdate run":               "maint node autoupdate run",
+		"global validator check-sign-floor": "maint global validator check-sign-floor",
+		"global tor archive":                "maint global tor archive",
+		"global tor monitor":                "maint global tor monitor",
+		"global txgate":                     "maint global txgate",
 	} {
 		alias, _, err := root.Find(strings.Fields(oldPath))
 		if err != nil {

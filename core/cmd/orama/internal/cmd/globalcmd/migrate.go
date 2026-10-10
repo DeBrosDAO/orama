@@ -8,6 +8,7 @@ import (
 	"os"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmdmeta"
 	"github.com/DeBrosOfficial/network/pkg/globalnode"
 	"github.com/DeBrosOfficial/network/pkg/install"
 	"github.com/spf13/cobra"
@@ -131,8 +132,20 @@ func init() {
 	i.BoolVar(&migrateImportFlags.oldHostDestroyed, "old-host-destroyed", false, "For a reseal bundle: confirm the old host can never start again")
 	i.Int64Var(&migrateImportFlags.floorHeight, "floor-height", 0, "For a reseal bundle: the network's latest committed height; the key signs only above it")
 	migrateCmd.AddCommand(migratePrepareCmd, migrateExportCmd, migrateImportCmd, migrateCancelCmd)
-	validatorCmd.AddCommand(checkSignFloorCmd)
+	validatorCmd.AddCommand(cmdmeta.MarkNodeLocal(checkSignFloorCmd))
 	validatorCmd.AddCommand(migrateCmd)
+	// orama-global-chain.service runs `orama global validator check-sign-floor`
+	// (install.GlobalSignFloorCheck) as root before every start, with no home and
+	// no operator environment. The command moved to `orama maint global validator`;
+	// the unit keeps its path, and an installed unit keeps it until an upgrade
+	// rewrites it, so the old path stays as a hidden alias.
+	unitPath := &cobra.Command{
+		Use:    validatorCmd.Use,
+		Short:  "Kept for installed units: orama maint global validator",
+		Hidden: true,
+	}
+	unitPath.AddCommand(cmdmeta.HiddenAlias(checkSignFloorCmd))
+	Cmd.AddCommand(unitPath)
 }
 
 func runMigrateExport(cmd *cobra.Command, _ []string) error {

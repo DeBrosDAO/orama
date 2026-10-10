@@ -530,3 +530,19 @@ func TestSSHMachine_discardFetchedRemovesOnlyAnArchiveDirectory(t *testing.T) {
 		t.Errorf("a command was run for a directory that is not an archive directory: %v", sh.calls[before:])
 	}
 }
+
+// The directory reaches root shell text in prepareEndorsed, so a directory setup
+// did not make is refused there before anything runs on the machine.
+func TestPrepareEndorsed_aDirectorySetupDidNotMakeIsRefusedBeforeAnythingRuns(t *testing.T) {
+	sh := &recShell{}
+	m, _ := testMachine(sh)
+	for _, dir := range []string{"/tmp/x; rm -rf /", "/etc", "", "/var/tmp/orama-archive.ab$(id)cd"} {
+		err := m.prepareEndorsed(context.Background(), &FetchedRelease{Dir: dir}, &Endorsement{Manifest: []byte("{}"), Signature: "0xsig"})
+		if err == nil || !strings.Contains(err.Error(), "not one setup makes") {
+			t.Errorf("dir %q: got %v", dir, err)
+		}
+	}
+	if len(sh.calls) != 0 {
+		t.Errorf("commands ran on the machine for a refused directory: %q", sh.calls)
+	}
+}
