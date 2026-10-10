@@ -273,6 +273,23 @@ All binaries are pre-compiled locally and shipped as a binary archive. Zero comp
 
 ### Deploy Workflow
 
+A network whose release channel is published (stagenet follows `nightly`) is
+upgraded with `orama upgrade`: it fetches the newest signed release, verifies it
+against the release root built into the CLI, prints what each node runs against
+it, stages it on every node (each node verifies it again against the root it
+adopted), and rolls it one node at a time. `--dry-run` prints the plan and stops;
+`--reinstall` puts the release on nodes that already run it; `--node <ip>` upgrades
+one node. A node with the global layer also refreshes its global binaries after its
+own upgrade (`orama maint global refresh`); `oramad` is staged for cosmovisor only
+when the release carries another one and a governed upgrade is scheduled.
+
+```bash
+orama upgrade --dry-run
+orama upgrade --yes
+```
+
+A build of your own is rolled with `orama maint rollout`:
+
 ```bash
 # One-command: build + push + rolling upgrade
 orama maint rollout --env testnet
@@ -1537,13 +1554,25 @@ target.
 
 ```bash
 # Show the quorum impact and the statements, change nothing.
-orama node remove --env testnet --node 1.2.3.4 --dry-run
+orama remove --env testnet --node 1.2.3.4 --dry-run
 
-orama node remove --env testnet --node 1.2.3.4 --force
+orama remove --env testnet --node 1.2.3.4 --yes
 
 # The machine is already gone: do the cluster-side removal only.
-orama node remove --env testnet --node 1.2.3.4 --offline --force
+orama remove --env testnet --node 1.2.3.4 --offline --no-chain --yes
 ```
+
+`orama remove` also refuses a node that signs for the validator set (it would
+destroy the consensus key) unless `--drop-validator`, and a node with the global
+layer until `--chain-node-id <id>` retires it on the chain first (a
+`MsgRetireNode` signed by your RootWallet) or `--no-chain` leaves its
+registration. `orama node remove` is the same cluster-side removal under its old
+name and prints a notice.
+
+`orama edit` changes an installed node without installing it again:
+`--storage-gb N` declares the capacity on the chain and sizes the node's public
+Kubo, `--exit=true|false` switches its Tor relay between a plain relay and an exit;
+the global layer cannot be turned on or off by it.
 
 Every step is keyed on the node and safe to repeat, so a removal that failed
 part way through is finished by running it again.

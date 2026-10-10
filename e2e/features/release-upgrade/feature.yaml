@@ -1,0 +1,26 @@
+# orama upgrade: the newest signed release of the network's channel, rolled one
+# node at a time. An environment on no registry network has no channel and is
+# refused with the way to roll a build of your own. On a network of the registry
+# (the stagenet target) the plan lists every node with what it runs, the release
+# and the action, and --dry-run changes nothing; an unknown --node is refused;
+# --reinstall --yes rolls the release onto every node with the raft leader last,
+# leaves the cluster converged on one version, and the next plain run finds every
+# node current and restarts nothing.
+id: release-upgrade
+title: orama upgrade, plan and rolling upgrade to the channel's release
+area: infrastructure
+subtasks: [3306]
+stage: 10
+destructive: true
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  cli:
+    - orama upgrade
+  claims:
+    - "docs/CLI_REFERENCE.md#orama-upgrade: --dry-run prints each node's running release, the release and the action, and stages and restarts nothing"
+    - "docs/CLI_REFERENCE.md#orama-upgrade: an environment on no registry network has no release channel and is refused"
+    - "docs/CLI_REFERENCE.md#orama-upgrade: nodes are restarted one at a time, followers first and the raft leader last"
+    - "docs/CLI_REFERENCE.md#orama-upgrade: a node that already runs the release is left alone unless --reinstall"

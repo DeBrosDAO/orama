@@ -46,7 +46,10 @@ func TestExtraNode_setupJoinRemoveWipe(t *testing.T) {
 		{"trustSignersNeverChangesAnchor", func(t *testing.T) { trustSignersNeverChangesAnchor(t, f, extra) }},
 		{"setupAgainChangesNothing", func(t *testing.T) { setupAgainChangesNothing(t, f, extra) }},
 		{"removeDryRunChangesNothing", func(t *testing.T) { removeDryRunChangesNothing(t, f, extra) }},
+		{"oramaRemoveDryRunChangesNothing", func(t *testing.T) { oramaRemoveDryRunChangesNothing(t, f, extra) }},
+		{"oramaRemoveRefusesBadFlags", func(t *testing.T) { oramaRemoveRefusesBadFlags(t, f, extra) }},
 		{"removeWithoutConfirmationAborts", func(t *testing.T) { removeWithoutConfirmationAborts(t, f, extra) }},
+		{"oramaRemoveWithoutConfirmationAborts", func(t *testing.T) { oramaRemoveWithoutConfirmationAborts(t, f, extra) }},
 		{"removeRetiresAndWipes", func(t *testing.T) { removeRetiresAndWipes(t, f, extra) }},
 		{"removedNodeIsNoTarget", func(t *testing.T) { removedNodeIsNoTarget(t, f, extra) }},
 	}

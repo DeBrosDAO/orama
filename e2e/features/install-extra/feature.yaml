@@ -21,6 +21,7 @@ covers:
   cli:
     - orama node setup
     - orama node remove
+    - orama remove
     - orama node wipe
     - orama nodes
     - orama maint node install
@@ -34,5 +35,7 @@ covers:
     - "docs/CLI_REFERENCE.md#orama-node-setup: a node already running this exact build is not re-uploaded"
     - "docs/CLI_REFERENCE.md#orama-node-remove: --dry-run prints the quorum impact and the statements and changes nothing"
     - "docs/CLI_REFERENCE.md#orama-node-remove: the node leaves raft and the mesh, is tombstoned and wiped"
+    - "docs/CLI_REFERENCE.md#orama-remove: --dry-run prints the quorum impact and every step, including the chain's, and changes nothing"
+    - "docs/CLI_REFERENCE.md#orama-remove: without --yes the removal is declined; orama node remove says it is replaced by orama remove"
     - "docs/CLI_REFERENCE.md#orama-node-wipe: only rules tagged orama are removed; the operator's own rules and SSH stay"
     - "docs/SECURITY.md#supply-chain: a joining node takes the archive signer list from the cluster"

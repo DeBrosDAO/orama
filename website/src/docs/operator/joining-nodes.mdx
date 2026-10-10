@@ -97,12 +97,20 @@ A node installed without a token creates a **new** cluster. Never do that on a m
 ## Removing a node
 
 ```bash
-orama node remove --env mycluster --node 203.0.113.12 --dry-run   # print the plan, change nothing
-orama node remove --env mycluster --node 203.0.113.12
-orama node remove --env mycluster --node 203.0.113.12 --offline   # the machine is already gone
+orama remove --node 203.0.113.12 --dry-run   # print the plan, change nothing
+orama remove --node 203.0.113.12
+orama remove --node 203.0.113.12 --offline   # the machine is already gone
 ```
 
-It runs from a survivor. It first prints what removal costs every Raft group the node votes in (the registry and each namespace it serves) and **refuses if any would lose quorum**. Then it takes the node out of the Raft configuration, writes an eviction tombstone so nothing re-adds it, releases its mesh address, nameserver slot, namespace memberships, port blocks and TURN and SFU allocations, marks it retired so DNS purges its records, and wipes it (unless `--offline`). Every step is safe to repeat. Afterwards run `orama node dns delegation --env mycluster` and update the parent zone.
+It runs from a survivor. It first prints what removal costs every Raft group the node votes in (the registry and each namespace it serves) and **refuses if any would lose quorum**. Then it takes the node out of the Raft configuration, writes an eviction tombstone so nothing re-adds it, releases its mesh address, nameserver slot, namespace memberships, port blocks and TURN and SFU allocations, marks it retired so DNS purges its records, and wipes it (unless `--offline`). Every step is safe to repeat. Afterwards run `orama node dns delegation --env mycluster` and update the parent zone. `--yes` skips the confirmation.
+
+`orama remove` adds what a newcomer needs on top of the cluster-side removal:
+
+- **A node that signs for the validator set is refused** (`orama status` shows which node it is). Erasing it destroys the validator's consensus key, and the validator is jailed for the blocks it misses. Move the key first (`orama maint global validator migrate`), or pass `--drop-validator` to remove it anyway.
+- **A node with the global layer needs a decision about the chain.** It may be registered with a bond. `--chain-node-id <id>` (the node's id in the registry; `orama chain node <id>` shows it) retires it there first: a `MsgRetireNode` signed by your RootWallet, sent through a surviving node's chain over an SSH tunnel, which revokes the node's service keys and starts its bonds unbonding. `--no-chain` leaves the registration, and its bonds stay locked until you retire the node yourself with `orama global retire`. A machine that is already gone (`--offline`) cannot be asked, so it needs one of the two as well.
+- **The chain's refusals stop the removal with nothing changed:** a locked RootWallet, a node that belongs to another operator, or storage deals that still reserve bytes on the node.
+
+`orama node remove` is the same cluster-side removal under its old name and prints a notice that it is replaced.
 
 To swap a nameserver for a new machine without losing quorum, follow [Replace a node](/docs/operator/node-replacement).
 

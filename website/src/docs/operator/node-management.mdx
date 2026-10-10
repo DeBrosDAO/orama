@@ -45,16 +45,15 @@ orama status --ssh             # break-glass: read every node over SSH when no g
 
 A node is healthy when its gateway answers and its RQLite has settled into `Leader` or `Follower`. The data comes from the gateway's operator telemetry API, so it needs a sign-in as an operator. For the numbers behind the verdict use `orama status cluster --env mycluster`; for one machine you are logged into, `sudo orama node status`. See [Monitoring](/docs/operator/monitoring).
 
-## Push and roll out new versions
+## Upgrade your nodes
 
 ```bash
-orama maint build                                          # signed archive, prints its path
-orama maint push --env mycluster --archive $ARCHIVE        # upload and verify on every node, restart nothing
-orama maint push --env mycluster --archive $ARCHIVE --node 203.0.113.11
-orama maint rollout --env mycluster --yes                  # build + push + rolling upgrade
+orama upgrade --dry-run        # what each node runs, what it will run, in what order
+orama upgrade                  # show the plan, ask, then roll
+orama upgrade --node 203.0.113.11 --yes
 ```
 
-`--archive` is required for `push`. See [Upgrades](/docs/operator/upgrades) for the whole protocol.
+`orama upgrade` fetches the newest signed release of your network's channel, verifies it, stages it on every node, and restarts the nodes one at a time behind their health and quorum gate. A node with the global layer refreshes it after its own upgrade. See [Upgrades](/docs/operator/upgrades). A build of your own goes through `orama maint build`, `orama maint push` and `orama maint rollout`, described there too.
 
 ## Add a node
 
@@ -65,14 +64,33 @@ orama node setup --ip 203.0.113.13 --password --env mycluster --archive $ARCHIVE
 
 Pass `--release`, `--release-repo` and `--release-root` instead of `--archive` to install a published release. See [Joining nodes](/docs/operator/joining-nodes).
 
+## Change a node
+
+```bash
+orama edit                                                     # a form: choose the node, then its settings
+orama edit --node 203.0.113.13 --storage-gb 200 --chain-node-id node-13
+orama edit --node 203.0.113.13 --exit=true                     # the node's Tor relay becomes an exit
+```
+
+`orama edit` changes a node that is already installed, without installing it again, and shows the plan before it acts (`--yes` skips the question).
+
+| Setting | What it does |
+|---|---|
+| `--storage-gb N` | Sizes the node's public Kubo for N GB of declared capacity (its `StorageMax` becomes N plus 10%) and restarts it, and declares the capacity on the chain with `MsgDeclareCapacity`, signed by your RootWallet through an SSH tunnel to the node's chain. The chain is asked first, after the node, its operator and the bytes deals reserve have been checked: a capacity the node's role bond does not back, or one below what deals reserve, is refused and the node is left as it was. It needs the node's id on the chain (`--chain-node-id`; `orama chain node <id>` shows it), or `--no-chain` to resize the node only |
+| `--exit=true\|false` | Switches the node's Tor relay between a plain relay and an exit by rewriting only the exit section of its torrc, then restarts the relay. An exit needs a network whose Tor file allows exits. The node's roles on the chain are not changed by this |
+| `--global=true\|false` | Refused, and the refusal says what does it: the setup flow adds the global layer when it is run again for the node's IP, and `orama remove` takes a node out. Turning the layer off would drop the validator's consensus key and the node's bonds without retiring either |
+
+The change is made on the node by its own CLI (`orama maint global edit`), so a node on an older release needs `orama upgrade` first.
+
 ## Remove a node
 
 ```bash
-orama node remove --env mycluster --node 203.0.113.13 --dry-run
-orama node remove --env mycluster --node 203.0.113.13
+orama remove --node 203.0.113.13 --dry-run
+orama remove --node 203.0.113.13
+orama remove --node 203.0.113.13 --chain-node-id node-13   # also retire it on the chain
 ```
 
-It refuses if any Raft group the node votes in would lose quorum. See [Joining nodes](/docs/operator/joining-nodes#removing-a-node). To swap a nameserver for a new machine, follow [Replace a node](/docs/operator/node-replacement).
+It refuses if any Raft group the node votes in would lose quorum, if the node signs for the validator set (`--drop-validator` removes it anyway), and, for a node with the global layer, until you say what happens to its chain registration (`--chain-node-id` retires it, `--no-chain` leaves it). See [Joining nodes](/docs/operator/joining-nodes#removing-a-node). To swap a nameserver for a new machine, follow [Replace a node](/docs/operator/node-replacement).
 
 ## On the node itself
 
@@ -91,6 +109,8 @@ These run on a node over SSH, with `sudo`. Use them instead of raw `systemctl`: 
 | `sudo orama node invite [--expiry 24h] [--raw]` | Mint an invite for a joining node |
 | `sudo orama maint node autoupdate run` | Run this node's auto-update agent once (its timer runs it every 15 minutes). See [Upgrades](/docs/operator/upgrades#automatic-updates) |
 | `sudo orama node trust add-root root.json` | Adopt a TUF release root on this node, so it accepts releases signed under it |
+| `sudo orama maint global refresh` | Bring the global layer's binaries to the staged release and restart the services that run them (`orama upgrade` runs it) |
+| `sudo orama maint global edit --storage-gb N --exit=true` | The node-side step of `orama edit` |
 | `sudo orama node uninstall` | Remove the production services |
 
 A restart of the node holding Raft leadership hands leadership over first and aborts if it cannot. Never stop or restart several nodes at the same time.

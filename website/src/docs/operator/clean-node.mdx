@@ -6,23 +6,23 @@ How to take Orama off a server so it can be installed fresh, or so it can leave 
 
 | Situation | Command |
 |---|---|
-| The node is, or was, a member of a running cluster | `orama node remove` (from your computer; it uses a survivor) |
+| The node is, or was, a member of a running cluster | `orama remove` (from your computer; it uses a survivor) |
 | The node is already retired from the cluster and you only need the machine erased | `orama node wipe` |
 | You are rebuilding every node of a test cluster | `orama node wipe --env <env>` |
-| The server is already deleted at your provider | `orama node remove --offline` |
+| The server is already deleted at your provider | `orama remove --offline` |
 | The CLI cannot reach the machine (lost SSH key, never enrolled) | The manual steps below |
 
-**`wipe` erases the target and says nothing to the cluster.** If the node is still a member, the survivors keep counting it toward quorum and keep re-adding its WireGuard peer. That is why `remove` exists: it checks that no cluster loses quorum, retires the node from Raft, the mesh, every namespace it served and the node registry, and only then erases it.
+**`wipe` erases the target and says nothing to the cluster.** If the node is still a member, the survivors keep counting it toward quorum and keep re-adding its WireGuard peer. That is why `remove` exists: it checks that no cluster loses quorum, retires the node from Raft, the mesh, every namespace it served and the node registry (and, with `--chain-node-id`, from the chain), and only then erases it. It refuses a node that signs for the validator set unless you pass `--drop-validator`.
 
 ```bash
-orama node remove --env mycluster --node 203.0.113.12 --dry-run   # the plan, and the quorum arithmetic
-orama node remove --env mycluster --node 203.0.113.12
-orama node remove --env mycluster --node 203.0.113.12 --offline   # machine already gone
+orama remove --node 203.0.113.12 --dry-run   # the plan, and the quorum arithmetic
+orama remove --node 203.0.113.12
+orama remove --node 203.0.113.12 --offline   # machine already gone
 orama node wipe   --env mycluster --node 203.0.113.12             # erase only
 orama node wipe   --env mycluster --node 203.0.113.12 --nuclear   # also remove shared binaries and the Tor package
 ```
 
-`--force` skips the confirmation. Both are destructive. A wipe uses the node's RootWallet SSH key; afterwards that key is deleted from your vault, because a retired node's key opens nothing. If the vault cannot be reached the command says so and fails: run it again once RootWallet is unlocked.
+`--yes` (`--force` for `wipe`) skips the confirmation. Both are destructive. A wipe uses the node's RootWallet SSH key; afterwards that key is deleted from your vault, because a retired node's key opens nothing. If the vault cannot be reached the command says so and fails: run it again once RootWallet is unlocked.
 
 ## What a wipe removes
 

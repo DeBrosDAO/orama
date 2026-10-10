@@ -123,6 +123,10 @@ orama function build ./my-function
 tinygo build -o function.wasm -target wasi function.go
 ```
 
+## A complete example
+
+`core/examples/demo/` in the repository is a small app you can put on a network in a few minutes: three public functions (`hello`, which reads the caller; `visits`, an atomic counter in the namespace's cache; `guestbook`, rows in the namespace's database), a static page that calls them through `/v1/invoke/<namespace>/<name>`, and a README with the exact `orama function build`, `orama function deploy` and `orama deploy static` commands. Each function keeps its logic apart from the host functions, so it is unit-tested against an in-memory host and built to WASM with TinyGo from the same code.
+
 ## Deployment
 
 ### CLI

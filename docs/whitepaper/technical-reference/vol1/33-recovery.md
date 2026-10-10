@@ -152,7 +152,7 @@ Re-running is safe: nodes already stable are skipped, and an interrupted node re
 
 #### The preflight
 
-`orama node remove --node <public ip>` first reads the target's peer id and overlay address from `dns_nodes` on the survivor (`ResolveNodeRecord`), builds the target's raft address `overlay:10101`, and finds the raft id registered at that address (`decommission.go:resolveRaftID`, `clusterops.IDForAddr`). Removing by address on a cluster that had migrated to peer ids matched nothing and reported success, which is why the id is looked up.
+`orama remove --node <public ip>` (`orama node remove` is its old path and prints a notice) first reads the target's peer id and overlay address from `dns_nodes` on the survivor (`ResolveNodeRecord`), builds the target's raft address `overlay:10101`, and finds the raft id registered at that address (`decommission.go:resolveRaftID`, `clusterops.IDForAddr`). Removing by address on a cluster that had migrated to peer ids matched nothing and reported success, which is why the id is looked up.
 
 Then `PlanRemoval` states the cost for every raft cluster the node votes in (`clusterops/preflight.go:PlanRemoval`): the platform cluster from `/nodes`, and each namespace from `namespace_cluster_nodes` rows with role `rqlite_leader` or `rqlite_follower` and status `running`, with reachability taken from the node's `dns_nodes.status`. Each cluster is a separate raft group with its own quorum, and checking the platform alone is how an operator once retired a node that held two of three voters for a namespace and learned of it when the namespace stopped accepting writes.
 
@@ -390,7 +390,7 @@ Read-only checks on a live cluster:
 
 ```bash
 orama maint node migrate-raft-id --env <env> --dry-run    # which nodes are on address ids
-orama node remove --env <env> --node <ip> --dry-run  # quorum cost for every raft cluster, and the statements
+orama remove --env <env> --node <ip> --dry-run  # quorum cost for every raft cluster, and the statements
 orama status report --env <env> --ssh               # raft state of every node, read directly
 ```
 

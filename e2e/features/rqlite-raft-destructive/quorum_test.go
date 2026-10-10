@@ -59,6 +59,14 @@ func TestQuorum_stopRefusedWhenItWouldBreakQuorum(t *testing.T) {
 		t.Errorf("a quorum refusal of remove exited %d, want %d (conflict: the cluster refused, retrying unchanged is refused again)",
 			rm.Exit, infra.ExitConflict)
 	}
+	// orama remove is the same removal with the chain added: the quorum
+	// arithmetic comes first and refuses the same way, before anything is asked
+	// of the chain or the RootWallet.
+	rm = infra.Run(t, harness.CLI(t), "remove", "--env", f.State.Env, "--node", second.PublicIP, "--no-chain", "--dry-run")
+	infra.ExpectRefused(t, rm, "would cost a cluster its quorum")
+	if rm.Exit != infra.ExitConflict {
+		t.Errorf("a quorum refusal of orama remove exited %d, want %d", rm.Exit, infra.ExitConflict)
+	}
 }
 
 // TestLeaderLoss_survivorsElectAndServe: stopping the leader hands raft to a

@@ -41,6 +41,49 @@ func removeDryRunChangesNothing(t *testing.T, f *fleet.Fleet, extra harness.Extr
 	}
 }
 
+// oramaRemoveDryRunChangesNothing: `orama remove --dry-run` prints the quorum
+// impact of every raft cluster the node votes in and every step it would take,
+// and changes nothing (docs/CLI_REFERENCE.md "orama remove"). A node without the
+// global layer has no chain step.
+func oramaRemoveDryRunChangesNothing(t *testing.T, f *fleet.Fleet, extra harness.Extra) {
+	res := harness.CLI(t).MustOK(t, "remove", "--env", f.State.Env, "--node", extra.PublicIP, "--dry-run")
+	for _, want := range []string{"Quorum after removing " + extra.PublicIP, "--dry-run, so nothing was changed",
+		"remove raft member", "wipe " + extra.PublicIP} {
+		if !strings.Contains(res.Stdout, want) {
+			t.Errorf("the dry run does not say %q:\n%s", want, res.Stdout)
+		}
+	}
+	if strings.Contains(res.Stdout, "MsgRetireNode") {
+		t.Errorf("a node without the global layer was given a chain step:\n%s", res.Stdout)
+	}
+	requireMember(t, f, extra, len(f.State.Nodes)+1)
+	if f.Exec(t, extra.Node, "test -d /opt/orama/.orama").Exit != 0 {
+		t.Fatal("a dry run wiped the node")
+	}
+}
+
+// oramaRemoveRefusesBadFlags: the flags are checked against each other before any
+// node is reached: no node, and a chain registration both retired and left.
+func oramaRemoveRefusesBadFlags(t *testing.T, f *fleet.Fleet, extra harness.Extra) {
+	cli := harness.CLI(t)
+	infra.ExpectExit(t, infra.Run(t, cli, "remove", "--env", f.State.Env), infra.ExitUsage, "--node is required")
+	infra.ExpectExit(t, infra.Run(t, cli, "remove", "--env", f.State.Env, "--node", extra.PublicIP, "--no-chain", "--chain-node-id", "node-x", "--dry-run"),
+		infra.ExitUsage, "contradict")
+	requireMember(t, f, extra, len(f.State.Nodes)+1)
+}
+
+// oramaRemoveWithoutConfirmationAborts: without --yes and with nobody to type
+// "yes", the removal is declined: nothing happens, and the exit code says so. The
+// old path, `orama node remove`, still works and says it is replaced.
+func oramaRemoveWithoutConfirmationAborts(t *testing.T, f *fleet.Fleet, extra harness.Extra) {
+	res := infra.Run(t, harness.CLI(t), "remove", "--env", f.State.Env, "--node", extra.PublicIP)
+	infra.ExpectExit(t, res, infra.ExitAborted, "Aborted.")
+	requireMember(t, f, extra, len(f.State.Nodes)+1)
+	old := infra.Run(t, harness.CLI(t), "node", "remove", "--env", f.State.Env, "--node", extra.PublicIP)
+	infra.ExpectExit(t, old, infra.ExitAborted, "replaced by `orama remove`")
+	requireMember(t, f, extra, len(f.State.Nodes)+1)
+}
+
 // removeWithoutConfirmationAborts: without --force and with nobody to type
 // "yes", the removal is declined: nothing happens, and the CLI says so with
 // the aborted exit code (e2e/README.md exit codes: 7 aborted;
@@ -113,6 +156,7 @@ func removedNodeIsNoTarget(t *testing.T, f *fleet.Fleet, extra harness.Extra) {
 	cli := harness.CLI(t)
 	notFound := "not found in the " + f.State.Env + " environment"
 	infra.ExpectRefused(t, infra.Run(t, cli, "node", "remove", "--env", f.State.Env, "--node", extra.PublicIP, "--force"), notFound)
+	infra.ExpectRefused(t, infra.Run(t, cli, "remove", "--env", f.State.Env, "--node", extra.PublicIP, "--yes"), notFound)
 	infra.ExpectRefused(t, infra.Run(t, cli, "node", "wipe", "--env", f.State.Env, "--node", extra.PublicIP, "--force"), notFound)
 	for _, gone := range []string{"clean", "decommission"} {
 		infra.ExpectExit(t, infra.Run(t, cli, "node", gone, "--env", f.State.Env, "--node", extra.PublicIP, "--force"), infra.ExitUsage, "unknown node subcommand")
