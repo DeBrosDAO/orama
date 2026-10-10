@@ -450,3 +450,84 @@ func TestUpdateRoot_anAdoptedRootOfAnotherChainIsNotTrusted(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestRotateRoot_adoptsTheNextVersionSignedByTheAdoptedKeys(t *testing.T) {
+	c := newRootChain(t, 3, true)
+	u := c.adopted(t, 1)
+
+	changed, err := RotateRoot(u, c.versions[1])
+
+	if err != nil || !changed || adoptedVersion(t, u, c) != 2 {
+		t.Fatalf("changed %v, err %v, adopted version %d; want version 2", changed, err, adoptedVersion(t, u, c))
+	}
+	if changed, err = RotateRoot(u, c.versions[1]); err != nil || changed {
+		t.Errorf("the adopted root again: changed %v, err %v; want nothing to do", changed, err)
+	}
+}
+
+func TestRotateRoot_refusesWhatAClientFollowingTheRepositoryWouldRefuse(t *testing.T) {
+	c := newRootChain(t, 3, true)
+	other := newRootChain(t, 2, true)
+	for name, tc := range map[string]struct {
+		adopted int
+		next    []byte
+	}{
+		"a jump of two versions":    {1, c.versions[2]},
+		"a root of another chain":   {1, other.versions[1]},
+		"an older root":             {2, c.versions[0]},
+		"not a root":                {2, []byte(`{"signed":{}}`)},
+		"an empty file":             {2, nil},
+		"the same version, another": {1, other.versions[0]},
+	} {
+		u := c.adopted(t, tc.adopted)
+		if changed, err := RotateRoot(u, tc.next); err == nil || changed {
+			t.Errorf("%s: changed %v, err %v; want a refusal", name, changed, err)
+		}
+		if adoptedVersion(t, u, c) != tc.adopted {
+			t.Errorf("%s: the adopted root was changed by a refused rotation", name)
+		}
+	}
+}
+
+func TestRotateRoot_anExpiredNextRootIsRefused(t *testing.T) {
+	c := newRootChain(t, 2, true)
+	u := c.adopted(t, 1)
+	u.Now = testNow.Add(48 * time.Hour)
+
+	if changed, err := RotateRoot(u, c.versions[1]); err == nil || changed {
+		t.Fatalf("changed %v, err %v; want an expired root refused", changed, err)
+	}
+	if adoptedVersion(t, u, c) != 1 {
+		t.Error("the adopted root was replaced by an expired one")
+	}
+}
+
+func TestRotateRoot_rotatingTheSnapshotKeyClearsTheRollbackRecordAndKeepingItKeepsIt(t *testing.T) {
+	for _, rotateAll := range []bool{true, false} {
+		c := newRootChain(t, 2, rotateAll)
+		u := c.adopted(t, 1)
+		if err := writeSeen(u.SeenPath, 900); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := RotateRoot(u, c.versions[1]); err != nil {
+			t.Fatal(err)
+		}
+		seen, err := readSeen(u.SeenPath)
+		want := int64(900)
+		if rotateAll {
+			want = 0
+		}
+		if err != nil || int64(seen.SnapshotVersion) != want {
+			t.Errorf("rotateAll=%v: seen %+v, %v; want the snapshot version %d", rotateAll, seen, err, want)
+		}
+	}
+}
+
+func TestRotateRoot_withoutAnAdoptedRootThereIsNothingToRotateFrom(t *testing.T) {
+	c := newRootChain(t, 2, true)
+	dir := t.TempDir()
+	u := RootUpdate{RootPath: filepath.Join(dir, "none.json"), SeenPath: filepath.Join(dir, "seen.json"), Now: testNow}
+	if _, err := RotateRoot(u, c.versions[1]); !errors.Is(err, ErrNoRoot) {
+		t.Fatalf("err = %v, want ErrNoRoot", err)
+	}
+}

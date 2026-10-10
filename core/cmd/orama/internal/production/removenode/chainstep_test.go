@@ -85,7 +85,10 @@ func (w *world) step(opts Options) *chainStep {
 			return w.chain, nil
 		},
 		newClient: func(context.Context, *chainreach.Reach, string) (txClient, error) { return w.tx, w.clientErr },
-		pin:       func(env, explicit string) (string, error) { w.pinned = append(w.pinned, env+"/"+explicit); return w.chainID, w.pinErr },
+		pin: func(env, explicit string) (string, error) {
+			w.pinned = append(w.pinned, env+"/"+explicit)
+			return w.chainID, w.pinErr
+		},
 		checkChain: func(_ context.Context, _ *chainreach.Reach, want string) error {
 			w.checked = append(w.checked, want)
 			return w.checkErr

@@ -110,6 +110,27 @@ Rules:
 
 Nodes installed before archives were signed have no anchor. Push once with `orama maint push --trust-signers <your address>`, which creates the anchor and never changes an existing one.
 
+## Who holds the release key
+
+Today **one release key holds every role** of the release root: root, targets, snapshot and timestamp, at threshold 1. It is the owner's RootWallet key, and the RootWallet approves each signature in its desktop app; that is the only custody the wallet offers now, and per-role keys are planned on the RootWallet side. What that means:
+
+- Whoever holds the key, or can make the RootWallet approve a signature, can publish a release that every node and every cluster's auto-update accepts. Nothing else stands between a compromised key and the fleet.
+- The same key is the only one that can sign the next root. A compromise is recovered by a new root, pinned by hand in every network manifest and shipped in a new CLI; there is no rotation that the old key does not sign.
+- `orama maint release renew-root` keeps the keys and extends the year. Changing the key needs a root signed by the old and by the new keys, which no command collects yet.
+
+`orama maint release init-root --keys <file>` is ready for the day the custody is split. The file names, per role, the keys (64 hex digits of an ed25519 public key, or `"wallet"` for your own release key) and the threshold:
+
+```json
+{
+  "root":    { "keys": ["wallet"] },
+  "targets": { "keys": ["<hex>", "<hex>"], "threshold": 2 }
+}
+```
+
+A role that is left out is your release key at threshold 1, so without `--keys` the root is the one above. The command signs the root once, with your key, so your key must be among the root keys and the root threshold must be 1; a root that needs more signatures has to be signed by the other holders.
+
+**How a rotation reaches a node.** A node that follows its release repository (`orama node autoupdate`) walks `2.root.json`, `3.root.json` and so on, accepting each only when the previous root's keys signed it. A release that `orama upgrade` stages on a node carries the root it was verified under: a node that has no root adopts it, a node that holds the same root does nothing, and a node whose root is the version before it takes the pushed root through `orama node trust add-root --rotate`, which checks the signatures against the root the node holds, never on the pusher's word. A node more than one version behind, or on a release that does not know `--rotate`, refuses the push and says so; run the push once per rotation, or let the node's auto-update catch up.
+
 ## Install a published release
 
 The DeBros release repository (`https://releases.orama.network/`) publishes the releases of three channels: `nightly` (the stagenet), `main` (the future testnet) and `dev/<branch>`. Each release is signed by the project's TUF release root with the owner's RootWallet key; the archives are GitHub release assets that the repository redirects to, and every byte is checked against the signed length and hashes.
@@ -122,7 +143,7 @@ You need no build and your wallet signs nothing. A network's manifest names the 
 4. downloads the newest archive for the node's architecture and checks its length and hashes;
 5. puts the root on the node and stages the archive with `orama maint node stage-archive --release-only`.
 
-The same path keeps a running cluster current (`orama node autoupdate`, which also follows root rotations). A timestamp that has expired is refused as a freeze, so a repository nobody has refreshed for a week (nightly) or a month (main) stops offering releases until its maintainer refreshes it.
+The same path keeps a running cluster current (`orama node autoupdate`, which also follows root rotations: it asks the repository for the next root version and adopts it only when the root the node holds signed it). A timestamp that has expired is refused as a freeze, so a repository nobody has refreshed for a week (nightly) or a month (main) stops offering releases until its maintainer refreshes it.
 
 `orama node setup --release <version> --release-repo <url> --release-root <root.json>` is the older form of this: it verifies on your computer and then has **your** RootWallet sign the archive, so the cluster trusts your wallet for what it installs and also the root. Use it for a repository that is not a network's.
 

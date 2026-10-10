@@ -228,3 +228,52 @@ func checkAdoptedFloor(path string, newest int64, chain map[int64][]byte) error 
 	}
 	return nil
 }
+
+// RotateRoot adopts next as the root at u.RootPath when it is the next version of the root adopted
+// there: signed by the adopted root's keys at their threshold and by its own, the way a client
+// following the repository accepts it (TUF 5.3.2). It is what a node does with a root an operator
+// pushes with a release: the pushed root is the newest the operator's fetch walked to, and the node
+// follows it only through a chain of trust from the root it holds, never on the pusher's word.
+// It reports whether the adopted root changed: next being the adopted root changes nothing. A next
+// that is another root of the same version, an older one, or more than one version ahead (the
+// versions between are not here to check) is refused, as is one that has expired. If the timestamp
+// or snapshot keys change, the rollback record at u.SeenPath is cleared first, as UpdateRoot does.
+func RotateRoot(u RootUpdate, next []byte) (bool, error) {
+	if u.Now.IsZero() {
+		return false, errors.New("reference time is required so an expired root is refused")
+	}
+	adopted, err := ReadRoot(u.RootPath)
+	if err != nil {
+		return false, err
+	}
+	if bytes.Equal(adopted, next) {
+		return false, nil
+	}
+	trusted, err := trustedmetadata.New(adopted)
+	if err != nil {
+		return false, fmt.Errorf("the adopted release root: %w", err)
+	}
+	before := trusted.Root
+	if _, err := trusted.UpdateRoot(next); err != nil {
+		return false, fmt.Errorf("%w: the pushed root (version %d) does not follow the adopted version %d: %w",
+			ErrRootRotation, versionOf(next), before.Signed.Version, err)
+	}
+	if _, err := ValidateRoot(next, u.Now); err != nil {
+		return false, fmt.Errorf("%w: the pushed root (version %d): %w", ErrRootRotation, trusted.Root.Signed.Version, err)
+	}
+	if rolesChanged(before, trusted.Root, metadata.TIMESTAMP, metadata.SNAPSHOT) {
+		if err := clearSeen(u.SeenPath); err != nil {
+			return false, err
+		}
+	}
+	return AdoptRoot(u.RootPath, next, u.Now)
+}
+
+// versionOf is the version a root file declares, 0 when it cannot be read.
+func versionOf(data []byte) int64 {
+	root, err := metadata.Root().FromBytes(data)
+	if err != nil {
+		return 0
+	}
+	return root.Signed.Version
+}

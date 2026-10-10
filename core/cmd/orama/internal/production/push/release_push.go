@@ -46,7 +46,7 @@ type ReleaseFiles struct {
 
 // ReleaseToNode stages a verified release on one node: it uploads the archive,
 // the metadata and the root to a private directory, adopts the root when the
-// node has none, and has the node's installed orama verify the archive against
+// node has none or rotates to it when it is the next version of the node's, and has the node's installed orama verify the archive against
 // the adopted root (`node stage-archive --release-only`) before it replaces
 // anything under /opt/orama. A node that trusts a different root refuses the
 // release and says so. Nothing is restarted. It returns what the node's stage
@@ -82,7 +82,8 @@ func ReleaseToNode(node inspector.Node, rel ReleaseFiles) (out string, err error
 
 // releaseStageHint says what a refused release stage most often means.
 const releaseStageHint = "the node's installed orama verifies the release against the release root it adopted " +
-	"(" + releaseverify.RootPath + "); a node that trusts another root, that was never installed, or whose release has no --release-only stage " +
+	"(" + releaseverify.RootPath + "); a node that trusts another root, one more than a version behind the pushed root " +
+	"(it takes one rotation per push), that was never installed or does not know 'node trust add-root --rotate', or whose release has no --release-only stage " +
 	"(it needs one signed push first: orama maint push --trust-signers) refuses it"
 
 // metadataFiles lists the files under dir as slash-separated relative paths,
@@ -158,13 +159,15 @@ func metadataDirs(dir string, files []string) []string {
 }
 
 // releaseStageCommand is the node-side step for an uploaded release. The node's
-// installed orama adopts the root only when the node has none, then stages the
-// archive on the release root's checks alone. The script travels base64-encoded
+// installed orama adopts the root when the node has none, follows it when it is the next version of
+// the root the node holds (a rotation checked against that root, never taken on the pusher's word),
+// then stages the archive on the release root's checks alone. The script travels base64-encoded
 // into `bash -s`; every value in it is checked here or is a fixed path.
 func releaseStageCommand(sudo, dir, target string) string {
 	script := strings.Join([]string{
 		"set -eu",
 		"[ -f " + releaseverify.RootPath + " ] || " + NodeOramaBinary + " node trust add-root " + path.Join(dir, uploadRootName),
+		"cmp -s " + path.Join(dir, uploadRootName) + " " + releaseverify.RootPath + " || " + NodeOramaBinary + " node trust add-root --rotate " + path.Join(dir, uploadRootName),
 		NodeOramaBinary + " node stage-archive --archive " + uploadPath(dir) +
 			" --release-metadata " + path.Join(dir, uploadMetadataDir) +
 			" --release-target " + target + " --release-only",

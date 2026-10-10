@@ -28,6 +28,10 @@ An upgrade runs in groups. While the node still serves, it verifies the archive,
 
 Two details matter in practice. Release 0.200 moved files on disk, and the migration runs inside `orama-node` as the unprivileged user: it plans every path before moving any, and refuses when both the old and new location exist. Rolling back past it is unsupported. And a release-policy library (modes off, notify and auto, a maintenance window, validators never automatic) exists but nothing runs it, so no node upgrades itself.
 
+## Who signs a release
+
+The release root lists one key, the owner's RootWallet key, for all four roles (root, targets, snapshot, timestamp) at threshold 1, and the wallet approves each signature by hand; keys per role are planned on its side. A compromise of that key is a compromise of every release every node accepts, and since only it signs the next root, recovery is a new root pinned by hand in every manifest. `init-root --keys <file>` already writes a split root. A node follows a rotation by walking its repository's next root versions, or, for a pushed release, by `orama node trust add-root --rotate`, which checks the pushed root against the one the node holds.
+
 ## Rolling upgrades
 
 ![Rolling upgrade: build, push, plan, one node at a time behind a readiness gate](../technical-reference/diagrams/ch31-overview.svg)

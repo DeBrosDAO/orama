@@ -183,3 +183,54 @@ func TestNewCommand_hasTheFiveSubcommands(t *testing.T) {
 		}
 	}
 }
+
+func TestInitRoot_aKeyFileSplitsTheRoles(t *testing.T) {
+	a := newAgent(t)
+	other, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := filepath.Join(t.TempDir(), "keys.json")
+	body := `{"root":{"keys":["wallet"]},"targets":{"keys":["` + hex.EncodeToString(other) + `","wallet"],"threshold":2}}`
+	if err := os.WriteFile(spec, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(t.TempDir(), "repo")
+
+	out, err := exec(t, a, nil, "init-root", "--dir", dir, "--keys", spec)
+
+	if err != nil || !strings.Contains(out, "root sha256: ") {
+		t.Fatalf("init-root --keys: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "targets: 2 key(s), threshold 2") {
+		t.Errorf("the approval prompt does not say the roles are split:\n%s", out)
+	}
+	if a.approvals != 1 {
+		t.Errorf("approvals = %d, want 1", a.approvals)
+	}
+}
+
+func TestInitRoot_aBadKeyFileChangesNothing(t *testing.T) {
+	a := newAgent(t)
+	dir := filepath.Join(t.TempDir(), "repo")
+	spec := filepath.Join(t.TempDir(), "keys.json")
+	for name, body := range map[string]string{
+		"not hex":            `{"root":{"keys":["wallet"]},"targets":{"keys":["zz"]}}`,
+		"unknown field":      `{"roots":{}}`,
+		"root threshold two": `{"root":{"keys":["wallet","` + strings.Repeat("ab", 32) + `"],"threshold":2}}`,
+		"wallet not in root": `{"root":{"keys":["` + strings.Repeat("ab", 32) + `"]}}`,
+	} {
+		if err := os.WriteFile(spec, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := exec(t, a, nil, "init-root", "--dir", dir, "--keys", spec); err == nil {
+			t.Errorf("%s: a root was made", name)
+		}
+	}
+	if a.approvals != 0 {
+		t.Errorf("approvals = %d: a refused layout must not reach the wallet", a.approvals)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "root.json")); err == nil {
+		t.Error("a refused layout left a root behind")
+	}
+}

@@ -3791,11 +3791,26 @@ for the root, timestamp, snapshot and targets roles, threshold 1, valid for a
 year. One approval. Prints the root's SHA-256, the digest network manifests pin
 (release_root_sha256), and leaves 1.root.json and root.json in --dir. It refuses
 a directory that already has a root.
+
+Today one release key holds all four roles: whoever holds it can sign a root, a
+targets file, a snapshot and a timestamp, and it is the only key that can sign
+the next root. --keys <file> makes a root that splits the roles when the wallet
+can hold more keys, without any other change: a JSON file naming, per role, the
+keys (64 hex digits of an ed25519 public key, or "wallet" for your own release
+key) and the threshold, for example
+
+  {"root": {"keys": ["wallet"]},
+   "targets": {"keys": ["<hex>", "<hex>"], "threshold": 2}}
+
+A role that is left out is your release key at threshold 1. This command signs
+the root once, with your key, so your key must be among the root keys and the root
+threshold must be 1.
 ```
 
 | Flag | Default | Description |
 |---|---|---|
 | `--dir` | — | The release repository working directory (default ~/.orama/release-repo) |
+| `--keys` | — | A JSON file naming the keys and threshold of each role (default: your release key for all four roles, threshold 1) |
 
 
 ## orama maint release publish
@@ -5161,13 +5176,21 @@ needs --replace. This command changes this node only; 'orama maint build
 --release-root' puts the root in a signed archive, and every node that installs
 that archive adopts it.
 
+--rotate adopts the root as the next version of the one adopted: it has to be
+signed by the adopted root's keys at their threshold and by its own, exactly as a
+client following the release repository checks a rotation. A push of a release
+uses it, so a root the operator renewed or rotated reaches this node without
+--replace and without anyone's word for it.
+
 Examples:
   sudo orama node trust add-root ./root.json
+  sudo orama node trust add-root --rotate ./2.root.json
 ```
 
 | Flag | Default | Description |
 |---|---|---|
 | `--replace` | `false` | Replace a different release root that is already adopted |
+| `--rotate` | `false` | Adopt the root as the next version of the adopted one, verified against it (a rotation) |
 
 
 ## orama node uninstall

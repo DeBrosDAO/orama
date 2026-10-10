@@ -26,12 +26,13 @@ func decodeScript(t *testing.T, cmd string) string {
 	return string(raw)
 }
 
-func TestReleaseStageCommand_adoptsTheRootOnlyWhenMissingThenStagesOnTheReleaseRoot(t *testing.T) {
+func TestReleaseStageCommand_adoptsTheRootWhenMissingRotatesWhenDifferentThenStagesOnTheReleaseRoot(t *testing.T) {
 	script := decodeScript(t, releaseStageCommand("sudo ", "/tmp/orama-push.AbCd1234", "nightly/orama-0.4.0-linux-amd64.tar.gz"))
 
 	wantLines := []string{
 		"set -eu",
 		"[ -f /etc/orama/release-root.json ] || /usr/local/bin/orama node trust add-root /tmp/orama-push.AbCd1234/root.json",
+		"cmp -s /tmp/orama-push.AbCd1234/root.json /etc/orama/release-root.json || /usr/local/bin/orama node trust add-root --rotate /tmp/orama-push.AbCd1234/root.json",
 		"/usr/local/bin/orama node stage-archive --archive /tmp/orama-push.AbCd1234/archive.tar.gz" +
 			" --release-metadata /tmp/orama-push.AbCd1234/meta --release-target nightly/orama-0.4.0-linux-amd64.tar.gz --release-only",
 	}

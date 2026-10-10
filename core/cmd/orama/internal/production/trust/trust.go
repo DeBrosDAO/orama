@@ -22,6 +22,10 @@ type AddRootOptions struct {
 	File string
 	// Replace allows adopting a root when a different one is adopted already.
 	Replace bool
+	// Rotate adopts the root as the next version of the one adopted, checked against it the way
+	// a client following the repository would (releaseverify.RotateRoot). It is how a root the
+	// operator pushed with a release replaces the one the node holds without --replace.
+	Rotate bool
 }
 
 // AddRoot adopts the TUF root in opts.File as this node's release root
@@ -32,13 +36,16 @@ func AddRoot(opts AddRootOptions, out io.Writer) error {
 	if err := clierr.RequireRoot("adopting a release root"); err != nil {
 		return err
 	}
-	return addRoot(opts, releaseverify.RootPath, time.Now(), out)
+	return addRoot(opts, releaseverify.RootPath, releaseverify.SeenPath, time.Now(), out)
 }
 
-func addRoot(opts AddRootOptions, rootPath string, now time.Time, out io.Writer) error {
+func addRoot(opts AddRootOptions, rootPath, seenPath string, now time.Time, out io.Writer) error {
 	data, err := readRootFile(opts.File)
 	if err != nil {
 		return err
+	}
+	if opts.Rotate {
+		return rotateRoot(releaseverify.RootUpdate{RootPath: rootPath, SeenPath: seenPath, Now: now}, data, out)
 	}
 	digest, err := releaseverify.ValidateRoot(data, now)
 	if err != nil {
@@ -64,6 +71,25 @@ func addRoot(opts AddRootOptions, rootPath string, now time.Time, out io.Writer)
 	fmt.Fprintf(out, "Adopted release root %s (%s).\n", digest, rootPath)
 	fmt.Fprintln(out, "Releases signed under it are now accepted by 'orama maint node stage-archive --release-only' on this node.")
 	fmt.Fprintln(out, "To give every node of the cluster the same root, build with --release-root and push the archive.")
+	return nil
+}
+
+// rotateRoot adopts data as the next version of the adopted root, or says why it is not.
+func rotateRoot(u releaseverify.RootUpdate, data []byte, out io.Writer) error {
+	changed, err := releaseverify.RotateRoot(u, data)
+	switch {
+	case errors.Is(err, releaseverify.ErrNoRoot):
+		return clierr.Usage("this node has no release root to rotate from: adopt one with 'orama node trust add-root <root.json>'")
+	case errors.Is(err, releaseverify.ErrRootRotation):
+		return clierr.Usage("the root is not the next version of the one this node trusts, so it is not adopted: %v\n"+
+			"  A node more than one version behind follows the rotations through its release repository (the auto-update agent), or takes one root per push", err)
+	case err != nil:
+		return err
+	case !changed:
+		fmt.Fprintf(out, "Release root %s is already adopted.\n", releaseverify.RootDigest(data))
+		return nil
+	}
+	fmt.Fprintf(out, "Rotated the release root to %s (%s).\n", releaseverify.RootDigest(data), u.RootPath)
 	return nil
 }
 

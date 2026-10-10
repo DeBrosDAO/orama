@@ -29,8 +29,15 @@ needs --replace. This command changes this node only; 'orama maint build
 --release-root' puts the root in a signed archive, and every node that installs
 that archive adopts it.
 
+--rotate adopts the root as the next version of the one adopted: it has to be
+signed by the adopted root's keys at their threshold and by its own, exactly as a
+client following the release repository checks a rotation. A push of a release
+uses it, so a root the operator renewed or rotated reaches this node without
+--replace and without anyone's word for it.
+
 Examples:
-  sudo orama node trust add-root ./root.json`,
+  sudo orama node trust add-root ./root.json
+  sudo orama node trust add-root --rotate ./2.root.json`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		trustAddRoot.File = args[0]
@@ -40,6 +47,7 @@ Examples:
 
 func init() {
 	trustAddRootCmd.Flags().BoolVar(&trustAddRoot.Replace, "replace", false, "Replace a different release root that is already adopted")
+	trustAddRootCmd.Flags().BoolVar(&trustAddRoot.Rotate, "rotate", false, "Adopt the root as the next version of the adopted one, verified against it (a rotation)")
 	trustCmd.AddCommand(trustAddRootCmd)
 	Cmd.AddCommand(trustCmd)
 }

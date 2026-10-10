@@ -1,13 +1,17 @@
 package releasecmd
 
 import (
+	"context"
+	"os"
+
 	"github.com/spf13/cobra"
 
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/pkg/releasepub"
 )
 
 func newInitRootCmd(d deps) *cobra.Command {
-	var dir string
+	var dir, keysFile string
 	cmd := &cobra.Command{
 		Use:   "init-root",
 		Short: "Make the repository's root from your RootWallet's release key",
@@ -15,14 +19,32 @@ func newInitRootCmd(d deps) *cobra.Command {
 for the root, timestamp, snapshot and targets roles, threshold 1, valid for a
 year. One approval. Prints the root's SHA-256, the digest network manifests pin
 (release_root_sha256), and leaves 1.root.json and root.json in --dir. It refuses
-a directory that already has a root.`,
+a directory that already has a root.
+
+Today one release key holds all four roles: whoever holds it can sign a root, a
+targets file, a snapshot and a timestamp, and it is the only key that can sign
+the next root. --keys <file> makes a root that splits the roles when the wallet
+can hold more keys, without any other change: a JSON file naming, per role, the
+keys (64 hex digits of an ed25519 public key, or "wallet" for your own release
+key) and the threshold, for example
+
+  {"root": {"keys": ["wallet"]},
+   "targets": {"keys": ["<hex>", "<hex>"], "threshold": 2}}
+
+A role that is left out is your release key at threshold 1. This command signs
+the root once, with your key, so your key must be among the root keys and the root
+threshold must be 1.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			repo, err := repoFor(dir)
 			if err != nil {
 				return err
 			}
-			digest, err := releasepub.InitRoot(cmd.Context(), d.agent(), repo, d.now(), cmd.OutOrStdout())
+			keys, err := rootKeysFrom(cmd.Context(), d.agent(), keysFile)
+			if err != nil {
+				return err
+			}
+			digest, err := releasepub.InitRootWith(cmd.Context(), d.agent(), repo, d.now(), cmd.OutOrStdout(), keys)
 			if err != nil {
 				return fail("make the root", err)
 			}
@@ -31,7 +53,29 @@ a directory that already has a root.`,
 		},
 	}
 	repoFlag(cmd, &dir)
+	cmd.Flags().StringVar(&keysFile, "keys", "", "A JSON file naming the keys and threshold of each role (default: your release key for all four roles, threshold 1)")
 	return cmd
+}
+
+// rootKeysFrom reads the --keys file; without one the layout is today's.
+func rootKeysFrom(ctx context.Context, agent releasepub.Agent, path string) (releasepub.RootKeys, error) {
+	if path == "" {
+		return releasepub.RootKeys{}, nil
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return releasepub.RootKeys{}, clierr.Usage("--keys: %v", err)
+	}
+	defer f.Close()
+	wallet, err := agent.ReleaseKey(ctx)
+	if err != nil {
+		return releasepub.RootKeys{}, fail("read the wallet's release key", err)
+	}
+	keys, err := releasepub.ParseRootKeys(f, wallet)
+	if err != nil {
+		return releasepub.RootKeys{}, clierr.Usage("--keys %s: %v", path, err)
+	}
+	return keys, nil
 }
 
 func newRenewRootCmd(d deps) *cobra.Command {

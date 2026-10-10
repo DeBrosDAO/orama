@@ -73,7 +73,10 @@ func (h *harness) runner(opts Options) (*runner, *bytes.Buffer) {
 			return h.chainNode, nil
 		},
 		newClient: func(context.Context, *chainreach.Reach, string) (txClient, error) { return h.tx, nil },
-		pin:       func(env, explicit string) (string, error) { h.pinned = append(h.pinned, env+"/"+explicit); return "orama-stagenet-1", h.pinErr },
+		pin: func(env, explicit string) (string, error) {
+			h.pinned = append(h.pinned, env+"/"+explicit)
+			return "orama-stagenet-1", h.pinErr
+		},
 		checkChain: func(_ context.Context, _ *chainreach.Reach, want string) error {
 			h.checked = append(h.checked, want)
 			return h.checkErr
