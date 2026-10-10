@@ -53,7 +53,7 @@ func (m *Model) body() string {
 	case stepCreateName:
 		return "What is the new network called? Joiners type this name.\n\n" + m.input.View()
 	case stepCreateChainID:
-		return "The chain id of " + m.opts.Create.Name + ". A test network's carries -stagenet-, -devnet- or -localnet-; any other is a production id and needs 30 bootstrap validators.\n\n" + m.input.View()
+		return "The chain id of " + m.opts.Create.Name + ". A test network's carries -stagenet-, -devnet- or -localnet-; any other is a production id, which setup refuses: it creates test networks only.\n\n" + m.input.View()
 	case stepCreateRoot:
 		return "Where is the release-root.json the network's releases are verified against?\n\n" + m.input.View()
 	case stepOptions:

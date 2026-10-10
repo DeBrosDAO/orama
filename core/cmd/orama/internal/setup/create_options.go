@@ -112,6 +112,9 @@ func (o *Options) prepareCreate() error {
 		return clierr.Usage("--create-network needs --chain-id, for example orama-%s-stagenet-1 (a chain id without -stagenet-, -devnet- or -localnet- is a production one); an announced network supplies it (orama maint network announce)", c.Name)
 	case strings.Contains(c.ChainID, netclass.MarkerLocalnet):
 		return clierr.Usage("--chain-id %q is a localnet's: the chain locks no parameter on a localnet, which is for scripts/localnet on one machine; use a -stagenet- or -devnet- chain id", c.ChainID)
+	case netclass.IsProduction(c.ChainID):
+		return clierr.Usage("--chain-id %q is a production network's (it has none of %s): --create-network makes test networks only, because it keeps each bootstrap validator's key in an unencrypted test keyring on the machine. "+
+			"Creating a production network needs seat accounts held by the RootWallet, which setup does not build yet; use a -stagenet- or -devnet- chain id", c.ChainID, strings.Join(netclass.NonProductionMarkers, ", "))
 	case c.ReleaseRoot == "" && c.AnnouncedRoot == nil:
 		return clierr.Usage("--create-network needs --release-root: the release-root.json the network's releases are verified against (an announced network supplies it: orama maint network announce)")
 	}

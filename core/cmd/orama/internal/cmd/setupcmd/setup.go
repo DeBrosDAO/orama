@@ -56,7 +56,8 @@ the others, starts the chains one after the other, waits for blocks, and then re
 operator and the nodes as it does for a join. It writes networks/<name>/ (manifest, genesis,
 release root) to --publish-dir and prints what to do to publish it. --chain-id is the chain's
 id: a test network's carries -stagenet-, -devnet- or -localnet-; any other is a production id, which
-needs at least 30 bootstrap validators, more than one run takes, so setup creates test networks. --release-root is the release-root.json the network's
+setup refuses: it creates test networks only, because it keeps each seat's key in an unencrypted test keyring
+(a production network needs seat accounts held by the RootWallet, which is not built). --release-root is the release-root.json the network's
 releases are verified against. A network that was announced in the registry before it was created (orama maint network announce)
 supplies its chain id, release repository, channel, minimum version, seeds, faucet and release root, so those flags can be left out;
 a flag overrides the announcement, and the genesis built here is published over it. Joining a network that is only announced is refused. Running it again with the same machines resumes: a machine that

@@ -60,12 +60,27 @@ func TestNormalize_createKeepsWhatWasGiven(t *testing.T) {
 	}
 }
 
-func TestNormalize_createRefusesProductionBelowTheFloor(t *testing.T) {
-	o := createOptions(nIPs(5)...)
-	o.Create.ChainID = "orama-1"
-	err := o.Normalize()
-	if clierr.CodeOf(err) != clierr.CodeUsage || err == nil || !strings.Contains(err.Error(), "at least 30") || !strings.Contains(err.Error(), "-stagenet-") {
-		t.Fatalf("a production chain id with five machines must be refused, with the way out: %v", err)
+func TestNormalize_createRefusesAProductionChainIDWhateverTheNumberOfMachines(t *testing.T) {
+	for _, machines := range []int{1, 5, MaxNodes} {
+		for _, id := range []string{"orama-1", "orama-mainnet-1", "orama-stagenet", "stagenet"} {
+			o := createOptions(nIPs(machines)...)
+			o.Create.ChainID = id
+			err := o.Normalize()
+			if clierr.CodeOf(err) != clierr.CodeUsage || err == nil ||
+				!strings.Contains(err.Error(), "RootWallet") || !strings.Contains(err.Error(), "-stagenet-") || !strings.Contains(err.Error(), "test networks only") {
+				t.Errorf("chain id %q with %d machines must be refused, with the reason and the way out: %v", id, machines, err)
+			}
+		}
+	}
+}
+
+func TestNormalize_createAcceptsTheTestNetworkClasses(t *testing.T) {
+	for _, id := range []string{"orama-x-stagenet-1", "orama-x-devnet-1"} {
+		o := createOptions(nIPs(3)...)
+		o.Create.ChainID = id
+		if err := o.Normalize(); err != nil {
+			t.Errorf("chain id %q: %v", id, err)
+		}
 	}
 }
 
