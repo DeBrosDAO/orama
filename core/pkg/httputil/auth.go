@@ -89,8 +89,3 @@ func IsJWT(token string) bool {
 func ExtractNamespaceHeader(r *http.Request) string {
 	return strings.TrimSpace(r.Header.Get("X-Namespace"))
 }
-
-// ExtractWalletHeader extracts the wallet address from the X-Wallet header.
-func ExtractWalletHeader(r *http.Request) string {
-	return strings.TrimSpace(r.Header.Get("X-Wallet"))
-}

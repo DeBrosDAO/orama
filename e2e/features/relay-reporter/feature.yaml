@@ -1,0 +1,42 @@
+# Stage 8, track E5 of the Open Network plan: the relay bandwidth reporter
+# (`orama-global reporter`, website/src/docs/operator/tor-network.mdx#the-relay-bandwidth-reporter).
+# It runs on a directory-authority host, and a run chain has none: the fleet
+# has no dirauth, no votes and no relays. The tests therefore need what the
+# run may not have, and report not applicable without it: an orama-global
+# binary on the chain node (the stagenet install has one), a node that
+# `orama global install --services chain,dirauth,reporter` set up (its home,
+# operator and authority-id need no manual step, and the authority's archive
+# oneshot exports its own vote to the votes directory the reporter reads), and
+# for the report itself a hot key that is in x/relay's reporter set and funded
+# (the reporter creates the key on its first start).
+# What they prove on a live chain: the reporter will not start without its
+# identity, the install prepared the home from the network file, and a closed
+# epoch's report is accepted by x/relay (the reporter's state records it as
+# reported).
+# Where a node runs a Tor relay (stagenet does) it also proves the relay is paid for: orama setup
+# registered each relay with x/relay by the fingerprint and ed25519 identity the relay made, on the
+# node and operator that run it; `orama global tor relay-identity` signs what the chain checks; and
+# a settled epoch's payouts add up to what it minted and credit the operators' earnings. Each says
+# not applicable on a target with no relay or whose reporters have settled no epoch.
+id: relay-reporter
+title: Relay bandwidth reporter (x/relay MsgReportEpoch from a dirauth's votes)
+area: chain
+subtasks: [2788]
+stage: 8
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: true
+covers:
+  cli:
+    - orama global tor relay-identity
+  claims:
+    - "website/src/docs/operator/setup.mdx#a-relay-is-registered-with-the-chain: after orama setup each relay is registered with x/relay by the fingerprint and ed25519 identity it made, on the node and operator that run it, and the node binds the relay's key as its relay service key (needs relays; says not applicable without them)"
+    - "website/src/docs/operator/tor-network.mdx#relays: orama global tor relay-identity signs, as root and on the relay's node, a binding and a cross-certificate that verify under the relay's own key (needs relays; says not applicable without them)"
+    - "docs/whitepaper/technical-reference/vol2/46-relay-rewards.md#settlement: the payouts of a settled epoch add up to what it minted, belong to registered relays of the operators they name and credit those operators' earnings (needs a chain whose reporter quorum has reported an epoch; says not applicable without one)"
+    - "website/src/docs/operator/tor-network.mdx#the-relay-bandwidth-reporter: the reporter refuses to start without its operator and authority identity"
+    - "website/src/docs/operator/tor-network.mdx#the-relay-bandwidth-reporter: a closed epoch is reported once, in chunks, during the epoch after it (x/relay's report window), and x/relay takes the report (needs a reporter key in x/relay's set and epochs at least one voting interval long; without them the test says not applicable)"
+    - "website/src/docs/operator/tor-network.mdx#the-relay-bandwidth-reporter: orama-global reporter --print-address prints the address of the hot key without creating it"
+    - "website/src/docs/operator/tor-network.mdx#the-relay-bandwidth-reporter: the authority's archive oneshot exports its own vote to a directory its account writes and the reporter's group reads, and the reporter's account cannot read the authority's home nor the authority's the reporter's"
+    - "website/src/docs/operator/tor-network.mdx#the-relay-bandwidth-reporter: orama global install prepares the reporter's home: its account owns it, the operator is an account address and the authority-id is the v3_ident of an authority in the installed network file and the vote-interval is the network file's voting interval"

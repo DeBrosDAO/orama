@@ -1,0 +1,25 @@
+direction: down
+
+start: "Stop, restart or pre-upgrade on this node"
+read: "Read index RQLite /status"
+readfail: "status unreadable?" {shape: diamond}
+running: "Any index rqlited unit active\nor unreadable systemd?" {shape: diamond}
+voter: "Is this node a voter?" {shape: diamond}
+nodes: "Read /nodes?nonvoters"
+nodesfail: "member list unreadable\nor no voters?" {shape: diamond}
+math: "reachable - 1 >= total / 2 + 1 ?" {shape: diamond}
+safe: "Safe"
+unsafe: "Refuse (conflict); --force overrides"
+
+start -> read -> readfail
+readfail -> running: "yes"
+readfail -> voter: "no"
+running -> safe: "no unit active: contributes nothing"
+running -> unsafe: "may run: cannot verify"
+voter -> safe: "no: non-voter"
+voter -> nodes: "yes"
+nodes -> nodesfail
+nodesfail -> unsafe: "yes"
+nodesfail -> math: "no"
+math -> safe: "yes"
+math -> unsafe: "no"

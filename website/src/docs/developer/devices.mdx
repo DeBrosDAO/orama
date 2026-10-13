@@ -1,0 +1,136 @@
+# Devices
+
+A session used to belong to an account and nothing else. Every installation of an application signed in as the same wallet held interchangeable sessions, so losing one phone meant ending every session the account had, and nothing a function ran could tell which installation was calling.
+
+A session may now be bound to a **device**: a key pair one installation holds.
+
+## What a device is
+
+- The gateway accepts **ECDSA P-256** (ES256, what iOS's Secure Enclave, Android's StrongBox and WebCrypto keep non-extractable) and **Ed25519**.
+- The device's id is the RFC 7638 thumbprint of its public key. It is computed, never stated, so a client can name only a device whose key it presents.
+- A signature is base64url; a P-256 one may be the 64-byte `r || s` JOSE form or ASN.1 DER.
+- A key belongs to one account in one namespace. The lobby binds none. A revoked device is a tombstone: its key can never sign in again, by anyone. An Ed25519 key of small order, which "verifies" signatures nobody made, is refused.
+
+A session bound to a device:
+
+- is issued only against the device's signature over the same sign-in message the wallet signed;
+- is refreshed only with a fresh proof from the device;
+- carries the device in its access tokens as `did`, which a function reads with `get_caller_device_id` the way it reads the account with `get_caller_jwt_subject`;
+- ends, with its refresh tokens, access tokens and every socket they hold open, when the device is revoked, while the account's other devices stay signed in.
+
+Binding a device is the client's choice in every namespace. A namespace's session policy decides what a sign-in that binds none may still get. Sessions without a device keep working as before.
+
+## Signing in with a device
+
+```text
+client                                          gateway
+  | POST /v1/auth/challenge                       |
+  | { wallet, namespace, device_id }  ----------->|  message's Resources carry urn:orama:device:<id>
+  | <-- message naming the device -----------------|
+  | the wallet signs the message                  |
+  | the device key signs the same message         |
+  | POST /v1/auth/verify                          |
+  | { message, signature, device_key,             |
+  |   device_signature, device_label } ---------->|  both signatures, one spent nonce
+  | <-- access + refresh token, device_id --------|
+```
+
+`orama auth login --device-key <file>` does this. The file is an Ed25519 private JWK (RFC 8037: `d` is the 32-byte seed, base64url, and `x` must be its public key) and stays on the machine that signs in. The request carries the public half. In the SDK see [Device-bound sessions](/docs/developer/sdk-reference#device-bound-sessions).
+
+A device-bound sign-in is **not handed an API key**: the device is the credential, and a key for the whole account beside it would outlive revoking the device.
+
+The access token of a device-bound session is still a bearer token for its 15 minutes. The device's proof guards what outlives it: the refresh, and the acts listed below. A device-bound refresh token is marked `dv1_` and stored under a hash of its own, so a gateway that predates devices cannot find it, and so cannot refresh it without the device.
+
+## Proving the device on later requests
+
+Refreshing a device-bound session, approving a link from a device, collecting a linked session, and (from a device-bound session) revoking a device or ending a session each carry a **device proof**:
+
+```json
+"device_proof": { "iat": 1790000000, "id": "<16-128 chars of [A-Za-z0-9_-], random>", "sig": "<base64url>" }
+```
+
+`sig` is the device's signature over this text, lines joined by `\n`:
+
+```text
+orama-device-proof-v1
+<action>          refresh | approve | claim | revoke | end-session
+<namespace>
+<binding>         the refresh token | the user code | the device code | the device id | the session id
+<iat>
+<id>
+```
+
+`iat` must be within 60 seconds of the gateway's clock, and `id` is spent in the nonce table, so a proof is good once, for one action on one credential. A refresh without the proof is refused before anything is spent, so a thief holding only the refresh token cannot use it up.
+
+## Revoking a device
+
+```text
+GET    /v1/auth/devices          the account's devices, revoked ones included
+DELETE /v1/auth/devices/{id}     revoke one
+```
+
+Revoking tombstones the device, revokes its refresh tokens (including the reuse-grace slot a just-rotated one would still have) and puts `device:<id>` on the revocation list, so its access tokens and sockets stop within ten seconds on every gateway. The account's other devices are untouched. Push registrations made from the device end with it.
+
+Any of the account's sessions may revoke any of its devices: one bound to an active device, with that device's proof, or one bound to no device (which only the wallet can have made). The proof is what stops an access token lifted off one phone signing the account out of all the others. A session bound to a pending or revoked device can do nothing here.
+
+**When the user cannot help themselves.** Under the `approval` policy an account that lost its only device has nothing left that can approve a new one, and a wallet signature alone cannot, by design. A namespace operator (members-write permission) can:
+
+```text
+GET    /v1/namespace/devices?subject=<wallet>   an account's devices
+DELETE /v1/namespace/devices/{id}               revoke one of them
+```
+
+With no active device left, the user's next sign-in enrols its device as the account's first again.
+
+## Device policy
+
+`orama namespace session-policy --device-policy <policy>` (or `PUT /v1/namespace/session-policy {"device_policy": …}`; needs namespace write) sets what a sign-in must prove.
+
+| Policy | A sign-in that binds no device | A new device's first sign-in |
+|---|---|---|
+| `optional` (default) | A session bound to the account | Active |
+| `required` | Refused, `DEVICE_REQUIRED` | Active |
+| `approval` | Refused, `DEVICE_REQUIRED` | Active if it is the account's first; otherwise **pending** |
+
+Under `required` and `approval`, nothing else hands an end user a credential bound to no device either: `POST /v1/auth/api-key` and approving a plain `orama auth login` device code answer `DEVICE_REQUIRED`, and so does refreshing an end user's session bound to no device, so turning the policy on ends those sessions at their next refresh, within fifteen minutes. Setting `required` or `approval` also **revokes every key an end user's sign-in minted** in the namespace, and the response says how many (`revoked_sign_in_keys`). If the sweep stops partway the policy is still set and audited and the answer is `503 POLICY_SWEEP_INCOMPLETE`; repeating the `PUT` finishes it.
+
+A wallet holding a control-plane role in the namespace (owner, admin, developer) is held to `optional` whatever the policy says. The policy protects the application's users; the people operating the namespace sign in from the CLI, which holds no device key, and whoever holds such a wallet can change the policy anyway.
+
+## Adding a device: approval and linking
+
+A **pending** device holds no session. The sign-in that enrolled it answers `202` with `status: pending_approval`, a `user_code` and a `device_code`: the new device shows the user code, one of the account's active devices approves it, and the new device collects its session.
+
+```text
+new device                         gateway                   an active device
+  | (sign-in -> 202, or:)            |                              |
+  | POST /v1/auth/device             |                              |
+  | { namespace, device_key } ------>|  a pending login holding     |
+  | <-- device_code + user_code -----|  the new device's key        |
+  |                                  |  POST /v1/auth/devices/approve
+  |                                  |  { user_code, device_proof } |
+  |                                  |<-----------------------------|
+  | POST /v1/auth/device/token       |                              |
+  | { device_code, device_proof } -->|                              |
+  | <-- access + refresh, device_id -|                              |
+```
+
+Starting the link from the new device (`POST /v1/auth/device` with `device_key`) is **seedless linking**: no wallet is involved at all, and the new device takes its account from the device that approves it. Starting it from an approval-policy sign-in is **new-device approval**: the wallet already named the account, and only one of that account's devices may approve. Either way the approver proves it holds its own key over the user code, and collecting the session takes the new device's proof over the device code. The codes alone collect nothing, and the approving device must still be active when the new one collects: revoking a stolen approver reaches the device it let in. A device link cannot be approved with a wallet signature (`orama auth approve`), and a plain login cannot be approved by a device.
+
+## Rolling it out
+
+A gateway that predates devices knows nothing of the policy, of device-bound sign-in or of `device:` revocations. Set a session policy, and ship clients that bind devices, only once every gateway in the cluster runs this version.
+
+## Error codes
+
+| Code | Means |
+|---|---|
+| `DEVICE_REQUIRED` | The namespace requires sessions bound to a device (403) |
+| `DEVICE_KEY_INVALID` | The key is not a P-256 or Ed25519 public JWK, or is not the device the message names (400) |
+| `DEVICE_SIGNATURE_INVALID` | The device's signature over the sign-in message does not verify (401) |
+| `DEVICE_PROOF_REQUIRED` | A device-bound credential was presented without the device's proof (401) |
+| `DEVICE_PROOF_INVALID` | The proof is stale, reused, or not the device's (401) |
+| `DEVICE_REVOKED` | The device was revoked; its key can never hold a session again (403) |
+| `DEVICE_PENDING` | The device waits for another of the account's devices to approve it (403, or 202 on sign-in) |
+| `DEVICE_NOT_FOUND` | The account has no such device (404) |
+| `DEVICE_KEY_TAKEN` | The key is enrolled for another account (403) |
+| `POLICY_SWEEP_INCOMPLETE` | The policy is set, but revoking end users' existing keys stopped partway. Repeat the `PUT` (503) |

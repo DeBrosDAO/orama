@@ -24,6 +24,12 @@ func (a *ClientAdapter) Subscribe(ctx context.Context, topic string, handler Mes
 	return a.manager.Subscribe(ctx, topic, handler)
 }
 
+// SubscribeHandle subscribes to a topic and returns the function that removes
+// exactly this handler.
+func (a *ClientAdapter) SubscribeHandle(ctx context.Context, topic string, handler MessageHandler) (func() error, error) {
+	return a.manager.SubscribeHandle(ctx, topic, handler)
+}
+
 // Publish publishes a message to a topic
 func (a *ClientAdapter) Publish(ctx context.Context, topic string, data []byte) error {
 	return a.manager.Publish(ctx, topic, data)

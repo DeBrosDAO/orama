@@ -1,0 +1,24 @@
+direction: down
+
+start: "orama inspect --env E"
+resolve: "resolve nodes\n(noderesolver or --config)\nand wallet SSH keys"
+probe: "per node: ssh true\n(3 retries, 2 s apart)" 
+unreach: "node.reachable FAIL (critical)\nno other check for the node" 
+wg: "wireguard collector first"
+jobs: "other collectors, at most 4\nconcurrent per node, one shared\nSSH connection (ControlMaster)"
+fail: "<subsystem>.collected FAIL\ndata left nil, its checks skip"
+checks: "RunChecks: one function per\nsubsystem over ClusterData"
+report: "table or JSON on stdout\nfailures first"
+ai: "--ai: OpenRouter analysis\nper subsystem (or per failure group\nwith --output)"
+exit: "exit 1 if any check failed;\nwarnings and skips do not fail"
+
+start -> resolve -> probe
+probe -> unreach: "fails"
+probe -> wg: "works"
+wg -> jobs
+jobs -> fail: "empty, cut short, or error"
+jobs -> checks: "data"
+fail -> checks
+unreach -> checks
+checks -> report -> ai -> exit
+report -> exit

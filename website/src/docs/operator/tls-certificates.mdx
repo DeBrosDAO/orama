@@ -1,0 +1,105 @@
+# TLS and certificates
+
+Every public name of an Orama cluster is served over HTTPS with a certificate the cluster obtains for itself. You do not buy, upload or renew a certificate. This page explains how it works, how to choose the certificate authority, how to change it, and what to do on a test cluster.
+
+## What gets a certificate
+
+The names are the **base domain** and its **wildcard**. The wildcard covers every single-label host under the base: each node's `node-xxxxxx.<base>`, every namespace gateway `ns-<name>.<base>`, the TURN hosts `turn-<ns>.<base>` and the stealth `cdn-<hash>.<base>` hosts. A node domain that is not one label under the base gets a site of its own, with no wildcard under it. `push.<base>` (the ntfy push server) is its own site.
+
+**Custom domains do not get certificates.** You can attach and verify your own domain by TXT record ([Domains](/docs/developer/domains)), but the TLS check allows only subdomains of the base domain, so no certificate is issued for a custom domain.
+
+HTTP/1.1 only: HTTP/2 strips WebSocket upgrade headers, and HTTP/3 would take UDP 443 from TURN. TLS 1.3 is supported.
+
+## How certificates are obtained
+
+Certificates are issued by ACME using the DNS-01 challenge, answered by the cluster's own CoreDNS. That is why the parent zone must delegate to the cluster first ([DNS and nameservers](/docs/operator/nameserver)).
+
+**One certificate per cluster.** Every node's Caddy keeps its certificates, its ACME account and its locks in the cluster's **shared certificate store**, a Caddy storage module (`caddy.storage.orama`) that the index gateway serves from the registry (`/v1/internal/tls-store`, tables `tls_store` and `tls_locks`). The first node that needs a certificate takes the store's lock, obtains it and stores it. Every other node loads it. Renewals happen once for the whole cluster. Installing, joining, restarting or upgrading a node issues nothing new.
+
+Why it matters: Let's Encrypt issues one set of names at most five times a week. Before the shared store, every node ordered its own copy of the same names, and a five-node install spent the week's allowance. A renewal Caddy makes through Let's Encrypt's renewal information (ARI) is exempt from those limits.
+
+Two behaviours to know:
+
+- **Caddy needs the cluster gateway to start.** Its storage module waits up to two minutes for the store to answer before managing any certificate, and otherwise fails, so Caddy exits and systemd restarts it every 5 seconds until the gateway is up. Meanwhile that node is out of DNS, like any node whose Caddy is down. A running Caddy keeps serving the certificates it loaded through a gateway outage. A failed store call is an error, never "no certificate", so an outage never makes a node order one.
+- **The wildcard pair is exported for TURN.** The gateway writes the `*.<base>` certificate and key to `/opt/orama/.orama/data/tls/wildcard.{crt,key}` (mode 0600, owner `orama`) every minute when it changed, for the shared TURN server, which terminates TLS itself. The path does not depend on the CA, so a CA change does not break TURN.
+
+## Choosing the certificate authority
+
+Certificates come from **Let's Encrypt production** by default. The Caddyfile always names the CA (`acme_ca`). Set it with `--acme-ca` on the genesis install or on an upgrade:
+
+| Value | CA |
+|---|---|
+| `letsencrypt` | Let's Encrypt production (the default) |
+| `letsencrypt-staging` | Let's Encrypt staging. Trusted by no browser or system |
+| any `https://` URL | That ACME directory |
+
+The choice is stored in the node's `node.yaml` (`tls.acme_ca`) and kept across upgrades. A joining node that omits `--acme-ca` takes the directory from the join response, which is the minting node's setting; pass the flag on a joiner only to override.
+
+**When to use staging.** A cluster you rebuild from scratch many times a week starts with an empty certificate store every time, and production Let's Encrypt allows the same name set five times a week. Install such a cluster with `--acme-ca letsencrypt-staging` on its genesis node.
+
+### Trusting a staging cluster from your CLI
+
+Staging certificates are trusted by nobody, including your `orama` CLI. Give the environment Let's Encrypt's staging roots, trusted for that environment's domain only:
+
+```bash
+curl -sf https://letsencrypt.org/certs/staging/letsencrypt-stg-root-x1.pem  > le-staging.pem
+curl -sf https://letsencrypt.org/certs/staging/letsencrypt-stg-root-x2.pem >> le-staging.pem
+orama network add mycluster https://cluster.example.com --ca-file le-staging.pem
+```
+
+Every command then verifies `<base-domain>` and names under it against those roots as well as the system's, and every other host against the system's alone. A missing CA file is an error naming the environment. Browsers will still show a warning.
+
+### Changing a running cluster's CA
+
+Upgrade every node with the new one:
+
+```bash
+orama node upgrade --env mycluster --acme-ca letsencrypt --yes
+```
+
+Each node records it in `node.yaml` and restarts Caddy, one node at a time. The first node with the new CA obtains the certificates for the cluster; the others load them. The certificates of the previous CA stay in the store under their own CA.
+
+### Upgrading from a release before the shared store
+
+On each node the cluster gateway first imports the certificates and the ACME account that node's Caddy kept on disk (`/var/lib/caddy/caddy`, once per node; each name is imported whole or not at all; a name the store already holds keeps the store's copy; a file that is not Caddy's is left out and logged), and only then lets Caddy use the store. The first node upgraded serves the certificates the cluster already had and orders nothing, and every later node loads the same ones.
+
+## Checking a certificate
+
+```bash
+echo | openssl s_client -connect <node-ip>:443 -servername cluster.example.com 2>/dev/null \
+  | openssl x509 -noout -issuer -subject -dates
+orama status dns --env mycluster    # certificate expiry for every nameserver
+```
+
+## Reading a node's certificate status
+
+A client of a node that has no certificate sees one error, `tls: internal error`, whatever the reason. The reason is in Caddy's log on the node. `orama node tls status` reads it for you, together with what the node serves now. It needs root:
+
+```bash
+sudo orama node tls status
+sudo orama node tls status --json
+```
+
+For every name the node's Caddy manages (the base domain, its wildcard and any site of its own) it says whether an issued certificate is held, who issued it and when it expires. For a name that is not held it adds the last answer of the certificate authority, parsed from the log:
+
+```text
+Certificate authority: https://acme-v02.api.letsencrypt.org/directory
+
+NAME                  CERTIFICATE  DETAIL
+*.stagenet.example    not held     the CA refused: rate limited
+stagenet.example      not held     the CA refused: rate limited
+
+stagenet.example: the last order failed at 2026-10-11 04:26:01 UTC: the CA answered HTTP 429 rateLimited: too many certificates (5) already issued for this exact set of identifiers in the last 168h0m0s, retry after 2026-10-12 04:26:01 UTC: see https://letsencrypt.org/docs/rate-limits/#new-certificates-per-exact-set-of-identifiers
+The CA will accept a new order after 2026-10-12 04:26:01 UTC.
+```
+
+`--json` prints the same as one document: the `ca`, and a `names` list whose entries have `name`, `held`, `issuer`, `not_after`, `serve_error` (why the node's own handshake gave no certificate) and, when Caddy's log has a failed order for the name that no success followed, `last_error` with `at`, `ca`, `status` (the HTTP status), `type` (the ACME problem, for example `rateLimited`, `dns` or `unauthorized`), `message` and `retry_after` (only when the CA named a time). A failure that belongs to a CA the Caddyfile no longer names is left out, so changing the CA does not leave the old one's errors behind.
+
+**Reading a rate limit.** `type` is `rateLimited` and `status` is 429. Let's Encrypt allows five certificates for the same set of names in 168 hours, and `retry_after` is the time it says it will accept the order again, often hours away. Nothing you do on the cluster changes it. Wait until `retry_after`, or use another CA: a cluster you rebuild often should have been created with `--acme-ca letsencrypt-staging` ([When to use staging](#choosing-the-certificate-authority)). An existing cluster is moved with `orama node upgrade --acme-ca letsencrypt-staging` ([Changing a running cluster's CA](#changing-a-running-clusters-ca)), and your CLI then trusts the staging roots as [described above](#trusting-a-staging-cluster-from-your-cli).
+
+## If a node has no certificate
+
+1. Is the delegation visible? `dig NS <base> @8.8.8.8`. No delegation means no certificate.
+2. Is Caddy running? `sudo orama node status`, and `sudo orama node logs caddy -f` for ACME errors.
+3. Is the gateway up? Caddy waits for it.
+4. What did the CA answer? `sudo orama node tls status` shows the last failed order of each name. A `rateLimited` answer means you hit a rate limit: switch to staging for tests, or wait for its `retry_after`.

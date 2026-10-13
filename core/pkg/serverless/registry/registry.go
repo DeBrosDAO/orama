@@ -183,11 +183,7 @@ func (r *Registry) LogInvocation(ctx context.Context,
 
 	data.Logs = make([]LogData, len(logs))
 	for i, log := range logs {
-		data.Logs[i] = LogData{
-			Level:     log.Level,
-			Message:   log.Message,
-			Timestamp: log.Timestamp,
-		}
+		data.Logs[i] = LogData(log)
 	}
 
 	return r.invocationLogger.Log(ctx, data)

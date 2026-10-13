@@ -3,123 +3,153 @@ package gateway
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+
+	nodeauth "github.com/DeBrosOfficial/network/pkg/auth"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 )
 
-// Bugboard #858 — the fan-out resolver turns active dns_nodes into ntfy publish
-// base URLs and caches them for a short TTL. These pin the transform + caching.
+// Bugboard #858 — the fan-out resolver turns active dns_nodes into overlay
+// targets and caches them for a short TTL. These pin the transform + caching.
 
-func TestNtfyFanoutResolver_buildsSchemeHostPort(t *testing.T) {
+func nodesQuery(nodes ...ntfyFanoutNode) func(context.Context) ([]ntfyFanoutNode, error) {
+	return func(context.Context) ([]ntfyFanoutNode, error) { return nodes, nil }
+}
+
+func TestNtfyFanoutResolver_targetsAreOverlayGateways(t *testing.T) {
 	r := &ntfyFanoutResolver{
-		scheme: "https",
-		port:   "",
-		ttl:    time.Minute,
-		query:  func(context.Context) ([]string, error) { return []string{"1.2.3.4", "5.6.7.8"}, nil },
+		port: constants.GatewayAPIPort,
+		ttl:  time.Minute,
+		query: nodesQuery(
+			ntfyFanoutNode{ID: "peer-a", InternalIP: "10.0.0.1"},
+			ntfyFanoutNode{ID: "peer-b", InternalIP: "10.0.0.2"},
+		),
 	}
-	hosts, err := r.Hosts(context.Background())
+	targets, err := r.Targets(context.Background())
 	if err != nil {
-		t.Fatalf("Hosts: %v", err)
+		t.Fatalf("Targets: %v", err)
 	}
-	want := []string{"https://1.2.3.4", "https://5.6.7.8"}
-	if len(hosts) != len(want) {
-		t.Fatalf("got %v; want %v", hosts, want)
+	if len(targets) != 2 {
+		t.Fatalf("got %d targets; want 2", len(targets))
 	}
-	for i := range want {
-		if hosts[i] != want[i] {
-			t.Errorf("host[%d] = %q; want %q", i, hosts[i], want[i])
+	want := map[string]string{"peer-a": "http://10.0.0.1:10104", "peer-b": "http://10.0.0.2:10104"}
+	for _, tg := range targets {
+		if want[tg.NodeID] != tg.BaseURL {
+			t.Errorf("target %s = %q; want %q", tg.NodeID, tg.BaseURL, want[tg.NodeID])
 		}
 	}
 }
 
-func TestNtfyFanoutResolver_includesExplicitPort(t *testing.T) {
-	r := &ntfyFanoutResolver{
-		scheme: "http",
-		port:   "8090",
-		ttl:    time.Minute,
-		query:  func(context.Context) ([]string, error) { return []string{"10.0.0.6"}, nil },
+func TestNtfyFanoutResolver_noNodes_returnsEmpty(t *testing.T) {
+	r := &ntfyFanoutResolver{port: constants.GatewayAPIPort, ttl: time.Minute, query: nodesQuery()}
+	targets, err := r.Targets(context.Background())
+	if err != nil {
+		t.Fatalf("Targets: %v", err)
 	}
-	hosts, _ := r.Hosts(context.Background())
-	if len(hosts) != 1 || hosts[0] != "http://10.0.0.6:8090" {
-		t.Errorf("got %v; want [http://10.0.0.6:8090]", hosts)
-	}
-}
-
-func TestNtfyFanoutResolver_skipsEmptyIPs(t *testing.T) {
-	r := &ntfyFanoutResolver{
-		scheme: "https",
-		ttl:    time.Minute,
-		query:  func(context.Context) ([]string, error) { return []string{"", "1.2.3.4", ""}, nil },
-	}
-	hosts, _ := r.Hosts(context.Background())
-	if len(hosts) != 1 || hosts[0] != "https://1.2.3.4" {
-		t.Errorf("got %v; want only the non-empty IP", hosts)
+	if len(targets) != 0 {
+		t.Errorf("got %v; want no targets", targets)
 	}
 }
 
 func TestNtfyFanoutResolver_cachesWithinTTL(t *testing.T) {
 	calls := 0
 	r := &ntfyFanoutResolver{
-		scheme: "https",
-		ttl:    time.Minute,
-		query: func(context.Context) ([]string, error) {
+		port: constants.GatewayAPIPort,
+		ttl:  time.Minute,
+		query: func(context.Context) ([]ntfyFanoutNode, error) {
 			calls++
-			return []string{"1.2.3.4"}, nil
+			return []ntfyFanoutNode{{ID: "p", InternalIP: "10.0.0.1"}}, nil
 		},
 	}
 	for i := 0; i < 3; i++ {
-		if _, err := r.Hosts(context.Background()); err != nil {
-			t.Fatalf("Hosts: %v", err)
+		if _, err := r.Targets(context.Background()); err != nil {
+			t.Fatalf("Targets: %v", err)
 		}
 	}
 	if calls != 1 {
-		t.Errorf("query called %d times; want 1 (cached within TTL)", calls)
+		t.Errorf("query ran %d times within the TTL; want 1", calls)
 	}
 }
 
 func TestNtfyFanoutResolver_requeriesAfterTTL(t *testing.T) {
 	calls := 0
 	r := &ntfyFanoutResolver{
-		scheme: "https",
-		ttl:    time.Nanosecond, // expire immediately
-		query: func(context.Context) ([]string, error) {
+		port: constants.GatewayAPIPort,
+		ttl:  time.Millisecond,
+		query: func(context.Context) ([]ntfyFanoutNode, error) {
 			calls++
-			return []string{"1.2.3.4"}, nil
+			return []ntfyFanoutNode{{ID: "p", InternalIP: "10.0.0.1"}}, nil
 		},
 	}
-	_, _ = r.Hosts(context.Background())
-	time.Sleep(time.Millisecond)
-	_, _ = r.Hosts(context.Background())
+	if _, err := r.Targets(context.Background()); err != nil {
+		t.Fatalf("Targets: %v", err)
+	}
+	time.Sleep(5 * time.Millisecond)
+	if _, err := r.Targets(context.Background()); err != nil {
+		t.Fatalf("Targets: %v", err)
+	}
 	if calls != 2 {
-		t.Errorf("query called %d times; want 2 (TTL expired between calls)", calls)
+		t.Errorf("query ran %d times across the TTL; want 2", calls)
 	}
 }
 
-func TestNtfyFanoutResolver_queryError_returnsStaleCache(t *testing.T) {
-	fail := false
+func TestNtfyFanoutResolver_queryError_isReturnedNotMasked(t *testing.T) {
+	boom := errors.New("rqlite down")
 	r := &ntfyFanoutResolver{
-		scheme: "https",
-		ttl:    time.Nanosecond,
-		query: func(context.Context) ([]string, error) {
-			if fail {
-				return nil, errors.New("rqlite unreachable")
-			}
-			return []string{"1.2.3.4"}, nil
-		},
+		port:  constants.GatewayAPIPort,
+		ttl:   time.Minute,
+		query: func(context.Context) ([]ntfyFanoutNode, error) { return nil, boom },
 	}
-	// Prime the cache.
-	if _, err := r.Hosts(context.Background()); err != nil {
-		t.Fatalf("prime: %v", err)
+	targets, err := r.Targets(context.Background())
+	if !errors.Is(err, boom) {
+		t.Fatalf("err = %v; want the query error", err)
 	}
-	time.Sleep(time.Millisecond)
-	// Now the query fails — Hosts must return the stale cache alongside the error
-	// so the caller can fall back rather than drop the push.
-	fail = true
-	hosts, err := r.Hosts(context.Background())
-	if err == nil {
-		t.Fatal("want the query error surfaced")
+	if targets != nil {
+		t.Errorf("got targets %v on error; want none", targets)
 	}
-	if len(hosts) != 1 || hosts[0] != "https://1.2.3.4" {
-		t.Errorf("want the stale cache returned on error; got %v", hosts)
+}
+
+// laterNow is a clock past the process's first second, so a stamp is not
+// refused as possibly older than the process.
+func laterNow() time.Time { return time.Now().Add(testStampLead) }
+
+func TestNtfyFanoutSigner_stampsForTheNamedNode(t *testing.T) {
+	const secret = "a cluster secret"
+	sign := newNtfyFanoutSigner(secret, laterNow)
+	key, _ := nodeauth.CoordinationKey(secret)
+
+	r := httptest.NewRequest(http.MethodPost, "/v1/internal/push/ntfy/topic1", strings.NewReader("hello"))
+	if err := sign(r, coordinationTestNode); err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	if !nodeauth.VerifyCoordinationV2(key, r, time.Now().Add(testStampLead), coordinationTestNode) {
+		t.Error("the stamp does not verify for the node it was signed for")
+	}
+	other := httptest.NewRequest(http.MethodPost, "/v1/internal/push/ntfy/topic1", strings.NewReader("hello"))
+	if err := sign(other, coordinationTestNode); err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	if nodeauth.VerifyCoordinationV2(key, other, time.Now().Add(testStampLead), "12D3KooWSomeOtherNode") {
+		t.Error("the stamp verifies at a node it was not signed for")
+	}
+}
+
+func TestNtfyFanoutSigner_noClusterSecret_fails(t *testing.T) {
+	sign := newNtfyFanoutSigner("", laterNow)
+	r := httptest.NewRequest(http.MethodPost, "/v1/internal/push/ntfy/topic1", strings.NewReader("hello"))
+	if err := sign(r, coordinationTestNode); err == nil {
+		t.Fatal("signing without a cluster secret succeeded")
+	}
+}
+
+func TestNtfyFanoutSigner_noAudience_fails(t *testing.T) {
+	sign := newNtfyFanoutSigner("a cluster secret", laterNow)
+	r := httptest.NewRequest(http.MethodPost, "/v1/internal/push/ntfy/topic1", strings.NewReader("hello"))
+	if err := sign(r, ""); err == nil {
+		t.Fatal("signing without a node to address succeeded")
 	}
 }

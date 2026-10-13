@@ -1,0 +1,373 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - nightly
+  pull_request:
+    branches:
+      - main
+      - nightly
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go-test:
+    name: Go tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: "1.27.2"
+          cache-dependency-path: core/go.sum
+
+      - name: Vet
+        working-directory: core
+        run: go vet ./...
+
+      - name: Test
+        working-directory: core
+        run: go test -race -timeout 5m ./...
+
+      # The contract fixtures live above the Go module, so the test cache does
+      # not treat them as an input and a fixture-only change would report a
+      # stale pass. -count=1 is the point of this step.
+      - name: Contract tests
+        working-directory: core
+        run: go test -count=1 -run Contract ./...
+
+      # The CLI reference is generated from the cobra tree; this fails when the
+      # committed file and the tree disagree. It lives above the module too, so
+      # it needs the same -count=1.
+      - name: CLI reference is current
+        working-directory: core
+        run: go test -count=1 ./cmd/orama -run TestCLIReference
+
+  # The chain (Orama L1, Cosmos SDK + CosmWasm + the Orchard shielded verifier) was not built or
+  # tested by anything in CI, nor by the pre-push hook or the root `make test`; it was run by hand.
+  # The commands below are Makefile targets (chain/Makefile, chain/ci.mk), so a developer runs
+  # exactly what runs here.
+  chain-test:
+    name: Chain build and race tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: "1.27.2"
+          cache-dependency-path: chain/go.sum
+
+      # native/build.sh builds with this toolchain; the Rust host library of the Orchard verifier,
+      # the verifier binary and libwasmvm are built with it so the cgo tests run, not skip.
+      - name: Rust toolchain
+        run: |
+          toolchain="$(make -s -C chain print-RUST_TOOLCHAIN)"
+          rustup toolchain install "$toolchain" --profile minimal
+          rustup default "$toolchain"
+
+      - name: Build for the release targets
+        run: make -C chain build
+
+      - name: Vet under every build-tag set
+        run: make -C chain vet-all
+
+      # The pure-Go build the static release binaries use (-tags nowasm, no cgo).
+      - name: Test (nowasm)
+        run: make -C chain test
+
+      # CosmWasm, the Orchard library (cgo) and the out-of-process verifier all linked, under the
+      # race detector. libwasmvm is built from the source in the Go module cache, not downloaded.
+      - name: Test with the race detector
+        run: make -C chain test-race
+
+  chain-static:
+    name: Chain static analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: "1.27.2"
+          cache-dependency-path: chain/go.sum
+
+      # staticcheck, gosec (high severity, high confidence) and govulncheck over the chain, with
+      # the same acceptance rules as the fleet scanners feature (e2e/features/scanners): a
+      # reachable vulnerability not in govulncheck-accepted.yaml fails, and so does a stale entry.
+      - name: staticcheck
+        run: make -C chain staticcheck
+
+      - name: gosec
+        run: make -C chain gosec
+
+      - name: govulncheck
+        run: make -C chain govulncheck
+
+      # Determinism rules for the state machine (map iteration, wall clock, floats, goroutines,
+      # random numbers): chain/.semgrep/consensus.yml.
+      - name: Install semgrep
+        run: pipx install "semgrep==$(make -s -C chain print-SEMGREP_VERSION)"
+
+      - name: Consensus rules are tested
+        run: make -C chain semgrep-test
+
+      - name: Consensus rules over the state machine
+        run: make -C chain semgrep
+
+      - name: Fleet-scanner gate logic
+        working-directory: e2e
+        run: go test ./cmd/scangate/ ./harness/vulnaccept/ ./harness/staticfind/
+
+  chain-rust:
+    name: Chain Rust crates (clippy, audit, deny)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: "1.27.2"
+          cache-dependency-path: chain/go.sum
+
+      - name: Rust toolchain
+        run: |
+          toolchain="$(make -s -C chain print-RUST_TOOLCHAIN)"
+          rustup toolchain install "$toolchain" --profile minimal --component clippy
+          rustup default "$toolchain"
+
+      # orchardffi, orchardverifier-bin, wallet and native (libwasmvm + the Orchard library).
+      - name: clippy
+        run: make -C chain rust-lint
+
+      # RustSec advisories and the policy in chain/deny.toml, per Cargo.lock.
+      - name: cargo audit
+        run: make -C chain rust-audit
+
+      - name: cargo deny
+        run: make -C chain rust-deny
+
+      # Every ignored advisory has a review-by date that has not passed and still matches a crate.
+      - name: ignored advisories
+        run: make -C chain rust-ignores
+
+  # Every Go fuzz target of the chain and of core (SA2, bugboard 3388), a few seconds each: enough to
+  # replay the whole seed corpus (the real Ironwood bundles, signed transactions and network files
+  # under testdata/fuzz) and mutate it. The long run is chain-nightly.yml. A failing input is
+  # kept in the package's testdata/fuzz/ and uploaded below; commit it with the fix.
+  chain-fuzz:
+    name: Fuzz (short budget)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: "1.27.2"
+          cache-dependency-path: |
+            chain/go.sum
+            core/go.sum
+
+      # The Orchard library (cgo) and the verifier binary are built for the differential targets.
+      - name: Rust toolchain
+        run: |
+          toolchain="$(make -s -C chain print-RUST_TOOLCHAIN)"
+          rustup toolchain install "$toolchain" --profile minimal
+          rustup default "$toolchain"
+
+      - name: Fuzz every target
+        run: make -C chain fuzz-short
+
+      - name: Keep the inputs that failed
+        if: failure()
+        uses: actions/upload-artifact@ff15f0306b3f739f7b6fd43fb5d26cd321bd4de5 # v3.2.1
+        with:
+          name: fuzz-crashers
+          path: chain/build/fuzz-crashers
+          if-no-files-found: ignore
+
+  secrets:
+    name: Secret scan of the committed tree
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: "1.27.2"
+          cache-dependency-path: e2e/go.sum
+
+      # The same scan as the fleet scanners feature (TestSecretScan_committedTree), with the same
+      # allowlist, .gitleaks.toml. Every path in it was looked at; a new fixture is added by name.
+      - name: gitleaks
+        run: |
+          go install github.com/zricethezav/gitleaks/v8@v8.30.1
+          "$(go env GOPATH)/bin/gitleaks" dir . --no-banner --redact --exit-code 3
+
+  agent-test:
+    name: OramaOS agent tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: "1.27.2"
+          cache-dependency-path: os/agent/go.sum
+
+      - name: Vet
+        working-directory: os/agent
+        run: go vet ./...
+
+      # Nothing built or tested this module. It is the only root process on an
+      # OramaOS node, and its command receiver had no authentication at all.
+      - name: Test
+        working-directory: os/agent
+        run: go test -race -timeout 5m ./...
+
+      # The enrollment seal has a copy in each of two Go modules, and the
+      # shared vector lives above both, so the test cache does not treat it as
+      # an input.
+      - name: Enrollment seal matches the gateway
+        working-directory: os/agent
+        run: go test -count=1 -run TestSeal ./internal/enroll/
+
+      # The agent ships as a Linux binary; the non-Linux build exists only so
+      # the module can be tested on a developer's machine.
+      - name: Build for the target
+        working-directory: os/agent
+        run: GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./...
+
+  sdk-build:
+    name: SDK lint, typecheck, build, unit tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+        with:
+          version: 9
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # `pnpm lint` had no ESLint configuration anywhere in the package, so it
+      # exited 2 before linting anything and was never run here.
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Build
+        run: pnpm build
+
+      # The unit suite runs after the build so the packaging tests have a dist
+      # to check: they assert the built package can be both required and
+      # imported, which is the thing that was broken.
+      - name: Unit tests
+        run: pnpm test:unit
+
+  vault-sdk-build:
+    name: Vault SDK lint, typecheck, build, unit tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk-vault
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+        with:
+          version: 9
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Build
+        run: pnpm build
+
+      - name: Unit tests
+        run: pnpm test:unit
+
+  vault-guardian:
+    name: Vault guardian (Zig) build and tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: vault
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      # Pinned to the version in vault/build.zig.zon. The guardian does not
+      # compile on 0.16, where std.crypto.random was removed, so an unpinned
+      # toolchain fails on a change that has nothing to do with the code.
+      - name: Set up Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.15.2
+
+      - name: Build
+        run: zig build
+
+      # These had never run anywhere: the suite asserted a Shamir threshold of
+      # at least 3 while every implementation had moved to 2, so it failed at
+      # N=3 and nobody saw it.
+      - name: Test
+        run: zig build test
+
+  version-sanity:
+    name: Verify VERSION ↔ package.json sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Compare versions
+        run: |
+          ROOT=$(tr -d '[:space:]' < VERSION)
+          SDK=$(node -p "require('./sdk/package.json').version")
+          VAULT=$(node -p "require('./sdk-vault/package.json').version")
+          if [ "$ROOT" != "$SDK" ] || [ "$ROOT" != "$VAULT" ]; then
+            echo "::warning::/VERSION ($ROOT), sdk/package.json ($SDK) and sdk-vault/package.json ($VAULT) differ. Run 'make -C core bump VER=$ROOT' to sync."
+          else
+            echo "Versions in sync: $ROOT"
+          fi

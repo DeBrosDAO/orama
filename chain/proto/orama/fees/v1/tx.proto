@@ -1,0 +1,37 @@
+syntax = "proto3";
+package orama.fees.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/fees/types";
+
+import "amino/amino.proto";
+import "cosmos/msg/v1/msg.proto";
+import "cosmos_proto/cosmos.proto";
+import "gogoproto/gogo.proto";
+
+// Msg is x/fees' transaction service. Its one method is signed by the owner
+// of the earnings it moves. There is no authority field and no
+// parameter-update method (plans/open-network.md D18).
+service Msg {
+  option (cosmos.msg.v1.service) = true;
+
+  rpc WithdrawEarnings(MsgWithdrawEarnings) returns (MsgWithdrawEarningsResponse);
+}
+
+// MsgWithdrawEarnings moves amount from the signer's own earnings account to
+// the signer's own bank balance, where an ordinary public MsgSend can spend
+// it. The destination is never a field: it is always the signer, so earnings
+// cannot be aimed at another address by this message. The amount is positive
+// and at most the signer's earnings balance; a larger amount fails the whole
+// message and moves nothing.
+message MsgWithdrawEarnings {
+  option (cosmos.msg.v1.signer) = "signer";
+  option (amino.name) = "orama/fees/MsgWithdrawEarnings";
+
+  string signer = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  string amount = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+}
+
+message MsgWithdrawEarningsResponse {}

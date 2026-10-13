@@ -1,0 +1,299 @@
+# Public chain read API
+
+Every Orama gateway serves the chain's public data over plain HTTP under `/v1/chain/`, with no key and no account. This page is for developers who build on it from outside the network: a wallet, a dashboard, a bot, a block explorer of their own. It lists every read route, what each accepts and refuses, how long an answer may be cached, the head stream, the rate limits, who a browser may call from and every error you can get.
+
+Each network has its own gateway and its own chain, so every address below is `https://<gateway>/v1/chain/<route>`, for example `https://stagenet.orama.network/v1/chain/status`. The routes are the same on every gateway; what a gateway can answer depends on what its machine runs (a node without the chain indexer cannot answer `index/…`). The [explorer](/docs/blockchain/using-the-explorer) reads exactly these routes and nothing else, so anything it shows you can read the same way.
+
+```bash
+curl -s https://stagenet.orama.network/v1/chain/status
+curl -s 'https://stagenet.orama.network/v1/chain/index/txs?limit=2&filter=transfers'
+curl -s https://stagenet.orama.network/v1/chain/query/orama.fees.v1.Query/BaseFee
+curl -s --get https://stagenet.orama.network/v1/chain/query/orama.nodes.v1.Query/Node \
+  --data-urlencode 'json={"node_id":"node-1"}'
+```
+
+## What the proxy is, and what it refuses
+
+The gateway is a read-only proxy to three things on the node: the CometBFT RPC, the Cosmos SDK REST API and the chain indexer (`orama-global indexer`). It does not forward the path or the query you send. Each route below builds one upstream request from values it has checked, so nothing else on the node is reachable.
+
+- **Method.** A read route answers `GET` only; any other method on one is `405` with `Allow: GET`. The write routes (`POST simulate`, `broadcast`, `light`, `faucet`) are separate and are not described here: see [Reading the chain](/docs/blockchain/reading-the-chain#simulate-and-broadcast).
+- **Paths.** A path must be exactly as the table writes it: no trailing slash, no doubled slash, no `.` or `..` segment, no backslash and no percent-escape. Anything else is `404`, even if its decoded form would match a route.
+- **Query strings.** A key the route does not take, a repeated key, a key with an empty value or a `;` in the query is `400`. Numbers are plain positive integers: no sign, no leading zero, at most 19 digits (`start_index` of the subtree roots may be 0).
+- **Bodies.** An answer is the node's own JSON, byte for byte, up to 8 MiB (a larger one is `502`: it is never cut). The proxy reads each upstream for at most 10 seconds. Every 64-bit integer in a module query answer is a decimal string; read them into a `BigInt`, not a JavaScript `number`.
+- **Errors.** The node's own error text is never passed on, because it can name paths and addresses. A failure is a fixed one-line plain-text body (see [Errors](#errors)).
+
+## Chain routes
+
+These come from CometBFT and the SDK. All answers are `Cache-Control: no-store`.
+
+| Route | Query | Answers |
+|---|---|---|
+| `status` | none | CometBFT status: chain id (`node_info.network`), latest height and time, `catching_up` |
+| `block` | `height` (required, a positive integer) | One block |
+| `blocks` | `min_height` and `max_height` (both required) | Block headers in the span, at most 20 (`max_height - min_height` at most 19) |
+| `tx` | `hash` (required, 64 hex characters, `0x` optional, any case) | One transaction. A hash that is not in a block yet is `404` with `Retry-After: 2`: ask again in a block |
+| `validators` | `page` (1 to 100, default 1), `per_page` (1 to 100, default 100) | The CometBFT validator set |
+| `supply/norama` | none | Total supply of `norama` (the bank's `by_denom`) |
+| `staking/pool` | none | The staking pool (bonded and not bonded tokens) |
+| `staking/validators` | none | The staking validator list, one page of 200 (the active set is planned at 150 at most) |
+| `head/stream` | none | Server-sent events, see [The head stream](#the-head-stream) |
+
+## Module queries: `query/<Service>/<Method>`
+
+`GET /v1/chain/query/<package.Service>/<Method>` runs one gRPC query of an Orama module (or of a Cosmos SDK or CosmWasm module) on the node and answers it as JSON with the proto field names. The names are `orama.fees.v1.Query/BaseFee` and the like; `orama chain query --list` prints them. Only the methods in the allowlist below are served, so a transaction, a `Msg` or any other ABCI path is unreachable, and a method that is not listed is `404`.
+
+The request is one of:
+
+- `json=<JSON>`: the request message with proto field names, `snake_case` or `lowerCamel`. An unknown field is `400`.
+- `data=<base64>`: the protobuf request, in the standard or the URL-safe alphabet, padding optional.
+- neither, for an empty request.
+
+Not both. Optional `height=<n>` reads the state at that height, which must be within the last 100 blocks; absent or `0` is the latest. A proof is never asked for.
+
+```bash
+curl -s --get https://stagenet.orama.network/v1/chain/query/orama.storage.v1.Query/Deals \
+  --data-urlencode 'json={"pagination":{"limit":100,"reverse":true}}'
+```
+
+**Bounds.** The request is at most 4 KiB as JSON text and as protobuf bytes. A method whose request has a `pagination` field must send a `limit` of 1 to 100 (a request without one, or with `limit` 0, is `400`: the node reads it as "count the whole store"), and never an `offset` or `count_total` (an offset makes the node step over every entry before it and the count walks the whole store): page by the key the answer returns, `pagination.key` set to the last answer's `pagination.next_key`. The answer is at most 4 MiB. The node's query gas limit bounds each query; one that costs more is `422`. At most 16 module queries run at once on a gateway; the rest are `503`.
+
+**Answers.** The field names are the proto names, every field is present (an empty one as its zero value), 64-bit integers are strings and enums are their names, such as `NODE_STATUS_ACTIVE`. A key that is not on the chain is `404`. All answers are `no-store`.
+
+### The allowlist
+
+| Service | Methods |
+|---|---|
+| `orama.archive.v1.Query` | `Params`, `Range`, `LastArchivedHeight`, `RetainHeight` |
+| `orama.cnft.v1.Query` | `Collection`, `Tree`, `Decompressed`, `Snapshots` |
+| `orama.emission.v1.Query` | `Params`, `CurrentEpoch`, `ScheduleAt`, `CumulativeMinted`, `SupplyCapSoFar` |
+| `orama.fees.v1.Query` | `Params`, `BaseFee`, `Earnings`, `FeeBalance`, `Deposit` |
+| `orama.houses.v1.Query` | `Params`, `Proposal`, `Vote`, `HouseBond`, `Enacted` |
+| `orama.market.v1.Query` | `Listing`, `Bid` |
+| `orama.nodes.v1.Query` | `Params`, `Operator`, `Node`, `Cluster`, `NodeUnbondings`, `NodeByName`, `NameOfNode`, `NodeNames` (paged), `Nodes` (paged) |
+| `orama.power.v1.Query` | `Params`, `BootstrapCommittee`, `Lambda`, `ValidatorPower` |
+| `orama.relay.v1.Query` | `Params`, `Reporters`, `Relay`, `EpochResult`, `Relays`, `OperatorRelays` and `RelayPayouts` (the last three paged) |
+| `orama.shielded.v1.Query` | `Params`, `TreeState`, `TreeFrontier`, `SubtreeRoots` (paged), `NullifierSpent` |
+| `orama.storage.v1.Query` | `Params`, `Deal`, `Slot`, `Authorization`, `Challenges`, `EpochMint`, `Queue`, `NodeFailures`, `Deals` (paged) |
+| `orama.token.v1.Query` | `Params`, `Token`, `Frozen` |
+| `cosmos.bank.v1beta1.Query` | `Balance`, `AllBalances` (paged), `SpendableBalances` (paged), `TotalSupply` (paged), `DenomOwners` (paged) |
+| `cosmos.auth.v1beta1.Query` | `Account`, `AccountInfo` |
+| `cosmos.staking.v1beta1.Query` | `Delegation`, `DelegatorDelegations` (paged), `UnbondingDelegation`, `DelegatorUnbondingDelegations` (paged), `Validator`, `Pool`, `Params` |
+| `cosmos.distribution.v1beta1.Query` | `DelegationRewards`, `DelegationTotalRewards` |
+| `cosmwasm.wasm.v1.Query` | `ContractInfo` (an address that is not a contract is `404`), `CodeInfo`, `Codes` (paged), `ContractsByCode` (paged), `ContractsByCreator` (paged), `ContractHistory` (paged), `AllContractState` (paged) |
+
+Never served: every module's `Invariants` (each walks the module's whole state), the houses' `Tiers` and the shielded `Pools` (they walk every operator and every pool), bank's whole-chain `Supply`, staking's `Validators` (use `staking/validators`), CosmWasm's `SmartContractState` (it runs the contract, so its cost is the contract's), `RawContractState` and `Code`. A node whose chain binary predates a method cannot answer it.
+
+## Index routes: `index/…`
+
+The chain indexer keeps what a node's own state does not: blocks and transactions by hash and by address, per-epoch aggregates, validator history and compressed NFT ownership. It is read through `/v1/chain/index/<route>`. These routes answer `503` on a gateway whose machine has no indexer, and an index only knows the blocks it has followed (`index/status` says where it starts, where it is and, if it cannot go on, where it is stuck).
+
+**Parameters.** Where a list takes `page` and `limit`: `limit` is 1 to 100 (default 20) and `page` starts at 1 (default 1). A route that takes no query refuses one (`400`). Identifiers have a fixed shape: an account is a lowercase `orama1…` bech32 address, a validator operator a lowercase `oramavaloper1…` address, a transaction or an asset a 64-character hex string, an epoch or a height a positive integer. A value of the right shape that is not valid (a failed bech32 checksum, say) is refused by the indexer, and the gateway answers that as `502`; check addresses before you ask.
+
+| Route | Query | Answers |
+|---|---|---|
+| `index/status` | none | The index's heights (`start_height`, `cursor`, `earliest`, `tip`, `aggregates_from`) and `stuck` while it cannot go on |
+| `index/home` | none | The newest 24 blocks and 12 transactions, 48 hourly counts, the epoch in progress, the supply and base fee at the tip and example addresses, in one read. The indexer reuses a snapshot for two seconds while the index stays at the same block and builds a new one after that or when the index moves; readers who arrive during a build wait for it |
+| `index/stats` | none | The last 48 hourly transaction counts |
+| `index/stats/hourly`, `/daily`, `/weekly` | `page`, `limit` | Longer statistics series |
+| `index/blocks/{height}` | none | One block with its transaction hashes |
+| `index/txs/{hash}` | none | One transaction with its messages, events and result |
+| `index/accounts/{address}` | none | An address's transaction count and first and last activity |
+| `index/cnft/assets/{id}` | none | The records of a compressed NFT asset id |
+| `index/epochs/{n}` | none | One closed emission epoch. An epoch that is open, not reached or from before the index began is `404` |
+| `index/epochs`, `index/supply`, `index/validators` | `page` (to 1000), `limit` | Closed epochs, the supply breakdown per epoch, validators with their newest epoch |
+| `index/epochs/{n}/validators`, `index/epochs/{n}/rewards` | `page` (to 1000), `limit` | An epoch's validators, and what it paid each validator |
+| `index/validators/{operator}` | none | One validator |
+| `index/validators/{operator}/epochs`, `/slashes`, `/jails`, `/rewards` | `page` (to 1000), `limit` | A validator's per-epoch signing, slashes, jail periods and rewards |
+| `index/blocks` | `page` (to 10) or `cursor`, `limit` | Blocks, newest first, without transaction hashes |
+| `index/txs`, `index/accounts/{address}/txs` | `page` (to 10) or `cursor`, `limit`, `filter` | Transactions, newest first |
+| `index/accounts/{address}/rewards` | `page` (to 10) or `cursor`, `limit` | What the chain credited an account as a delegator or an operator, newest epoch first |
+| `index/cnft/owners/{address}/assets` | `page` (to 10) or `cursor`, `limit` | The assets an owner holds, by asset id |
+| `index/shielded/actions` | `from_height`, `limit` (1 to 1,000, default 200) | The compact shielded actions of the blocks from a height, for a wallet that scans the pool, see [Scanning the shielded pool](#scanning-the-shielded-pool) |
+| `index/shielded/subtree-roots` | `start_index` (from 0), `limit` (1 to 1,000, default 100) | The roots of the filled 2^16-leaf subtrees of the note-commitment tree |
+
+**Filters.** `filter` on the two transaction lists is one of `all` (the default), `failed`, `transfers`, `staking` or `storage`, lower-case, once. A transaction is listed under `failed` when the chain refused it and under each kind its messages belong to.
+
+**Cursors.** The five lists that grow with the chain, or that one account can make long, are numbered only to page 10; deeper, you follow `next_cursor`. A full page carries `next_cursor` in its body; pass it back as `cursor=<next_cursor>` on the same route, with the same `limit` and `filter`, and you get the rows after it, at the cost of the first page however deep you are and with no row repeated or missed while the chain grows. A page that is short is the last. `page` and `cursor` are never sent together (`400`). A cursor is URL-safe base64: 16 characters on `blocks`, `txs` and `accounts/{address}/txs` (a height and a position), 59 on an owner's assets and 39 to 580 on an account's rewards. Use only a cursor a response gave you; one from another list is refused.
+
+```js
+// Every transfer the network has seen, newest first, 100 at a time.
+const base = "https://stagenet.orama.network/v1/chain/index/txs";
+let cursor = null;
+do {
+  const url = cursor ? `${base}?filter=transfers&limit=100&cursor=${cursor}` : `${base}?filter=transfers&limit=100`;
+  const res = await fetch(url);
+  if (res.status === 429 || res.status === 503) {
+    await new Promise((r) => setTimeout(r, 1000 * Number(res.headers.get("Retry-After") ?? 5)));
+    continue; // the same page again
+  }
+  if (!res.ok) throw new Error(`${res.status} ${(await res.text()).trim()}`);
+  const page = await res.json();
+  for (const tx of page.txs) console.log(tx.height, tx.hash);
+  cursor = page.next_cursor ?? null;
+} while (cursor);
+```
+
+A list answer is an object with its rows under a name (`blocks`, `txs`, `epochs`, `points`, `validators`, `rewards`, `assets`, `buckets`), the `limit`, the `page` when it was asked by page number and `next_cursor` when a cursor can follow. Amounts are exact integer strings in `norama` (10^9 norama is 1 ORAMA).
+
+## Scanning the shielded pool
+
+Four public reads give a wallet everything it needs to find its notes and witness them without holding every leaf of the note-commitment tree. Bytes in the index routes are lowercase hex; in a module query they are base64, like every `bytes` field of that route. The pool, the keys and the address format are described in [Shielded pool](/docs/blockchain/shielded).
+
+**Actions: `index/shielded/actions?from_height=H&limit=N`.** `from_height` is a positive height (default 1); `limit` is the most actions a page holds, 1 to 1,000 (default 200). A page is **whole blocks**: it holds the blocks with shielded actions from `from_height` on, in order, and stops before the block that would take it over `limit`, except that a first block larger than `limit` is returned whole. A block with no shielded action is not listed. Only transactions the chain accepted appear (shield, shield of earnings, transfer and unshield), and only their actions.
+
+```json
+{
+  "start_height": 1,
+  "indexed_height": 5230,
+  "from_height": 1,
+  "next_height": 812,
+  "has_more": true,
+  "blocks": [
+    {
+      "height": 420,
+      "tree_size": 2,
+      "actions": [
+        {
+          "tx_index": 0,
+          "action_index": 0,
+          "position": 1,
+          "tx_hash": "<64 hex>",
+          "nullifier": "<64 hex>",
+          "cmx": "<64 hex>",
+          "ephemeral_key": "<64 hex>",
+          "enc_compact": "<104 hex: the first 52 bytes of the encrypted note>",
+          "out_ciphertext": "<160 hex: 80 bytes>"
+        }
+      ]
+    }
+  ]
+}
+```
+
+- `position` is the leaf the action's `cmx` took in the note-commitment tree; `tree_size` is the number of leaves after the block. The block's actions take the positions `tree_size - n` to `tree_size - 1` in order. The index reads each position from the chain's `shielded_bundle` event (`tree_size_before`, `commitments`) and checks that the bundles follow one another without a gap, never from the chain's state. `tx_index` is the transaction's place in its block and `action_index` the action's place among the actions of that transaction.
+- `start_height` is the first block the index holds and `indexed_height` the last: nothing before the first is here, and a page that reaches the last is the end for now.
+- `has_more` says the page stopped at its limit and `next_height` is the first block not yet returned: ask again from it. Without `has_more` the reader is caught up and `next_height` is `indexed_height + 1`: ask again from there after the chain has moved on, and a `from_height` past the index is an empty page that points at itself. `next_height` never points backwards.
+- The nullifiers are those of the notes spent: a wallet marks its notes spent when it sees one of its own.
+
+**Subtree roots in state: `query/orama.shielded.v1.Query/SubtreeRoots`.** The chain stores the root of every filled 2^16-leaf subtree, so any node answers for all of them, from subtree 0. Request fields: `start_index` (the first subtree wanted, default 0; a 64-bit number is a string in JSON) and `limit` (the most roots, default 100; more than 1,000 is refused with `400`). Subtree `k` holds the leaves `k * 65,536` to `(k + 1) * 65,536 - 1`.
+
+```json
+{
+  "roots": [
+    { "index": "0", "root": "<base64, 32 bytes>", "height": "3112" },
+    { "index": "1", "root": "<base64, 32 bytes>", "height": "4871" }
+  ],
+  "total": "2"
+}
+```
+
+`total` is the number of filled subtrees, `floor(tree_size / 65,536)`, at the height the query reads. The roots come in index order; the next page starts at `start_index` plus the number returned, and a page that reaches `total` is the last for now. A `start_index` at or past `total` is an empty page, not an error. `height` is the block whose transaction filled the subtree. With the `height` query parameter (within the last 100 blocks) the answer lists the subtrees filled by then.
+
+**Subtree roots in the index: `index/shielded/subtree-roots?start_index=I&limit=N`.** The same roots, from the events the index saw. `start_index` is a non-negative subtree number (default 0); `limit` is 1 to 1,000 (default 100).
+
+```json
+{
+  "indexed_height": 5230,
+  "subtree_leaves": 65536,
+  "first_index": 0,
+  "start_index": 0,
+  "next_index": 2,
+  "has_more": false,
+  "roots": [
+    { "index": 0, "root": "<64 hex>", "height": 3112 },
+    { "index": 1, "root": "<64 hex>", "height": 4871 }
+  ]
+}
+```
+
+`root` is the 32-byte canonical encoding of the subtree's root (here in hex; the query's is base64) (the same encoding as a `cmx` and as the tree's `current_root`) and `height` the block whose transaction filled the subtree. `first_index` is the first subtree this index has a root for; it is absent while there is none, and a subtree before it has no root here. The roots recombine to the anchor: with every subtree `0..k` filled and the tree at exactly `(k + 1) * 65,536` leaves, hashing the roots up through levels 16 to 31 with the empty-subtree roots on the right gives `TreeState.current_root`.
+
+**Frontier: `query/orama.shielded.v1.Query/TreeFrontier`.** No request fields. `height` (the query parameter) reads an earlier state, within the last 100 blocks.
+
+```json
+{
+  "height": "5230",
+  "tree_size": "4194307",
+  "current_root": "<base64, 32 bytes>",
+  "frontier": "<base64>"
+}
+```
+
+`current_root` equals `TreeState.current_root` at the same height. `frontier` is empty for an empty tree, and otherwise the position of the last leaf (a little-endian `u64`, `tree_size - 1`), that leaf (32 bytes) and one ommer (32 bytes) for each set bit of the position, lowest level first: at most 1,064 bytes. Appending commitments to it in order gives the tree's later roots.
+
+**Scanning.** Page `shielded/actions` from the wallet's birthday, trial-decrypting each `enc_compact` with the incoming viewing key and the `ephemeral_key`, and keep the positions of the notes found; take the roots of filled subtrees from `SubtreeRoots` and a frontier from `TreeFrontier` at a recent height; then continue from `next_height`, applying each new block's commitments to the frontier. The three reads draw on the `index/…` and `query/…` limits below, so a wallet should page at the pace of `Retry-After`.
+
+## Caching
+
+Only the `index/…` routes are cacheable, and they say so. A `200` carries `Cache-Control: public, max-age=N` where `N` is:
+
+| Answer | `max-age` |
+|---|---|
+| A block (`index/blocks/{height}`), a transaction by hash (`index/txs/{hash}`) and everything under `index/epochs/` (a closed epoch, its validators, its rewards): fixed once they exist. A page of `index/shielded/actions` or `index/shielded/subtree-roots` that has more behind it (`has_more`) is fixed too | 600 (ten minutes, not longer: a network that starts again keeps its heights and epoch numbers) |
+| Every other index answer: the lists, the home snapshot, status, accounts, validators, supply, statistics | 2 (about a block) |
+
+The gateway passes on only that exact form and only for a `200`, and never more than an hour; anything else is `no-store`. Every error, every answer of the chain routes and of `query/…`, and the head stream are `Cache-Control: no-store`. A browser's `fetch` follows these headers by itself; a server-side client that wants the saving has to keep the answer for that long.
+
+## The head stream
+
+`GET /v1/chain/head/stream` is [server-sent events](https://developer.mozilla.org/docs/Web/API/Server-sent_events): the chain's head, pushed when it moves, so nobody has to poll `status`. The gateway reads the node's status once a second for all its readers, whatever their number. It needs no indexer.
+
+```js
+const stream = new EventSource("https://stagenet.orama.network/v1/chain/head/stream");
+stream.addEventListener("head", (e) => {
+  const { height, time, chain_id } = JSON.parse(e.data);
+  console.log(chain_id, height, time);
+});
+stream.addEventListener("unavailable", () => console.log("the node cannot be read"));
+```
+
+- `event: head`, data `{"height":<number>,"time":"<RFC 3339>","chain_id":"<id>"}`. The first message is the current head. Another follows when the height changes, or when the chain id changes (a network that starts again has a lower height, so watch the id, not only the height).
+- `event: unavailable`, data `{"message":"the chain could not be read"}`, once, when the node cannot be read; the next `head` says it can again.
+- The stream begins with `retry: 1000` and sends a `: keepalive` comment every 15 seconds. It ends after 100 seconds; `EventSource` reconnects by itself.
+- A gateway holds at most 1,024 streams (more are `503` with `Retry-After: 5`); one client network may open 12 a minute (burst 6) and hold 4 at once (`429`). An `EventSource` does not retry a refused stream by itself: open it again after a wait that doubles from 5 to 60 seconds, and do not fall back to polling.
+
+## Rate limits
+
+A limit counts the **client network**: an IPv4 address, or the /64 of an IPv6 address, so a host cannot get a new allowance by changing the low bits of its address. The gateway takes the address of the connection (behind its own reverse proxy, the address that proxy appended); an `X-Forwarded-For` you write moves nothing. Limits are per gateway: each gateway of a network keeps its own count.
+
+| What | Limit per client network | Refused with |
+|---|---|---|
+| Any read (the general bucket; everything below counts here too) | 10,000 a minute, burst 5,000 | `429`, plain text `rate limit exceeded`, `Retry-After: 5` |
+| `query/…` | 120 a minute, burst 30 | `429`, the `RATE_LIMITED` envelope, `Retry-After: 10` |
+| `index/…` | 1,200 a minute, burst 240; at most 6 in flight at once | `429`, the envelope, `Retry-After: 10` (rate) or `2` (in flight) |
+| `head/stream` | 12 opens a minute, burst 6; at most 4 open | `429`, the envelope, `Retry-After: 10` |
+
+And limits on the gateway as a whole, which no one client can lift: 16 module queries in flight, 32 index reads in flight, 1,024 head streams (`503` with `Retry-After` of 2, 2 and 5 seconds). The envelope is `{"ok":false,"error":{"code":"RATE_LIMITED","message":"…","retryable":true,"retry_after":10}}`. A browsing person is far inside all of this: a page of the explorer is a handful of reads. A client that pages through the index, or reads every deal, should pace itself and honour `Retry-After`.
+
+## CORS
+
+A read needs no preflight: a `GET` with only `Accept` (and no `Authorization` or custom header) is a simple request. The gateway answers a request's `Origin` with `Access-Control-Allow-Origin` set to that origin for:
+
+- the gateway's own base domain and any name under it (an app you deploy on the network can read its gateway), and `localhost` or `127.0.0.1` on any port, for development;
+- `https://orama.network`, the explorer, for `GET` and its preflight under `/v1/chain/` and for nothing else.
+
+Any other origin is answered with the gateway's own origin instead, so a browser refuses to hand the answer to a page from anywhere else: read the chain from your server, or from an app deployed on the network. The answer carries `Vary: Origin`, `Access-Control-Allow-Methods: GET, PUT, POST, DELETE, OPTIONS`, `Access-Control-Allow-Headers: Content-Type, Authorization, X-API-Key`, `Access-Control-Max-Age: 600` and never `Access-Control-Allow-Credentials`: send reads with `credentials: "omit"`, and nothing of the reader's is attached. A preflight is `204`.
+
+The CORS rule is applied before the rate limiter, so a refusal (`429`) carries the same CORS headers as any answer and a page from an allowed origin reads its status and `Retry-After`; a page from any other origin cannot, as for every other answer. A gateway older than that change wrote its `429` without CORS headers, which a browser reports as a failed request (a network error) with no status. A gateway that cannot be reached, whose certificate the browser does not trust (a staging certificate, for example) or that does not allow the page's origin looks the same to a script. When a read fails in a browser with no status, open `https://<gateway>/v1/chain/status` in a tab: a certificate warning there points to the certificate, a normal answer to CORS or the rate limit, no answer to a gateway that is down. A preflight is answered before the limiter and is not counted by it.
+
+## Errors
+
+A failure is a fixed one-line `text/plain` body, except a `429` from the per-route limits, which is the JSON `RATE_LIMITED` envelope described under [Rate limits](#rate-limits). Handle the status, not the words.
+
+| Status | Means | Body, and what to do |
+|---|---|---|
+| `400` | The query was refused before anything was asked: an unknown, repeated or empty key, a value out of range, `page` with `cursor`, a bad `filter`, a request over 4 KiB, a `limit` over 100 or an `offset` on a module query, a `height` older than the last 100 blocks, a request the chain says is malformed | `bad query`, `height is older than the last 100 blocks` or `the chain refused the request`. Fix the request; do not retry it unchanged |
+| `404` | No such route or method of the allowlist, an unclean path, or the thing is not on the chain or not indexed | `not found` or `not found on chain`. For a transaction just broadcast, `Retry-After: 2`: ask again |
+| `405` | A read route with a method other than `GET` | `method not allowed`, `Allow: GET` |
+| `422` | A module query that costs more than the node allows | `the query costs more than the node allows: ask for a smaller page` |
+| `429` | A rate limit above | `rate limit exceeded` (plain) or the `RATE_LIMITED` envelope. Wait `Retry-After` seconds |
+| `502` | The node could not be reached or did not answer in 10 seconds, answered a redirect, a status the proxy does not accept or more than the size bound, or the upstream failed in a way that is not a plain not-found. This includes an address or id the indexer finds invalid | `chain unreachable`, `chain request failed`, `chain query failed`, `upstream response too large` and similar. Retry later; it is not your request unless it was malformed |
+| `503` | This gateway cannot serve it now | `this node runs no chain indexer; install it with orama global install --services chain,indexer` (`Retry-After: 60`: ask another gateway of the network, or this one later), `the chain index is busy; try again`, `too many chain queries in flight`, `too many head streams are open on this gateway; try again` (each with `Retry-After`), `chain queries are unavailable` or `chain proxy is misconfigured` (the gateway's own fault) |
+
+A `404` from `index/blocks/{height}`, `index/txs/{hash}` or an account on a gateway whose index is still behind the chain can be true a moment later: `index/status` gives the index's `cursor` against the chain's `tip`. A `503` for the missing indexer is not an outage of the chain: `status`, `block`, `tx`, `validators`, `query/…` and `head/stream` still answer.
+
+## Related
+
+- [Reading the chain](/docs/blockchain/reading-the-chain): the CLI, the SDK, `oramad`, the indexer's aggregates and the transaction routes.
+- [Using the explorer](/docs/blockchain/using-the-explorer): the pages that read this API.
+- [Gateway HTTP API](/docs/developer/api-surface): the rest of the gateway's routes.

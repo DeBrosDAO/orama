@@ -455,13 +455,14 @@ func TestCache_TTLExpiryWithSleep(t *testing.T) {
 		t.Fatalf("get immediately after put failed: status %d, err %v", status, err)
 	}
 
-	// Sleep for TTL duration + buffer
-	e2e.Delay(2500)
-
-	// Try to get after TTL expires
-	_, status, err = getReq.Do(ctx)
-	if status == http.StatusOK {
-		t.Logf("warning: TTL expiry may not be fully implemented; key still exists after TTL")
+	// Poll rather than sleep once: expiry is an absolute time set on one Olric
+	// member and checked on another, so clock skew eats a fixed margin.
+	expired := e2e.WaitForCondition(10*time.Second, func() bool {
+		_, status, _ := getReq.Do(ctx)
+		return status == http.StatusNotFound
+	})
+	if expired != nil {
+		t.Fatalf("value written with ttl=2s still readable after 10s: %v", expired)
 	}
 }
 

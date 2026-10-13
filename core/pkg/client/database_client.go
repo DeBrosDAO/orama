@@ -7,6 +7,8 @@ import (
 	"sync"
 
 	"github.com/rqlite/gorqlite"
+
+	"github.com/DeBrosOfficial/network/pkg/rqlite"
 )
 
 // safeWriteOne wraps gorqlite's WriteOneParameterized to recover from panics.
@@ -104,7 +106,7 @@ func (d *DatabaseClientImpl) Query(ctx context.Context, sql string, args ...inte
 
 		if isWriteOperation {
 			// Execute write operation with parameters
-			_, err := safeWriteOne(conn, gorqlite.ParameterizedStatement{
+			wr, err := safeWriteOne(conn, gorqlite.ParameterizedStatement{
 				Query:     sql,
 				Arguments: args,
 			})
@@ -113,12 +115,25 @@ func (d *DatabaseClientImpl) Query(ctx context.Context, sql string, args ...inte
 				d.clearConnection()
 				continue
 			}
+			// A statement error comes back on the result, with a nil function
+			// error. Treating that as a stored row would hand the caller an
+			// id for a write that did not happen.
+			if wr.Err != nil {
+				lastErr = wr.Err
+				d.clearConnection()
+				continue
+			}
 
-			// For write operations, return empty result set
+			// The id is part of the commit the leader already acknowledged.
+			// Reading the new row back is a local (level=none) read, and a
+			// follower applies the log after this response, so the row is
+			// not there yet.
 			return &QueryResult{
-				Columns: []string{"affected"},
-				Rows:    [][]interface{}{{"success"}},
-				Count:   1,
+				Columns:      []string{"affected"},
+				Rows:         [][]interface{}{{"success"}},
+				Count:        1,
+				LastInsertID: wr.LastInsertID,
+				RowsAffected: wr.RowsAffected,
 			}, nil
 		} else {
 			// Execute read operation with parameters
@@ -160,10 +175,13 @@ func (d *DatabaseClientImpl) Query(ctx context.Context, sql string, args ...inte
 
 // isWriteOperation determines if a SQL statement is a write operation
 func (d *DatabaseClientImpl) isWriteOperation(sql string) bool {
-	// Convert to uppercase for comparison
+	return isWriteStatement(sql)
+}
+
+// isWriteStatement reports whether sql is a write, from its first keyword.
+func isWriteStatement(sql string) bool {
 	sqlUpper := strings.ToUpper(strings.TrimSpace(sql))
 
-	// List of write operation keywords
 	writeKeywords := []string{
 		"INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "ALTER",
 		"TRUNCATE", "REPLACE", "MERGE", "PRAGMA",
@@ -223,19 +241,23 @@ func (d *DatabaseClientImpl) getRQLiteNodes() []string {
 	return DefaultDatabaseEndpoints()
 }
 
-// hasPort checks if a hostport string has a port suffix
-func hasPort(hostport string) bool {
-	// cheap check for :port suffix (IPv6 with brackets handled by url.Parse earlier)
-	if i := strings.LastIndex(hostport, ":"); i > -1 && i < len(hostport)-1 {
-		// ensure the segment after ':' is numeric-ish
-		for _, c := range hostport[i+1:] {
-			if c < '0' || c > '9' {
-				return false
-			}
-		}
-		return true
+// openURL is the DSN a connection to rqliteURL is opened with.
+//
+// Cluster discovery is off to avoid /nodes timeouts from unreachable peers.
+// Reads are served at the configured level: ReadLevelNone (the default) reads
+// this node's local SQLite with no leader forwarding, so a write the leader
+// has acknowledged may not be visible yet; ReadLevelWeak routes the read to
+// the leader. Writes are unaffected: they always go through Raft consensus.
+func (d *DatabaseClientImpl) openURL(rqliteURL string) string {
+	level := ReadLevelNone
+	if d.client != nil && d.client.config != nil && d.client.config.DatabaseReadLevel != "" {
+		level = d.client.config.DatabaseReadLevel
 	}
-	return false
+	sep := "?"
+	if strings.Contains(rqliteURL, "?") {
+		sep = "&"
+	}
+	return rqliteURL + sep + "disableClusterDiscovery=true&level=" + level
 }
 
 // connectToAvailableNode tries to connect to any available RQLite node
@@ -244,23 +266,17 @@ func (d *DatabaseClientImpl) connectToAvailableNode() (*gorqlite.Connection, err
 	rqliteNodes := d.getRQLiteNodes()
 
 	var lastErr error
+	var lastURL string
 
 	for _, rqliteURL := range rqliteNodes {
 		var conn *gorqlite.Connection
 		var err error
 
-		// Disable gorqlite cluster discovery to avoid /nodes timeouts from unreachable peers.
-		// Use level=none to read from local SQLite directly (no leader forwarding).
-		// Writes are unaffected — they always go through Raft consensus.
-		openURL := rqliteURL
-		if strings.Contains(openURL, "?") {
-			openURL += "&disableClusterDiscovery=true&level=none"
-		} else {
-			openURL += "?disableClusterDiscovery=true&level=none"
-		}
+		openURL := d.openURL(rqliteURL)
 		conn, err = gorqlite.Open(openURL)
 		if err != nil {
 			lastErr = err
+			lastURL = openURL
 			continue
 		}
 
@@ -268,13 +284,14 @@ func (d *DatabaseClientImpl) connectToAvailableNode() (*gorqlite.Connection, err
 		// and the node has leadership or can serve reads
 		if err := d.testConnection(conn); err != nil {
 			lastErr = err
+			lastURL = openURL
 			continue
 		}
 
 		return conn, nil
 	}
 
-	return nil, fmt.Errorf("failed to connect to any RQLite instance. Last error: %w", lastErr)
+	return nil, fmt.Errorf("failed to connect to any RQLite instance. Last error: %s", rqlite.RedactError(lastErr, lastURL))
 }
 
 // testConnection performs a health check on the RQLite connection

@@ -1,0 +1,20 @@
+shape: sequence_diagram
+
+dns: "dns-registration component\nand 30 s heartbeat"
+cli: "coreapi.Client"
+gw: "index gateway\nlocalhost:10104"
+reg: "index RQLite"
+
+dns -> cli: "coreAPIClient(): first use"
+cli -> cli: "LoadOrCreateNodeKey: secrets/node-key.pem, Ed25519, mode 0600"
+cli -> gw: "POST /v1/internal/node/enrol-key {public_key}\nstamp = libp2p identity signature"
+gw -> reg: "node_credentials row (public half only)"
+gw -> cli: "recorded true or false, both are success"
+dns -> cli: "Register(ip, internal_ip, region, role, ...)"
+cli -> gw: "POST /v1/internal/node/register\nstamp = node key signature, X-Orama-Node-ID"
+gw -> reg: "upsert dns_nodes, status active"
+dns -> cli: "every 30 s: Heartbeat(role, environment)"
+cli -> gw: "POST /v1/internal/node/heartbeat"
+gw -> cli: "registered: true or false"
+cli -> gw: "401: re-enrol once with the identity key, retry once"
+dns -> cli: "registered false: Register again"

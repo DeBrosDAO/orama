@@ -1,0 +1,23 @@
+direction: down
+
+stake: "bonded validators from x/staking\nnot jailed, not tombstoned\nstake = bonded tokens"
+full: "full capped shares\nComputeCappedShares(stake, cap, 2x)\n(latent stake, used by the lambda limiter)"
+ramp: "effectiveBond: only tokens whose\n30-epoch ramp has admitted them"
+admitted: "admitted capped shares C_i\nComputeCappedShares(admitted stake, cap, 2x)"
+boot: "bootstrap share B_i = 1/n\nonly if the seat is eligible\n(bonded, not jailed, not tombstoned)"
+lambda: "lambda (stored, monotonic)\nrecomputed once per closed epoch\nmax(prev, bonded/exit stake, epochs/deadline)\nheld at 0.95 until the handover gate is met\ncandidate scaled back until the voting-power\nshift it causes is at most 1/3"
+raw: "P_i = (1 - lambda) B_i + lambda C_i"
+norm: "normalise by the sum of P_i"
+limit: "limitPublishedIncreases, every block\ntotal variation from the last published powers at most 1/3\nincreases scaled back, decreases applied at once"
+comet: "comet power = floor(share x 10^9), at least 1\nValidatorUpdate only where it changed"
+
+stake -> full
+stake -> ramp
+ramp -> admitted
+admitted -> raw
+boot -> raw
+lambda -> raw
+full -> lambda: "latent shift check"
+raw -> norm
+norm -> limit
+limit -> comet

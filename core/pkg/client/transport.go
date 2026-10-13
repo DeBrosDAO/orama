@@ -5,13 +5,13 @@ import (
 	"strings"
 )
 
-// getGatewayURL returns the gateway URL from config, defaulting to localhost:6001
+// getGatewayURL returns the gateway URL from config, defaulting to localhost:10104
 func getGatewayURL(c *Client) string {
 	cfg := c.Config()
 	if cfg != nil && cfg.GatewayURL != "" {
 		return strings.TrimSuffix(cfg.GatewayURL, "/")
 	}
-	return "http://localhost:6001"
+	return "http://localhost:10104"
 }
 
 // addAuthHeaders adds authentication headers to the request

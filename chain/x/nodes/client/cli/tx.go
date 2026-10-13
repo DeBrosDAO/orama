@@ -1,0 +1,126 @@
+package cli
+
+import (
+	"fmt"
+
+	"github.com/spf13/cobra"
+
+	"cosmossdk.io/math"
+
+	"github.com/cosmos/cosmos-sdk/client"
+	"github.com/cosmos/cosmos-sdk/client/flags"
+	"github.com/cosmos/cosmos-sdk/client/tx"
+
+	"github.com/DeBrosOfficial/network/chain/x/nodes/types"
+)
+
+// GetTxCmd returns the parent `nodes` transaction command.
+func GetTxCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:                        types.ModuleName,
+		Short:                      "Nodes transaction subcommands",
+		DisableFlagParsing:         true,
+		SuggestionsMinimumDistance: 2,
+		RunE:                       client.ValidateCmd,
+	}
+	cmd.AddCommand(GetCmdFundHotKey(), GetCmdClaimNodeName(), GetCmdReleaseNodeName())
+	return cmd
+}
+
+// flagFromBank makes fund-hot-key take the amount from the signer's bank balance and not from its earnings.
+const flagFromBank = "from-bank"
+
+// GetCmdFundHotKey implements `oramad tx nodes fund-hot-key`. The signer (--from) is the operator;
+// the target is always the registered hot key of the named node.
+func GetCmdFundHotKey() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "fund-hot-key [node-id] [amount-norama]",
+		Short: "Move earnings (or, with --from-bank, bank balance) to the fee balance of your own node's hot key",
+		Long: "Moves the amount, in norama, from the signer's earnings account to the earnings (fee) " +
+			"balance of the hot key registered on the signer's own node. With --from-bank the amount " +
+			"comes from the signer's bank balance instead, for an operator that holds ORAMA but has " +
+			"earned nothing yet. The destination is always that node's hot key and cannot be chosen.",
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			amount, ok := math.NewIntFromString(args[1])
+			if !ok {
+				return fmt.Errorf("amount %q is not an integer number of norama", args[1])
+			}
+			clientCtx, err := client.GetClientTxContext(cmd)
+			if err != nil {
+				return fmt.Errorf("failed to get client context: %w", err)
+			}
+			fromBank, err := cmd.Flags().GetBool(flagFromBank)
+			if err != nil {
+				return fmt.Errorf("failed to read --%s: %w", flagFromBank, err)
+			}
+			source := types.FundSource_FUND_SOURCE_EARNINGS
+			if fromBank {
+				source = types.FundSource_FUND_SOURCE_BANK
+			}
+			msg := &types.MsgFundHotKey{
+				Operator: clientCtx.GetFromAddress().String(),
+				NodeId:   args[0],
+				Amount:   amount,
+				Source:   source,
+			}
+			if err := msg.ValidateBasic(); err != nil {
+				return err
+			}
+			return tx.GenerateOrBroadcastTxCLI(clientCtx, cmd.Flags(), msg)
+		},
+	}
+	cmd.Flags().Bool(flagFromBank, false, "take the amount from the signer's bank balance instead of its earnings")
+	flags.AddTxFlagsToCmd(cmd)
+	return cmd
+}
+
+// GetCmdClaimNodeName implements `oramad tx nodes claim-name`. The signer (--from) is the node's
+// operator.
+func GetCmdClaimNodeName() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "claim-name [node-id] [name]",
+		Short: "Claim an identification name for one of your nodes",
+		Long: "Claims name, one DNS label of 3 to 32 characters (a-z, 0-9 and '-'), for the signer's own " +
+			"node and locks the name deposit, which is returned when the name is released or the node " +
+			"retires. The network serves <name>.<network>.orama.network as an address record for the " +
+			"node's IP: the name identifies the node and delegates nothing. A node holds one name and " +
+			"a name belongs to one node, first come first served.",
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			clientCtx, err := client.GetClientTxContext(cmd)
+			if err != nil {
+				return fmt.Errorf("failed to get client context: %w", err)
+			}
+			msg := &types.MsgClaimNodeName{Operator: clientCtx.GetFromAddress().String(), NodeId: args[0], Name: args[1]}
+			if err := msg.ValidateBasic(); err != nil {
+				return err
+			}
+			return tx.GenerateOrBroadcastTxCLI(clientCtx, cmd.Flags(), msg)
+		},
+	}
+	flags.AddTxFlagsToCmd(cmd)
+	return cmd
+}
+
+// GetCmdReleaseNodeName implements `oramad tx nodes release-name`.
+func GetCmdReleaseNodeName() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "release-name [node-id]",
+		Short: "Release your node's identification name and take the deposit back",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			clientCtx, err := client.GetClientTxContext(cmd)
+			if err != nil {
+				return fmt.Errorf("failed to get client context: %w", err)
+			}
+			msg := &types.MsgReleaseNodeName{Operator: clientCtx.GetFromAddress().String(), NodeId: args[0]}
+			if err := msg.ValidateBasic(); err != nil {
+				return err
+			}
+			return tx.GenerateOrBroadcastTxCLI(clientCtx, cmd.Flags(), msg)
+		},
+	}
+	flags.AddTxFlagsToCmd(cmd)
+	return cmd
+}

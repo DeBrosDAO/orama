@@ -1,0 +1,14 @@
+direction: down
+
+host: "One node" {
+  edge: "Edge: 53, 80, 443, 51820 UDP, 9050 loopback" {shape: rectangle}
+  tenant: "10000-10099\n20 tenant blocks of 5 ports" {shape: rectangle}
+  index: "10100-10199\nindex internals 10100-10110, 10114\nrest left free" {shape: rectangle}
+  deploy: "10200-19999\ndeployment processes (9800 ports)" {shape: rectangle}
+  global: "31000-31099\nglobal layer: chain, IPFS, Tor, tx gate" {shape: rectangle}
+  libp2p: "4001 libp2p, 4101 IPFS swarm, 8080 IPFS gateway" {shape: rectangle}
+}
+
+host.tenant -> host.index: "above"
+host.index -> host.deploy: "above"
+host.deploy -> host.global: "above"

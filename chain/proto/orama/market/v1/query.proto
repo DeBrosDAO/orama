@@ -1,0 +1,47 @@
+syntax = "proto3";
+package orama.market.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/market/types";
+
+import "google/api/annotations.proto";
+import "gogoproto/gogo.proto";
+import "orama/market/v1/market.proto";
+
+// Query is x/market's gRPC query service.
+service Query {
+  rpc Listing(QueryListingRequest) returns (QueryListingResponse) {
+    option (google.api.http).get = "/orama/market/v1/listing/{id}";
+  }
+  rpc Bid(QueryBidRequest) returns (QueryBidResponse) {
+    option (google.api.http).get = "/orama/market/v1/bid/{listing_id}/{bid_id}";
+  }
+  rpc Invariants(QueryInvariantsRequest) returns (QueryInvariantsResponse) {
+    option (google.api.http).get = "/orama/market/v1/invariants";
+  }
+}
+
+message QueryListingRequest {
+  uint64 id = 1;
+}
+
+message QueryListingResponse {
+  Listing listing = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryBidRequest {
+  uint64 listing_id = 1;
+  uint64 bid_id = 2;
+}
+
+message QueryBidResponse {
+  Bid bid = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryInvariantsRequest {}
+
+message QueryInvariantsResponse {
+  // bids_match_module is true when the market module account holds exactly the
+  // sum of the open bids.
+  bool bids_match_module = 1;
+  string detail = 2;
+}

@@ -1,0 +1,25 @@
+direction: down
+
+start: "runCLI()" {shape: oval}
+find: "rootCmd.Find(os.Args[1:])" {shape: diamond}
+usage: "stderr: Error: ...\nexit 2" {shape: oval}
+needs: "needsEnvironmentCAs(target)?\nfalse for env, version, serve-ipfs-cluster" {shape: diamond}
+trust: "TrustEnvironmentCAs()\nscoped roots for every CAFile"
+trustfail: "stderr: Error: ...\nexit 1" {shape: oval}
+exec: "rootCmd.Execute()\nPreRunE: required flags and flag groups\nArgs validator, RunE handler"
+ok: "exit 0" {shape: oval}
+code: "clierr.CodeOf(err)" {shape: diamond}
+aborted: "code 7:\nnothing printed, exit 7" {shape: oval}
+fail: "stderr: Error: message\nexit code" {shape: oval}
+
+start -> find
+find -> usage: "unresolvable name"
+find -> needs: "resolved"
+needs -> trust: "yes"
+needs -> exec: "no"
+trust -> trustfail: "CA file unreadable"
+trust -> exec
+exec -> ok: "nil"
+exec -> code: "error"
+code -> aborted: "Aborted"
+code -> fail: "any other"

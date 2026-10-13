@@ -1,0 +1,42 @@
+direction: right
+
+internet: "Recursive resolvers\n(UDP/TCP 53)" {shape: person}
+parent: "Parent zone or registrar\nNS + glue for the base domain"
+
+ns: "Nameserver node (--nameserver)" {
+  coredns: "orama-namespace-coredns@nameserver\nuser orama-coredns, :53"
+  plugin: "rqlite plugin\nzone check, wildcard walk,\nserve-stale cache"
+  coredns -> plugin
+}
+
+idx: "Index RQLite (every node holds a replica)" {
+  dnsrec: "dns_records" {shape: cylinder}
+  dnsns: "dns_nameservers" {shape: cylinder}
+  dnsnodes: "dns_nodes" {shape: cylinder}
+}
+
+writers: "Writers of dns_records" {
+  node: "orama-node 30 s sweep\nbase A, glue, NS, SOA, push pin,\nns-name re-advertise, purges, withdraw"
+  health: "index gateway namespace health loop\n30 s probe, soft-disable own row"
+  cm: "namespace cluster manager\nprovision, repair, replace, suspect,\nrecovered, teardown, TURN, stealth"
+  dep: "deployment service\nA rows per replica, custom domains"
+  acme: "ACME handler\n_acme-challenge TXT"
+  cli: "orama node remove / membership reconciler\ndrop a departed node's rows"
+}
+
+op: "Operator\norama node dns delegation" {shape: person}
+
+internet -> ns.coredns: "query"
+internet -> parent: "delegation lookup"
+ns.plugin -> idx.dnsrec: "SELECT, HTTP basic auth,\nover the WireGuard address :10100"
+writers.node -> idx.dnsrec: "direct SQL"
+writers.node -> idx.dnsns: "claim slot"
+writers.node -> idx.dnsnodes: "reap inactive"
+writers.health -> idx.dnsrec: "UPDATE is_active"
+writers.cm -> idx.dnsrec: "INSERT / UPDATE / DELETE"
+writers.dep -> idx.dnsrec: "INSERT / DELETE"
+writers.acme -> idx.dnsrec: "INSERT / DELETE TXT"
+writers.cli -> idx.dnsrec: "DELETE system A rows"
+writers.cli -> idx.dnsns: "orama node remove deletes the slot"
+op -> idx.dnsns: "reads slots over SSH"
+op -> parent: "creates the records it prints"

@@ -1,0 +1,20 @@
+shape: sequence_diagram
+
+emission: x/emission
+bank: x/bank
+power: x/power
+staking: x/staking
+fees: x/fees
+
+emission -> bank: "MintCoins(norama, validator share)"
+emission -> power: "DistributeEpochRewards(total)"
+power -> power: "computePowers with stored lambda\nnormalizedShares: P_i / sum(P_i)"
+power -> bank: "SendCoinsFromModuleToModule\nemission to power, total"
+power -> power: "amount_i = floor(share_i x total)\nremainder to first positive entry"
+power -> staking: "GetValidator, GetValidatorDelegations"
+power -> power: "commission = rate x amount_i\nrest by delegator shares"
+power -> bank: "committee member: 50% sent to its account\nthen Delegate (force-bond, up to 2000 ORAMA)"
+power -> fees: "CreditEarnings(power, addr, remainder)"
+fees -> bank: "SendCoinsFromModuleToModule\npower to fees"
+fees -> fees: "earnings[addr] += amount"
+power -> bank: "on a rejected validator: roll back its cache branch,\nreturn its share to emission, emit power_reward_failed"

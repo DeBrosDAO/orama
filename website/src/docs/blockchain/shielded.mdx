@@ -1,0 +1,93 @@
+# Shielded pool
+
+`x/shielded` is the private way to hold and move ORAMA. It is a shielded pool in the style of Zcash Orchard (orchard 0.15.5, "Ironwood" in Orama's naming): value goes in, moves between private notes with no visible sender, receiver or amount, and comes out again.
+
+**Read this first.** The module is implemented and wired, but it fails closed. A node accepts a shielded bundle only if it has *both* proof verifiers: the in-process Orchard library (built with `-tags orchardffi`) and the pinned out-of-process `orama-orchard-verifier` binary. A plain `make build` produces a binary with neither, so it accepts no shielded transaction. Release builds (`build-linux-amd64-full`, `build-linux-amd64-orchard`) link both. On any node without them, only public sends work. The linux binaries have been built and linked but not yet run as a network. The two verifiers are two builds and two processes of one implementation: they protect against a fault in one build (memory corruption, a link problem, a hang) and not against a logic bug in the upstream crate they share. A genuinely independent second implementation does not exist. If a verifier fails while a node executes a block (its process is killed, hangs or will not start), the node logs an error that names the verifier and the hash of the bundle, does not record a result and exits with status 87; systemd restarts it and it executes the same block again. **Known trade-off:** a bundle that kills the verifier outright (an abort or an out-of-memory kill, not a panic it can catch) does so on every validator, and the chain stops on it until a fixed `oramad` and verifier are installed by a halt-height upgrade. Every validator checks a block proposal's shielded bundles before voting for it, and a bundle that rejects or faults the out-of-process verifier gets a nil vote, so the proposer rotates instead of the chain halting. The halt remains for a bundle that aborts or hangs the in-process library, which the check cannot stop, and for one that passes the check and still faults the block's verifier. There is no retry and no skipping, because a node that skipped a bundle its peers verified would split from them. A panic the verifier catches is an ordinary rejection of that bundle. Only Linux hosts run a node of a real chain. The pin of the verifier binary is linked into `oramad`; no flag changes it.
+
+## Using the pool is optional
+
+Nothing forces value into the pool. A bank send of norama between plain accounts is an ordinary public payment, earnings can be withdrawn to a bank balance (`MsgWithdrawEarnings`) and sent in the open, and a user who never shields is a normal user of the chain. The pool is for people who want a payment to show no sender, recipient or amount.
+
+The tools make that choice explicit and default to the private side. `orama chain send <to> <amount>` and the SDK's `chain.transfer({ to, amount })` are private unless you pass `--public` or `public: true`, so a payment cannot become public by omission, and they never fall back to a public payment when the private one cannot be built. A private send names a shielded address (`oramas1...`, see [Shielded addresses](#shielded-addresses)); an `orama1...` account is refused with the way to pay it openly. Building a shielded bundle needs the owner's shielded spending key (see Keys below), and the RootWallet cannot do that yet, so today a private send through the CLI stops with that explanation. A wallet or tool that holds the key builds the bundle itself and passes it to the SDK as its `shielded` option.
+
+## Messages
+
+| Message | What it does |
+|---|---|
+| `MsgShieldedTransfer` | A signer-less private transfer. The transaction must contain only this message, with no signature, no fee and no memo, and declare exactly `action_gas x actions` |
+| `MsgShield` | Move bank balance into the pool |
+| `MsgShieldEarnings` | Move the signer's earnings into the pool |
+| `MsgUnshield` | Move value out. The signature hash binds the signer and the target so a copy cannot be redirected |
+
+Unshield targets: `BOND` (the signer's own delegation), `NODE_BOND` (the signer's own `x/nodes` role bond), and `FEE_TOPUP` (the signer's own fee-only balance, at most 0.01 ORAMA per transaction, and the whole transaction fails if over). `DEPOSIT` and `CONTRACT` targets are refused: they are not linked.
+
+Because ORAMA leaves the pool only into the owner's own bond or fee balance, the pool is not a way to pay someone else out of band.
+
+## Rules that protect the pool
+
+- **Turnstile.** The pool can never pay out more than went in.
+- **24 hour cap.** Net outflow is at most 2% of the pool (or 1 ORAMA if larger) per 24 hours, counted as a leaky bucket that holds half a cap and drains half a cap per 24 hours. At most one cap leaves the pool in any 24 hours, the sustained rate is half a cap per day, and the counter never resets all at once. The 2% is an ossified constant. Over-cap `BOND` and `NODE_BOND` unshields are queued and served at most once per 24 hours, oldest first, up to 1,000 payments each time (a request that its target refuses is not a payment, and a window reads at most 10,000 rows). A `NODE_BOND` to a node that does not exist, is not yours, is closed or lacks the role is refused when you make it, and one address may have at most 10 requests queued. Each address gets at most `queue_per_address_cap` per service, and a bond is never paid in a part that would leave the delegation between zero and the minimum that earns rewards; such a request waits for a window that can pay it more. There is no cancel message.
+- **Nullifiers.** Each spent note's nullifier is recorded in a separate append-only database next to the chain data. The app hash commits to a running SHA-256 of that set and a count, and the node refuses to start if the database does not match.
+- **One pool.** Only vintage 1 and the native asset exist. There is no migration message and no multi-asset mode.
+
+## Parameters
+
+| Parameter | Value |
+|---|---|
+| `anchor_window_blocks` | 17,280 (24 hours at the chain's 5 s block interval) |
+| `nullifier_fee` | 0.001 ORAMA per nullifier, burned |
+| `action_gas` | 250,000 (an unmeasured placeholder) |
+| `max_actions_per_bundle` | 16 (at most 32, the protocol ceiling `bundle.MaxActions`) |
+| `unshield_floor` | 1 ORAMA |
+| `max_fee_topup` | 0.01 ORAMA |
+| `queue_per_address_cap` | 100 ORAMA |
+| `max_signerless_per_block` | 64 (a proposal with more is rejected, and a proposer leaves the surplus out of its block) |
+
+A transfer's fee (its value balance) must be at least `base fee x action_gas x actions + nullifier fee x actions`. The base and nullifier parts are burned and any remainder is a tip to the proposer, up to what the unshield cap has left; the part of a tip over that is burned as well, and the transfer still succeeds.
+
+Bundle sizes: a canonical bundle of `n` actions is exactly `1 + 820n + 41 + 3 + (2,720 + 2,272n) + 64(n + 1)` bytes (the action count, 820 bytes per action, 41 of flags, value balance and anchor, the proof behind its length, one signature per action and the binding signature; the two length fields are 1 and 3 bytes up to 16 actions and 5 bytes for the proof from 29). A 1-action bundle is 5,985 bytes, a 2-action bundle 9,141 and one of the default 16 actions **53,325 bytes**. The ceiling of 32 actions is **103,823 bytes**, which is the most a node reads of a bundle (`bundle.MaxBytes`); a transaction around it adds well under a kilobyte, and the onion transaction gate (`core/pkg/txgate`) takes a request of 144,916 bytes at most, the base64 and JSON of the largest such transaction. The gateway's own 1 MiB is the chain's mempool limit for every kind of transaction. Verifying a 1-action bundle takes about 5.6 ms on an Apple M3 with 8 threads; Linux is not measured.
+
+## Keys
+
+Wallet-side shielded keys are derived with ZIP-32 hardened-only derivation from a RootWallet branch of the seed (HKDF salt `orama-shielded-v1`). RootWallet does not use them yet, and its agent refuses shielded messages.
+
+## Shielded addresses
+
+A shielded address is the 43 raw bytes of an Orchard address (an 11-byte diversifier and the 32-byte transmission key) written in **Bech32m** ([BIP-350](https://github.com/bitcoin/bips/blob/master/bip-0350.mediawiki)) with the human-readable part `oramas`: `oramas1` and 75 characters, 82 in all, in lowercase. A reader also takes it in all capitals (for a QR code) and refuses a mix of cases. It is not an `orama1...` account address, which names a public account; the two never convert into each other.
+
+A string is checked in this order, and the first check that fails is the reason: mixed case, no `1` separator, a prefix other than `oramas`, a character outside the Bech32 alphabet, a data part other than 75 characters, the Bech32m checksum (an address with the original Bech32 checksum fails here) and a non-zero padding bit. The reasons have the same names in the three implementations: `mixed_case`, `no_separator`, `wrong_prefix`, `bad_character`, `wrong_length`, `bad_checksum` and `bad_padding`. They are the Rust wallet crate (`chain/x/shielded/wallet/src/address.rs`), the Go package the CLI uses (`core/pkg/shieldedaddr`) and the SDK (`encodeShieldedAddress`, `decodeShieldedAddress` and `isShieldedAddress` of `@orama-network/orama/chain`), and all three pass the one committed vector file, `chain/x/shielded/wallet/testdata/addresses/addresses.json`. The codec is structural: any 43 bytes encode, and the Rust wallet also checks, before it pays one, that they are an address Orchard can pay.
+
+## Scanning the pool
+
+A wallet that holds a shielded key finds its notes by reading every action the chain accepted and trial-decrypting it, so the chain indexer serves them in the compact form of [ZIP-307](https://zips.z.cash/zip-0307), and the chain serves the tree's frontier. All of it is public, like the rest of the [chain read API](/docs/blockchain/chain-read-api#scanning-the-shielded-pool):
+
+- **Actions.** `GET /v1/chain/index/shielded/actions?from_height=H&limit=N` returns the blocks from `H` with shielded actions, each with the actions in the order the chain appended their commitments and the size of the tree after the block. An action carries its nullifier, note commitment, ephemeral key, the first 52 bytes of the encrypted note, the 80-byte out ciphertext, the transaction hash and the leaf `position` its commitment took.
+- **Subtree roots.** `GET /v1/chain/query/orama.shielded.v1.Query/SubtreeRoots` returns the roots of the tree's filled 2^16-leaf subtrees, from subtree 0, with the block that filled each, in the shape of lightwalletd's `GetSubtreeRoots`; the chain keeps them in its state, so any node answers for every subtree. A wallet that keeps a shard tree needs the leaves only of the subtrees it has notes in. The index serves the same roots at `GET /v1/chain/index/shielded/subtree-roots?start_index=I&limit=N`, from the first subtree it saw filled.
+- **Frontier.** `GET /v1/chain/query/orama.shielded.v1.Query/TreeFrontier` returns the right edge of the tree, its size and its root; the root is the `current_root` of `TreeState` at the same height. The `frontier` bytes are empty for an empty tree and otherwise the position (a little-endian `u64`), the last leaf (32 bytes) and one ommer (32 bytes) for each set bit of the position, lowest level first, which is what a wallet needs to carry the tree on from there. `height` reads an earlier state, within the last 100 blocks.
+
+When a transaction's commitments fill a subtree, the chain stores the subtree's root in the module's state (the index, the root and the height that filled it), so the roots are part of the app hash, are exported and imported with the genesis, and a node's invariants check that it holds one for every filled subtree and no other. The same transaction emits a `shielded_subtree_complete` event (`index`, `root`), which the indexer stores and serves; the index and the chain hold the same roots for the blocks the index has seen. The index's roots begin at the first subtree it saw filled (`first_index` in its answer), and its actions are complete from the index's `start_height`, so a wallet that scans from birth needs an indexer that began at the chain's first block; the query has no such limit.
+
+Where each action's leaf is comes from events, not from state: every `shielded_bundle` event carries `tree_size_before`, the size of the note-commitment tree before the bundle's append, and `commitments`, how many it appended, so the bundle's commitments took the leaves `tree_size_before` to `tree_size_before + commitments - 1`. The indexer takes every position from these two and checks that each bundle begins where the last one ended; it never reads the tree state, so a node that pruned its state serves the same positions as one that kept it.
+
+## Not built
+
+The `CONTRACT` unshield path and its adapter, `DEPOSIT` unshields, vintage migration, multi-asset pools, shielded delegation tokens, per-peer admission limits in the mempool, a measured gas price, and a real two-node state-sync test of the nullifier database.
+
+## Known limit: admission budget
+
+A node verifies at most 256 bundles between two blocks when it admits transactions. A bundle that fails only its proof costs its sender nothing, so a stream of them can use up that budget, and honest bundles sent to the node meanwhile are answered "busy" until the next block. The answer is not a rejection: send the bundle again or to another node. It affects the node's mempool, never a block. The planned mitigations are per-peer rate limits at the sentry nodes and a budget measured on production hardware.
+
+## Queries
+
+`Params`, `TreeState`, `TreeFrontier`, `SubtreeRoots` and `NullifierSpent` are public. `Pools` and `Invariants` are withheld from the gateway.
+
+## What the chain shows
+
+A shielded transaction is public in these ways and no others (the [explorer](/docs/blockchain/reading-the-chain#public-and-private-transactions) shows exactly this):
+
+- **Every accepted bundle emits a `shielded_bundle` event** with its `kind` (`transfer`, `shield`, `shield_earnings` or `unshield`), its number of `actions` and its `amount`: the fee of a private transfer, the amount shielded, or the amount unshielded; and the size of the note-commitment tree before the bundle's append (`tree_size_before`) with the number of commitments it appended (`commitments`, equal to `actions`). A transaction the chain refuses emits none.
+- **A private transfer** has no signer, no receiver and no amount. Its fee, its action count, the size of its proof, its block and its time are public.
+- **A shield, a shield of earnings and an unshield** have a signer, because the signer's public balance, earnings or bond is on the other side. The signer and the amount are public; which notes an unshield spent and who owns the value inside the pool are not.
+- **The pool as a whole**: its module account's bank balance (the pool plus any unshields waiting in the queue), `TreeState` (the note commitments added to the tree, one per action of every accepted bundle, and the nullifiers recorded, one per action), and `Params`. The chain indexer lists the transactions whose events name the pool's account, which is every shield, shield of earnings and unshield and every private transfer (each burns its fee from the pool). The turnstile is a rule of the module, checked by its invariant, which the gateway withholds.
+
+An address's balance and its activity cover public funds only; value in the pool belongs to no address.

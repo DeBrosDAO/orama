@@ -1,0 +1,95 @@
+# cargo-deny policy for the Rust crates under chain/ (SA0, bugboard 3381).
+#
+# One policy for every crate: orchardffi, orchardverifier-bin, wallet, native (libwasmvm + the
+# Orchard library) and the test contracts under app/testdata. `make -C chain rust-deny` runs it
+# against each crate's own Cargo.lock; CI runs that target on every pull request.
+#
+# The crates are consensus code (a proof verifier, the CosmWasm VM) or sit next to it, so the
+# policy is strict where a mistake is silent: only crates.io, no git dependencies, no yanked
+# versions, no unlisted licences, and an advisory is either fixed or listed below with a reason and
+# the date it must be looked at again.
+
+[graph]
+# The targets oramad ships on, and the one developers build on.
+targets = [
+    "x86_64-unknown-linux-musl",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-apple-darwin",
+]
+
+[advisories]
+version = 2
+yanked = "deny"
+unmaintained = "workspace"
+# Every ignore names the crate, says why it is not exploitable here, and says what ends it.
+# `make -C chain rust-audit` ignores the same ids (RUST_AUDIT_IGNORE in ci.mk): change both.
+ignore = [
+    # --- chain/native: libwasmvm's dependency set, pinned by wasmvm v3.0.7's own Cargo.lock ---
+    # native/Cargo.lock is seeded from wasmvm's lock file (see native/build.sh), and the static
+    # library it builds is hash-pinned (native/libwasmvm_muslc.x86_64.a.sha256), so a dependency
+    # bump is a consensus-VM change that needs the owner's release decision, not a CI fix. The
+    # advisories below are in that lock file. Revisit when wasmvm is bumped.
+    { id = "RUSTSEC-2026-0007", reason = "bytes 1.10.1: overflow in BytesMut::reserve, reachable only with a size near usize::MAX. The only BytesMut use in the VM's tree is wasmer's WasmSlice::read_to_bytes, which calls with_capacity on a length bounded by 4 GiB of wasm memory; nothing calls reserve. Fixed in bytes 1.11.1; take it with the next wasmvm bump. (review-by 2027-01-12)" },
+    { id = "RUSTSEC-2026-0001", reason = "rkyv 0.8.10 (wasmer): UB in Arc/Rc from_value on out-of-memory. An OOM aborts the node process either way. Take the fix (rkyv 0.8.13+) with the next wasmvm bump. (review-by 2027-01-12)" },
+    { id = "RUSTSEC-2026-0233", reason = "rkyv 0.8.10 (wasmer): crafted archive gives use-after-free on deserialization. wasmer deserializes only the compiled-module cache that this same node wrote under its own home directory; no peer or transaction supplies an archive. Needs write access to the node's disk, which already ends the node's security. Fixed in rkyv 0.8.17; take it with the next wasmvm bump. (review-by 2027-01-12)" },
+    { id = "RUSTSEC-2026-0234", reason = "rkyv 0.8.10 (wasmer): insufficient archive validation, out-of-bounds read in hash containers. Same exposure as RUSTSEC-2026-0233: only the node's own module cache. Fixed in rkyv 0.8.17. (review-by 2027-01-12)" },
+    { id = "RUSTSEC-2026-0235", reason = "rkyv 0.8.10 (wasmer): insufficient archive validation, out-of-bounds read in Rc/Arc archives. Same exposure as RUSTSEC-2026-0233. Fixed in rkyv 0.8.17. (review-by 2027-01-12)" },
+    { id = "RUSTSEC-2026-0204", reason = "crossbeam-epoch 0.9.18: invalid pointer dereference in the Display impl of Atomic/Shared. Reached only through crossbeam-deque and rayon in the BLS12-381 precompiles of cosmwasm-crypto; crossbeam-deque never formats an epoch pointer. Fixed in 0.9.20. (review-by 2027-01-12)" },
+    { id = "RUSTSEC-2026-0009", reason = "time 0.3.41: stack exhaustion when parsing RFC 2822 input. libwasmvm enables only the formatting feature and uses it to print one RFC 3339 timestamp (libwasmvm/src/calls.rs); it parses nothing. Fixed in 0.3.47. (review-by 2027-01-12)" },
+    # The five below are in native/Cargo.lock but are build-dependencies of wasmer's build script
+    # (tar, and rustls with rustls-webpki through ureq): they run on the build machine and are not
+    # linked into the static library. `cargo tree -e normal -i <crate>` prints nothing for them.
+    { id = "RUSTSEC-2026-0067", reason = "tar 0.4.44: unpack_in can chmod directories through symlinks. Build-dependency of wasmer only; the library never unpacks an archive. (review-by 2027-01-12)" },
+    { id = "RUSTSEC-2026-0068", reason = "tar 0.4.44: PAX size header ignored. Same as RUSTSEC-2026-0067: build-dependency only. (review-by 2027-01-12)" },
+    { id = "RUSTSEC-2026-0285", reason = "rustls 0.23.28: TLS 1.3 handshake messages accepted across encryption levels. Build-dependency of wasmer (through ureq); not linked into the static library. (review-by 2027-01-12)" },
+    { id = "RUSTSEC-2026-0049", reason = "rustls-webpki 0.103.3: CRL distribution point matching. Build-dependency of wasmer (through ureq); not linked into the static library. (review-by 2027-01-12)" },
+    { id = "RUSTSEC-2026-0098", reason = "rustls-webpki 0.103.3: URI name constraints. Build-dependency of wasmer (through ureq); not linked into the static library. (review-by 2027-01-12)" },
+    { id = "RUSTSEC-2026-0099", reason = "rustls-webpki 0.103.3: wildcard name constraints. Build-dependency of wasmer (through ureq); not linked into the static library. (review-by 2027-01-12)" },
+    { id = "RUSTSEC-2026-0104", reason = "rustls-webpki 0.103.3: panic parsing a CRL. Build-dependency of wasmer (through ureq); not linked into the static library. (review-by 2027-01-12)" },
+]
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+# Permissive licences only. Anything copyleft (GPL, LGPL, AGPL, MPL on code we statically link) or
+# unlicensed needs a decision, not a default.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "CC0-1.0",
+    "Zlib",
+    # xxhash-rust (linked into the VM).
+    "BSL-1.0",
+    # webpki-roots, the CA list of wasmer's build script (a build-dependency, not linked).
+    "CDLA-Permissive-2.0",
+    # enum-iterator (linked into the VM).
+    "0BSD",
+]
+# MPL-2.0 is copyleft at file level: using the crates unmodified, as we do, asks nothing of us. It
+# is allowed for these crates only; a new MPL crate in any tree is a decision.
+exceptions = [
+    { allow = ["MPL-2.0"], crate = "dynasm" },
+    { allow = ["MPL-2.0"], crate = "dynasmrt" },
+    { allow = ["MPL-2.0"], crate = "cbindgen" },
+]
+# The repo's own crates are `publish = false` and carry no licence field.
+private = { ignore = true }
+
+[bans]
+# Two versions of one crate are usual in a tree this size; they are listed by `cargo deny` as
+# warnings so a new duplicate of a crypto crate is visible in the log.
+multiple-versions = "warn"
+# A path dependency inside the repo (native -> orchardffi) has no version requirement.
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

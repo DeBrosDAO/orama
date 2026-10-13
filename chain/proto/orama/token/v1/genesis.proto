@@ -1,0 +1,14 @@
+syntax = "proto3";
+package orama.token.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/token/types";
+
+import "gogoproto/gogo.proto";
+import "orama/token/v1/token.proto";
+
+// GenesisState is x/token's genesis state.
+message GenesisState {
+  Params params = 1 [(gogoproto.nullable) = false];
+  repeated Token tokens = 2 [(gogoproto.nullable) = false];
+  repeated FrozenAccount frozen_accounts = 3 [(gogoproto.nullable) = false];
+}

@@ -1,0 +1,61 @@
+direction: right
+
+local: "Local tier: needs only this machine" {
+  dd: "data-dir"
+  ll: "legacy-layout"
+  wg: "wireguard"
+  p2p: "libp2p"
+  pi: "peer-info"
+  mon: "monitoring"
+  ps: "pubsub"
+  icc: "ipfs-cluster-config"
+  st: "storage"
+  sw: "storage-watch\nHealth: three storage units active"
+  cd: "cluster-discovery"
+  rl: "rqlite-local\nHealth: LocalHealthy"
+  ns: "nameserver"
+  gw: "gateway"
+  es: "edge-serving\nvault, sni-router, caddy"
+  ea: "edge-aux\nntfy, tor"
+  wgs: "wireguard-sync"
+  iss: "ipfs-swarm-sync"
+}
+
+cluster: "Cluster tier: needs a raft quorum" {
+  rc: "rqlite-cluster\nHealth: LeaderReachable"
+  mr: "membership-record\nReconcile = Health"
+  mem: "membership"
+  dns: "dns-registration"
+}
+
+local.dd -> local.ll
+local.ll -> local.wg
+local.ll -> local.p2p
+local.wg -> local.p2p
+local.p2p -> local.pi
+local.p2p -> local.mon
+local.p2p -> local.ps
+local.ll -> local.icc
+local.ll -> local.st
+local.st -> local.sw
+local.p2p -> local.cd
+local.wg -> local.rl
+local.cd -> local.rl
+local.st -> local.rl
+local.rl -> local.ns
+local.rl -> local.gw
+local.st -> local.gw
+local.ps -> local.gw
+local.gw -> local.es
+local.es -> local.ea
+local.wg -> local.wgs
+local.rl -> local.wgs
+local.st -> local.iss
+local.rl -> local.iss
+local.rl -> cluster.rc
+cluster.rc -> cluster.mr
+cluster.rc -> cluster.mem
+cluster.rc -> cluster.dns
+local.gw -> cluster.dns
+local.ns -> cluster.dns
+local.es -> cluster.dns

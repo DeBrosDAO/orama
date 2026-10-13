@@ -1,0 +1,168 @@
+syntax = "proto3";
+package orama.power.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/power/types";
+
+import "gogoproto/gogo.proto";
+
+// Params are x/power's genesis-set parameters
+// (plans/open-network/track-c-chain.md C4). There is no Msg service: nothing
+// can change these after genesis short of a coordinated hard fork
+// (plans/open-network.md D18).
+message Params {
+  // min_committee_size is the minimum number of bootstrap committee members a
+  // genesis must declare. Production chain-ids (see Params.Validate) require
+  // at least 30; a devnet/stagenet/localnet chain-id may declare as few as 1
+  // for local testing.
+  uint64 min_committee_size = 1;
+  // bootstrap_exit_stake is the total bonded stake (norama, across every
+  // validator, not just the committee) at or above which lambda's
+  // stake-based term reaches 1.
+  string bootstrap_exit_stake = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  // bootstrap_deadline_epochs is the number of x/emission epochs after
+  // genesis at which lambda's time-based term reaches 1 regardless of bonded
+  // stake (plans/open-network.md D16: "~12 months"). x/power measures every
+  // time-based rule (this deadline, the cap hysteresis window, the
+  // new-validator ramp) in x/emission epochs, not calendar days, so they
+  // scale consistently with whatever epoch length a chain is configured
+  // with (see docs/whitepaper/technical-reference/vol2/39-chain-architecture.md).
+  uint64 bootstrap_deadline_epochs = 3;
+  // cap_fraction_normal is the per-validator capped-stake-share ceiling while
+  // at most cap_step_down_validator_count validators are active (5% at
+  // genesis defaults).
+  string cap_fraction_normal = 4 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+  // cap_fraction_reduced is the per-validator capped-stake-share ceiling once
+  // more than cap_step_down_validator_count validators are active (3% at
+  // genesis defaults).
+  string cap_fraction_reduced = 5 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+  // cap_step_down_validator_count is the active-validator count above which
+  // the cap steps down from cap_fraction_normal to cap_fraction_reduced.
+  uint64 cap_step_down_validator_count = 6;
+  // cap_step_up_validator_count is the active-validator count that must be
+  // stayed under, for cap_hysteresis_epochs consecutive epochs, before a
+  // reduced cap steps back up to cap_fraction_normal.
+  uint64 cap_step_up_validator_count = 7;
+  // cap_hysteresis_epochs is the number of consecutive epochs the active
+  // count must stay below cap_step_up_validator_count before the cap steps
+  // back up.
+  uint64 cap_hysteresis_epochs = 8;
+  // ramp_epochs is the number of epochs over which a newly active
+  // validator's capped stake share ramps linearly from 0 to its full value.
+  uint64 ramp_epochs = 9;
+  // force_bond_fraction is the fraction of each bootstrap committee member's
+  // reward that is force-bonded (self-bonded) rather than credited to
+  // earnings, until their self-bond reaches self_bond_cap_multiplier *
+  // min_self_bond.
+  string force_bond_fraction = 10 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+  // self_bond_cap_multiplier bounds force-bonding: once a committee member's
+  // self-bond reaches self_bond_cap_multiplier * min_self_bond, force-bonding
+  // stops and the full reward is credited to earnings.
+  string self_bond_cap_multiplier = 11 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+  // min_self_bond is the minimum self-bond (norama) x/power expects of a
+  // committee member before force-bonding is considered satisfied at 1x; see
+  // self_bond_cap_multiplier.
+  string min_self_bond = 12 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  // useful_work_multiplier is M from plans/open-network/track-c-chain.md C4:
+  // coded at 1.0 and bounded to [0.75, 1.25] once activated. No Msg service
+  // exists to change useful_work_multiplier or
+  // useful_work_multiplier_activated: activating M is reserved for a future
+  // x/houses structural vote (C5), which does not exist yet, so in this
+  // release it can only ever be set (to a value satisfying Validate) at
+  // genesis.
+  string useful_work_multiplier = 13 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+  // useful_work_multiplier_activated gates whether useful_work_multiplier is
+  // applied at all. False means M behaves as exactly 1.0 regardless of the
+  // stored value.
+  bool useful_work_multiplier_activated = 14;
+  // comet_power_scale is the fixed-point scale used to map a validator's
+  // power share (a fraction of 1) to a CometBFT integer voting power:
+  // comet_power = floor(share * comet_power_scale), floored up to 1 for any
+  // strictly positive share (see keeper.PowerToCometBFT). Bounded by
+  // Validate so that even every validator at once can never sum past
+  // CometBFT's own MaxTotalVotingPower.
+  int64 comet_power_scale = 15;
+  // max_redistribution_multiplier bounds ComputeCappedShares' water-filling
+  // redistribution: no validator's capped share may exceed
+  // max_redistribution_multiplier times its own raw stake share, however much
+  // spare capacity the cap leaves. This closes the "dust validator" attack
+  // where many identities holding a token stake each would otherwise be
+  // redistributed up to the full per-validator cap - the same absolute
+  // ceiling a single large validator gets - by simply existing as separate
+  // identities (security review H3). Mass the multiplier bound leaves
+  // unallocated is not redistributed further; RunEndBlock/DistributeEpochRewards
+  // normalize by the sum of all assigned power shares rather than assuming
+  // they sum to exactly 1 (see Keeper.normalizedShares).
+  string max_redistribution_multiplier = 16 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+  // pre_gate_lambda_cap bounds lambda while the handover safety gate is not
+  // yet satisfied (security review H3a): until the number of real,
+  // stake-indexed bonded validators has reached at least
+  // 2*ceil(1/current_cap_fraction) at least once, lambda is held at or below
+  // this value regardless of bonded stake or the bootstrap deadline - a
+  // small, Sybil-cheap validator set can never assume full control of
+  // consensus power just because the deadline elapsed. Once the gate has
+  // been satisfied once (GateSatisfied, a one-way ratchet - see
+  // Keeper.advanceEpochIfNeeded), lambda is governed by ComputeLambda alone
+  // and can reach exactly 1.
+  string pre_gate_lambda_cap = 17 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+  // min_delegation_for_rewards is the smallest delegation x/staking's
+  // MsgDelegate/MsgCreateValidator will accept (enforced by an ante
+  // decorator, power/ante.MinDelegationDecorator), a documented stopgap
+  // against DistributeEpochRewards' O(delegations-per-validator) reward loop
+  // (security review M2): bounding how many delegations can exist bounds the
+  // work redistribution does each epoch. A full O(1)-per-block F1-style
+  // rewards accumulator is future work.
+  string min_delegation_for_rewards = 18 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+}
+
+// BootstrapMember is one genesis bootstrap committee seat
+// (plans/open-network.md D16). Membership is set once, at genesis, and never
+// changes by message - only a coordinated hard fork can add or remove a seat.
+message BootstrapMember {
+  // operator_address is the bech32 orama account address that owns this
+  // seat: it receives the seat's equal bootstrap share and its earnings, and
+  // it is the delegator address used for force-bonding
+  // (Keeper.creditCommitteeReward). It does not have to correspond to an
+  // account with a staking validator record before genesis: x/power's
+  // InitGenesis creates one directly, at zero self-bond, for every
+  // committee member.
+  string operator_address = 1;
+  // moniker is a human-readable label carried through only for genesis
+  // tooling and queries.
+  string moniker = 2;
+  // consensus_pubkey is the raw 32-byte ed25519 CometBFT consensus public
+  // key for this seat. x/power only supports ed25519 consensus keys for
+  // bootstrap members (the same default CometBFT and this chain's stock
+  // x/staking already use), so no interface-registry Any-packing is needed
+  // for this genesis-only field.
+  bytes consensus_pubkey = 3;
+}

@@ -49,7 +49,36 @@ import (
 
 	"github.com/DeBrosOfficial/network/migrations"
 	"github.com/DeBrosOfficial/network/pkg/httputil"
+	"github.com/DeBrosOfficial/network/pkg/logging"
+	"github.com/DeBrosOfficial/network/pkg/rqlite"
+	"go.uber.org/zap"
 )
+
+// mainMigrationsTracker is the table the cluster (index) gateway's database
+// records applied core migrations in.
+const mainMigrationsTracker = "schema_migrations"
+
+// migrationsTracker is the table this gateway's database records core's
+// applied migrations in. A namespace gateway's RQLite is also the tenant's own
+// database, so core records there under an isolated tracker and leaves
+// "schema_migrations" to the tenant (pkg/rqlite/namespace_migrations.go).
+func (g *Gateway) migrationsTracker() string {
+	if isNamespaceGateway(g.cfg) {
+		return rqlite.NamespaceMigrationsTracker()
+	}
+	return mainMigrationsTracker
+}
+
+// pendingAbove lists the embedded migrations newer than applied.
+func pendingAbove(applied int) []migrations.MigrationInfo {
+	var out []migrations.MigrationInfo
+	for _, m := range migrations.All() {
+		if m.Version > applied {
+			out = append(out, m)
+		}
+	}
+	return out
+}
 
 // schemaStatusResponse is the canonical wire shape. Exported tag-only
 // fields so other Go callers (tests, dashboards) can consume the same shape.
@@ -86,18 +115,22 @@ func (g *Gateway) handleSchemaStatus(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	required := migrations.RequiredVersion()
-	applied, err := migrations.AppliedVersion(ctx, g.sqlDB)
+	applied, err := rqlite.AppliedVersionFromTracker(ctx, g.sqlDB, g.migrationsTracker())
 	if err != nil {
+		g.logger.ComponentWarn(logging.ComponentGeneral, "schema status: reading the applied version failed",
+			zap.Error(err))
+		if code := rqlite.ClassifyBatchError(err); code == rqlite.BatchCodeUnavailable || code == rqlite.BatchCodeDeadlineExceeded {
+			httputil.WriteRPCError(w, http.StatusServiceUnavailable, httputil.ErrCodeServiceUnavailable,
+				"schema status unavailable: the database is not answering right now; retry shortly",
+				httputil.WithRetryable())
+			return
+		}
 		httputil.WriteRPCError(w, http.StatusInternalServerError,
-			httputil.ErrCodeInternal, "failed to read applied schema version: "+err.Error())
+			httputil.ErrCodeInternal, "failed to read applied schema version")
 		return
 	}
 
-	pending, err := migrations.PendingMigrations(ctx, g.sqlDB)
-	if err != nil {
-		// Non-fatal: applied/required are still useful even if pending fetch fails.
-		pending = nil
-	}
+	pending := pendingAbove(applied)
 
 	items := make([]schemaPendingItem, 0, len(pending))
 	for _, p := range pending {

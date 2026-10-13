@@ -1,0 +1,43 @@
+direction: right
+
+guest: "Guest: one wazero module instance" {
+  mem: "linear memory\ncapped at the function's memory limit\n(runtime cap 256 MB)"
+  code: "TinyGo code\n_start, or handle, or ws_open / ws_frame / ws_close"
+  alloc: "orama_alloc or malloc\n(host writes results through it)"
+}
+
+wasi: "WASI preview1 (wazero, proc_exit overridden)" {
+  io: "stdin = input bytes\nstdout, stderr = host buffers"
+  clk: "wall + monotonic clock\nhost time"
+  rnd: "random_get\nhost CSPRNG"
+  args: "argv[0] = function name"
+  none: "no filesystem, no environment,\nno sockets"
+}
+
+hostmods: "Host modules: env = host = orama" {
+  fns: "48 exports, pointer/length ABI"
+}
+
+ctx: "Per-invocation context (Go ctx)" {
+  inv: "InvocationContext\nnamespace, caller, device, claims, env"
+  buf: "LogBuffer, publish counter,\nwebrtc counter, raw-HTTP collector"
+}
+
+svc: "HostServices (shared, no per-invocation state)" {
+  db: "namespace database"
+  cache: "namespace cache map"
+  net: "guarded HTTP client / Tor client"
+  bus: "pub/sub, WS manager, push, TURN, SFU control"
+}
+
+guest.code -> wasi.io
+guest.code -> wasi.clk
+guest.code -> wasi.rnd
+guest.code -> hostmods.fns: "i32 / i64 calls"
+hostmods.fns -> ctx.inv: "namespace and identity from here only"
+hostmods.fns -> svc.db
+hostmods.fns -> svc.cache
+hostmods.fns -> svc.net
+hostmods.fns -> svc.bus
+refused: "refused at dial:\nloopback, private, CGNAT,\nlink-local, multicast, wrapped IPv4"
+svc.net -> refused

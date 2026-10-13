@@ -1,0 +1,33 @@
+direction: down
+
+pol: "Policy of the matched route\n(Access, Domain:Action, Ownership, Token,\nNarrowedByGrant, MainGateway, RequestLog)"
+
+auth: "authMiddleware" {
+  a1: "valid signed hop with a namespace?\ntrust it (must equal this gateway's namespace)"
+  a2: "else JWT, then API key"
+  a3: "no credential: 401 AUTH_MISSING\nunless Access is Open or HandlerAuth"
+  a1 -> a2 -> a3
+}
+
+authz: "authorizationMiddleware" {
+  z1: "Open / HandlerAuth: pass\n(NarrowedByGrant: resolve and narrow)"
+  z2: "cluster gateway + /v1/rqlite:\ncaller must be an operator"
+  z3: "ns-NAME host on index: credential namespace == NAME"
+  z4: "signed hop and no grant needed: pass"
+  z4b: "namespace gateway: credential namespace == own\nelse 403 NAMESPACE_MISMATCH"
+  z5: "Ownership: live grant in namespace\nelse 403 OWNERSHIP_REQUIRED"
+  z1 -> z2 -> z3 -> z4 -> z4b -> z5
+}
+
+scope: "scopeMiddleware" {
+  s1: "Permissions from grant, key row or defaults"
+  s2: "Domain:Action not permitted:\n403 INSUFFICIENT_SCOPE"
+  s3: "Token requirement not met:\n401 USER_JWT_REQUIRED"
+  s1 -> s2 -> s3
+}
+
+pol -> auth
+auth -> authz
+authz -> scope
+scope -> h: "handler"
+h: "Handler"

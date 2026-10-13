@@ -1,0 +1,24 @@
+shape: sequence_diagram
+
+op: "operator (root)"
+cli: "orama global start"
+lc: "globalnode.Lifecycle"
+host: "globalnode.Host"
+sd: "systemd"
+chain: "orama-global-chain"
+rpc: "chain RPC /status"
+other: "other global units"
+
+op -> cli
+cli -> host: "warnIfMigratedAway (warning only)"
+cli -> lc: "Start(services)"
+lc -> lc: "Installed(): unit files in /etc/systemd/system, in GlobalServiceOrder"
+lc -> host: "CheckSignFloor()"
+host -> lc: "refuse, or pass"
+lc -> sd: "enable, then start orama-global-chain.service"
+sd -> host: "ExecStartPre (root): orama global validator check-sign-floor"
+sd -> chain: "cosmovisor run start ..."
+lc -> rpc: "GET /status every 2 s (2 s probe timeout), at most 5 min"
+rpc -> lc: "200"
+lc -> sd: "start each remaining unit in order, then its companions (timers, tx gate)"
+sd -> other: "ipfs, provider, archiver, indexer, repair, dirauth, relay, onion"

@@ -1,0 +1,12 @@
+# Every third-party action in .github/workflows is pinned by full commit SHA with a "# vX.Y.Z" comment.
+# Dependabot opens the weekly pull request that moves a pin to the newest release and keeps the comment.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "ci"
+    labels:
+      - dependencies

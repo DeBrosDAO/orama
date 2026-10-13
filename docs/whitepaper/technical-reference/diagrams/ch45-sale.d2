@@ -1,0 +1,23 @@
+shape: sequence_diagram
+
+s: "seller"
+b: "buyer"
+m: "x/market"
+c: "x/cnft"
+bank: "x/bank"
+f: "x/fees earnings"
+
+s -> m: "MsgList(tree, leaf, proof, price)"
+m -> c: "ProveOwned(leaf, proof, seller)"
+m -> c: "CollectionRoyalty(collection)"
+m -> m: "store Listing with royalty creator and bps; index asset_id"
+b -> m: "MsgBid(listing, amount)"
+m -> bank: "escrow amount: buyer to module 'market'"
+b -> m: "MsgSettle(listing, bid_id = 0, leaf, proof): buy now"
+m -> c: "ProveOwned(leaf, proof, seller)"
+m -> bank: "buyer to module 'market': price"
+m -> bank: "refund every other bid on the listing"
+m -> c: "TransferForSale(seller to buyer): new leaf, delegate cleared, nonce + 1"
+m -> f: "CreditEarnings(creator, price x bps / 10000)"
+m -> f: "CreditEarnings(seller, price minus royalty)"
+m -> m: "delete listing and index"

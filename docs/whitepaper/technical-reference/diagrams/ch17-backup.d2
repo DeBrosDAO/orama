@@ -1,0 +1,18 @@
+shape: sequence_diagram
+
+o: "owner's machine\norama namespace backup"
+g: "namespace gateway\nbackup.Handler"
+r: "namespace RQLite"
+y: "cluster registry"
+
+o -> g: "POST /v1/namespace/backup\n{public_key} (X25519, 64 hex)"
+g -> g: "namespace matches, grant is owner"
+g -> g: "take the transfer slot (else 429)"
+g -> r: "GET /db/backup (cap 256 MiB)"
+r -> g: "SQLite file"
+g -> r: "ipfs_content_ownership pinned CIDs,\nstored bytes, secret columns"
+g -> y: "deployments content_cid, build_cid"
+g -> g: "decrypt each secret under the\ncluster encryption root"
+g -> g: "ORNP frame: header JSON\n(sha256, size) + raw SQLite"
+g -> g: "ORBK: SealAnonymous to the\nowner's public key"
+g -> o: "200 application/octet-stream\n(audit: counts only)"

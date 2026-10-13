@@ -1,0 +1,305 @@
+{
+  "run_id": "e2e-ab12",
+  "commit": "0123456789abcdef",
+  "verdict": "FAIL",
+  "verdict_reasons": [
+    "2 test(s) failed (1 flaky: a re-run pass does not clear a failure)",
+    "feature broken: the package itself failed (build error, TestMain exit or timeout)",
+    "package: feature auth-siwe (stage 3): go test exited 1",
+    "package: feature broken (stage 3): go test exited 1",
+    "run: teardown: 1 server left, swept by label",
+    "feature kill-voter produced no result",
+    "2 test(s) or feature(s) not covered (skipped or never ran)"
+  ],
+  "totals": {
+    "features": 4,
+    "tests": 4,
+    "passed": 1,
+    "failed": 2,
+    "not_covered": 2,
+    "flaky": 1
+  },
+  "features": [
+    {
+      "id": "smoke",
+      "title": "Smoke",
+      "area": "platform",
+      "stage": 1,
+      "destructive": false,
+      "status": "pass",
+      "tests": [
+        {
+          "name": "TestHealth_ok",
+          "status": "pass",
+          "elapsed": 0.4
+        }
+      ]
+    },
+    {
+      "id": "auth-siwe",
+      "title": "SIWE sign-in",
+      "area": "auth",
+      "stage": 3,
+      "destructive": false,
+      "status": "fail",
+      "tests": [
+        {
+          "name": "TestVerify_replay",
+          "status": "fail",
+          "elapsed": 2,
+          "flakiness": "flaky"
+        },
+        {
+          "name": "TestVerify_devices",
+          "status": "fail",
+          "elapsed": 3,
+          "flakiness": "unknown"
+        },
+        {
+          "name": "TestVerify_devices/es256",
+          "status": "fail",
+          "elapsed": 1,
+          "flakiness": "deterministic"
+        },
+        {
+          "name": "TestVerify_solana",
+          "status": "skip",
+          "elapsed": 0,
+          "reason": "not applicable: SIWS disabled on this cluster"
+        }
+      ]
+    },
+    {
+      "id": "broken",
+      "title": "Broken package",
+      "area": "auth",
+      "stage": 3,
+      "destructive": false,
+      "status": "fail",
+      "tests": null,
+      "package_output": "features/broken/x_test.go:3:1: syntax error\n"
+    },
+    {
+      "id": "kill-voter",
+      "title": "Kill a voter",
+      "area": "ops",
+      "stage": 9,
+      "destructive": true,
+      "status": "missing",
+      "tests": null
+    }
+  ],
+  "failures": [
+    {
+      "feature": "auth-siwe",
+      "area": "auth",
+      "test": "TestVerify_devices/es256",
+      "output": "    device_test.go:9: DER refused\n",
+      "flakiness": "deterministic",
+      "subtasks": [
+        2830
+      ],
+      "evidence": [
+        {
+          "kind": "cli",
+          "feature": "auth-siwe",
+          "test": "TestVerify_devices/es256",
+          "seq": 2,
+          "summary": "orama auth login",
+          "status": 1,
+          "duration_ms": 0,
+          "output": "\u003crefused\u003e"
+        }
+      ]
+    },
+    {
+      "feature": "auth-siwe",
+      "area": "auth",
+      "test": "TestVerify_replay",
+      "output": "    verify_test.go:40: want 401, got 200\n",
+      "flakiness": "flaky",
+      "subtasks": [
+        2830
+      ],
+      "evidence": [
+        {
+          "kind": "http",
+          "feature": "auth-siwe",
+          "test": "TestVerify_replay",
+          "seq": 1,
+          "summary": "POST https://e2e/v1/auth/verify",
+          "status": 200,
+          "duration_ms": 0,
+          "input": "{\"message\":\"m\"}",
+          "output": "{\"access_token\":\"[REDACTED]\"}"
+        }
+      ]
+    },
+    {
+      "feature": "broken",
+      "area": "auth",
+      "test": "(package)",
+      "output": "features/broken/x_test.go:3:1: syntax error\n",
+      "flakiness": "unknown",
+      "evidence": null
+    }
+  ],
+  "bugs_by_area": [
+    {
+      "area": "auth",
+      "failures": [
+        {
+          "feature": "auth-siwe",
+          "area": "auth",
+          "test": "TestVerify_devices/es256",
+          "output": "    device_test.go:9: DER refused\n",
+          "flakiness": "deterministic",
+          "subtasks": [
+            2830
+          ],
+          "evidence": [
+            {
+              "kind": "cli",
+              "feature": "auth-siwe",
+              "test": "TestVerify_devices/es256",
+              "seq": 2,
+              "summary": "orama auth login",
+              "status": 1,
+              "duration_ms": 0,
+              "output": "\u003crefused\u003e"
+            }
+          ]
+        },
+        {
+          "feature": "auth-siwe",
+          "area": "auth",
+          "test": "TestVerify_replay",
+          "output": "    verify_test.go:40: want 401, got 200\n",
+          "flakiness": "flaky",
+          "subtasks": [
+            2830
+          ],
+          "evidence": [
+            {
+              "kind": "http",
+              "feature": "auth-siwe",
+              "test": "TestVerify_replay",
+              "seq": 1,
+              "summary": "POST https://e2e/v1/auth/verify",
+              "status": 200,
+              "duration_ms": 0,
+              "input": "{\"message\":\"m\"}",
+              "output": "{\"access_token\":\"[REDACTED]\"}"
+            }
+          ]
+        },
+        {
+          "feature": "broken",
+          "area": "auth",
+          "test": "(package)",
+          "output": "features/broken/x_test.go:3:1: syntax error\n",
+          "flakiness": "unknown",
+          "evidence": null
+        }
+      ]
+    }
+  ],
+  "worked": [
+    "smoke: Smoke"
+  ],
+  "timeline": [
+    {
+      "id": 1,
+      "name": "bootstrap",
+      "start": "2026-09-29T10:00:00Z",
+      "end": "2026-09-29T10:01:30Z",
+      "seconds": 90,
+      "features": [
+        "smoke"
+      ],
+      "failed": false
+    },
+    {
+      "id": 3,
+      "name": "auth",
+      "start": "2026-09-29T10:02:00Z",
+      "end": "2026-09-29T10:05:00Z",
+      "seconds": 180,
+      "features": [
+        "auth-siwe",
+        "broken"
+      ],
+      "failed": true
+    }
+  ],
+  "coverage": {
+    "rows": [
+      {
+        "id": "cli:orama node remove",
+        "kind": "cli",
+        "source": "",
+        "status": "covered",
+        "features": [
+          "kill-voter"
+        ]
+      },
+      {
+        "id": "route:/health",
+        "kind": "route",
+        "source": "",
+        "status": "covered",
+        "features": [
+          "smoke"
+        ]
+      },
+      {
+        "id": "route:/v1/auth/logout",
+        "kind": "route",
+        "source": "",
+        "status": "covered",
+        "features": [
+          "broken"
+        ]
+      },
+      {
+        "id": "route:/v1/auth/verify",
+        "kind": "route",
+        "source": "",
+        "status": "covered",
+        "features": [
+          "auth-siwe"
+        ]
+      },
+      {
+        "id": "route:/v1/x",
+        "kind": "route",
+        "source": "",
+        "status": "waived",
+        "waiver": {
+          "id": "route:/v1/x",
+          "reason": "needs RootWallet orama-tx",
+          "trigger": "task 2857"
+        }
+      }
+    ],
+    "uncovered": null,
+    "stale_waivers": null,
+    "invalid_waivers": null,
+    "unknown_covers": null,
+    "claims": {},
+    "config": {}
+  },
+  "failed_artifacts": [
+    {
+      "path": "nodes/node-2/wireguard.txt",
+      "source": "node-2",
+      "command": "wg show all",
+      "bytes": 0,
+      "error": "ssh: handshake failed"
+    }
+  ],
+  "run_errors": [
+    "teardown: 1 server left, swept by label"
+  ],
+  "notification": "Orama e2e e2e-ab12 @ 0123456789ab: FAIL — 1 passed, 2 failed (1 flaky), 2 not covered; 4 tests in 4 features; bugs: auth(3)"
+}

@@ -69,9 +69,9 @@ func TestUpdateInvocationContext_concurrentSwapsAndReads(t *testing.T) {
 	i := &Instance{invCtx: a}
 
 	const (
-		readers     = 16
-		writes      = 100
-		readsPerW   = 50
+		readers   = 16
+		writes    = 100
+		readsPerW = 50
 	)
 	var wg sync.WaitGroup
 

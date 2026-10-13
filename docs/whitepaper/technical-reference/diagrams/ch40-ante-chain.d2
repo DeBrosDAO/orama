@@ -1,0 +1,28 @@
+direction: right
+
+in: "tx"
+route: "shieldedante.Route:\nsigner-less shielded transfer\ntakes its own short chain"
+chain: "ordinary ante chain, in order" {
+  d1: "1 SetUpContext"
+  d2: "2 ExtensionOptions"
+  d3: "3 ValidateBasic"
+  d4: "4 shielded ShapeDecorator"
+  d5: "5 UploadSunset"
+  d6: "6 ContractSend"
+  d7: "7 DepositPayer"
+  d8: "8 TxTimeoutHeight"
+  d9: "9 ValidateMemo"
+  d10: "10 ConsumeGasForTxSize"
+  d11: "11 x/fees FeeDecorator\n(replaces DeductFee)"
+  d12: "12 UndelegateGuard"
+  d13: "13 MinDelegation"
+  d14: "14 SetPubKey"
+  d15: "15 ValidateSigCount"
+  d16: "16 SigGasConsume"
+  d17: "17 SigVerification"
+  d18: "18 shielded ProofDecorator"
+  d19: "19 IncrementSequence"
+  d1 -> d2 -> d3 -> d4 -> d5 -> d6 -> d7 -> d8 -> d9 -> d10 -> d11 -> d12 -> d13 -> d14 -> d15 -> d16 -> d17 -> d18 -> d19
+}
+in -> route
+route -> chain: "everything else"

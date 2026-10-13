@@ -1,5 +1,14 @@
 export interface PubSubMessage {
+  /**
+   * The payload decoded as UTF-8 text.
+   *
+   * Lossy for a payload that is not text: bytes that do not form valid UTF-8
+   * are replaced with U+FFFD. `publish` accepts a `Uint8Array`, so a binary
+   * message could be sent and never read back — use `bytes` for those.
+   */
   data: string;
+  /** The payload exactly as it was published. */
+  bytes: Uint8Array;
   topic: string;
   timestamp: number;
 }

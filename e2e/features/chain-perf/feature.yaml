@@ -1,0 +1,34 @@
+# Chain performance baselines of the release (bugboard BM6), recorded as
+# evidence in the run's artifact dir (chain-perf/baseline.json, one file per
+# metric, run.json for the shape of the run): the interval between blocks over
+# 40 blocks, the time a public transfer takes from broadcast to its block (p50,
+# p95, p99 over 30 transfers, one at a time) and the CheckTx rate of one node
+# (200 transfers broadcast back to back over one connection). The
+# transaction timings run on the node against its loopback RPC, so they
+# measure the chain, not the path from the runner. Each metric has a generous
+# upper bound; with E2E_CHAIN_BASELINE_FILE (a previous run's
+# chain-perf/baseline.json) a p95 or throughput more than
+# E2E_PERF_REGRESSION_PCT percent (default 25) worse fails, through the same
+# comparison code the perf package uses (features/internal/perfbase). The test
+# also reads timeout_commit from the node's config.toml and fails unless it is
+# the 5s the documentation gives as the block interval. The payer is a key the
+# faucet funds; its transfers are signed ahead with consecutive sequences, so
+# the package is destructive: it runs alone, after the stage's other packages,
+# because a baseline measured next to other load is noise. The numbers are the
+# owner's run; the documentation holds none (website/src/docs/contributor/performance.mdx).
+id: chain-perf
+title: Chain performance baselines per release
+area: quality
+subtasks: [3372]
+stage: 9
+destructive: true
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: true
+covers:
+  config:
+    - "config.toml:consensus.timeout_commit"
+  claims:
+    - "website/src/docs/contributor/performance.mdx: chain-perf measures the block interval, the inclusion latency of a public transfer and the CheckTx rate, and compares them with the previous baseline through the perf comparison code"
+    - "docs/whitepaper/technical-reference/vol2/39-chain-architecture.md#block-interval-and-measured-performance: oramad init writes timeout_commit 5s, so blocks come about every 5 s, and the installer does not change it"

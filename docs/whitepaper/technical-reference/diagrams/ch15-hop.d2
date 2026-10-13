@@ -1,0 +1,19 @@
+shape: sequence_diagram
+
+cl: "client"
+ca: "Caddy"
+ix: "index gateway"
+ns: "namespace gateway (ns-name)"
+
+cl -> ca: "HTTPS with credential"
+ca -> ix: "reverse_proxy, strips six X-Internal-Auth headers"
+ix -> ix: "internalAuthMiddleware: delete any X-Internal-Auth-* without a valid MAC"
+ix -> ix: "authenticate credential, resolve namespace"
+ix -> ix: "stripInboundInternalAuthHeaders, then set Validated, Namespace, JWT-Sub,\nJWT-Custom, Scopes, JWT-Exp/Iat/Jti, JWT-Did/Sid"
+ix -> ix: "sign MAC v1, v2, v3 with HKDF(secret, internal-auth-hop)"
+ix -> ns: "proxy over the overlay with headers and three MACs"
+ns -> ns: "newest MAC present is the only one checked, |skew| at most 60 s"
+ns -> ns: "valid: delete fields newer than that version, delete MACs\ninvalid: delete every X-Internal-Auth header"
+ns -> ix: "response"
+ix -> ca: "response"
+ca -> cl: "response"

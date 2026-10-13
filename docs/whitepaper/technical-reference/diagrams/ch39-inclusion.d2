@@ -1,0 +1,17 @@
+shape: sequence_diagram
+
+mem: "mempool + seen-set"
+val: "every validator"
+prop: "proposer"
+bft: "CometBFT"
+app: "oramad app"
+
+mem -> val: "CheckTx accepted and first seen 10 s ago or more"
+val -> val: "ExtendVote: SelectList through a scratch ante run\nat most 32 KiB, 32 KiB per sender"
+val -> bft: "precommit with the list as vote extension"
+bft -> app: "VerifyVoteExtension: decode and ValidateList, else REJECT"
+bft -> prop: "extended commit of height - 1"
+prop -> prop: "PrepareProposal: ValidateVoteExtensions,\n2/3 power of valid lists,\nwalk in byte order: Verify, then Admit"
+prop -> bft: "block: injected commit, required prefix, default selection"
+bft -> app: "ProcessProposal: re-run the same walk,\nreject if a valid listed tx is missing or out of order"
+app -> app: "FinalizeBlock: strip injected commit, run the rest"

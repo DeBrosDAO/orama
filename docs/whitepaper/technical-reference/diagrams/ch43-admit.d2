@@ -1,0 +1,28 @@
+direction: down
+
+start: "bundle bytes + message kind" 
+parse: "bundle.Parse\ncanonical framing, proof length"
+actions: "actions at most max_actions_per_bundle?" {shape: diamond}
+value: "checkValue\nsign of value balance, fee floor of a transfer" 
+nf: "checkNullifiers\nno repeat, not in database, not pending"
+anchor: "checkAnchor\nempty-tree root or a root inside the window"
+mode: "verifyProof?" {shape: diamond}
+proof: "Verify: charge action_gas x actions,\nthen verify.Check"
+done: "Admitted"
+refuse: "refused, no state changed"
+
+start -> parse
+parse -> actions: "ok"
+parse -> refuse: "malformed"
+actions -> value: "yes"
+actions -> refuse: "no"
+value -> nf: "ok"
+value -> refuse: "wrong sign, fee too low"
+nf -> anchor: "ok"
+nf -> refuse: "repeated, spent or pending"
+anchor -> mode: "ok"
+anchor -> refuse: "unknown or expired"
+mode -> proof: "message server, CheckTx"
+mode -> done: "block ante, ReCheckTx"
+proof -> done: "all verifiers accept"
+proof -> refuse: "any rejection or fault"

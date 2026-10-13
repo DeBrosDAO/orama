@@ -1,0 +1,221 @@
+package clusterreg
+
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+)
+
+const (
+	submitTimeout = 10 * time.Second
+	submitLimit   = 1 << 20
+)
+
+// Account is the on-chain base account a registration is signed as.
+type Account struct {
+	Number   uint64
+	Sequence uint64
+	// PubKey is set when the chain has seen this account sign. Nil when it has not.
+	PubKey []byte
+}
+
+// FetchAccount reads account number, sequence, and pubkey from the Cosmos
+// REST API. base is the API root, for example http://127.0.0.1:31003.
+func FetchAccount(ctx context.Context, base, address string) (Account, error) {
+	var acct Account
+	body, err := getJSON(ctx, strings.TrimRight(base, "/")+"/cosmos/auth/v1beta1/accounts/"+address)
+	if err != nil {
+		return acct, err
+	}
+	var resp struct {
+		Account struct {
+			AccountNumber string `json:"account_number"`
+			Sequence      string `json:"sequence"`
+			PubKey        *struct {
+				Key string `json:"key"`
+			} `json:"pub_key"`
+		} `json:"account"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return acct, fmt.Errorf("account response is not JSON")
+	}
+	n, err := parseUint(resp.Account.AccountNumber)
+	if err != nil {
+		return acct, fmt.Errorf("account_number: %w", err)
+	}
+	seq, err := parseUint(resp.Account.Sequence)
+	if err != nil {
+		return acct, fmt.Errorf("sequence: %w", err)
+	}
+	acct.Number = n
+	acct.Sequence = seq
+	if resp.Account.PubKey != nil && resp.Account.PubKey.Key != "" {
+		pub, err := base64.StdEncoding.DecodeString(resp.Account.PubKey.Key)
+		if err != nil || len(pub) != 33 {
+			return acct, fmt.Errorf("account pubkey is not a 33-byte key")
+		}
+		acct.PubKey = pub
+	}
+	return acct, nil
+}
+
+// ErrBroadcastRejected is wrapped by the error Broadcast returns when the node answered and refused the
+// transaction (CheckTx failed): it is not in the mempool.
+var ErrBroadcastRejected = errors.New("broadcast rejected the tx")
+
+// NotSent reports whether err from Broadcast says for certain that the node did not take the
+// transaction: it refused it (ErrBroadcastRejected), or answered a client error. Any other failure
+// (a timeout, a reset connection, an answer that cannot be read, a server error) leaves it unknown,
+// since the node may have admitted the transaction before the answer was lost.
+func NotSent(err error) bool {
+	var status *StatusError
+	return errors.Is(err, ErrBroadcastRejected) || (errors.As(err, &status) && status.Code >= 400 && status.Code < 500)
+}
+
+// Broadcast posts a signed tx and returns its hash. A non-zero code is an error.
+func Broadcast(ctx context.Context, base string, tx []byte) (string, error) {
+	payload, err := json.Marshal(map[string]string{
+		"tx_bytes": base64.StdEncoding.EncodeToString(tx),
+		"mode":     "BROADCAST_MODE_SYNC",
+	})
+	if err != nil {
+		return "", err
+	}
+	body, err := postJSON(ctx, strings.TrimRight(base, "/")+"/cosmos/tx/v1beta1/txs", payload)
+	if err != nil {
+		return "", err
+	}
+	var resp struct {
+		TxResponse struct {
+			Code   uint32 `json:"code"`
+			TxHash string `json:"txhash"`
+			RawLog string `json:"raw_log"`
+		} `json:"tx_response"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return "", fmt.Errorf("broadcast response is not JSON")
+	}
+	if resp.TxResponse.Code != 0 || resp.TxResponse.TxHash == "" {
+		log := []rune(oneLine(resp.TxResponse.RawLog))
+		if len(log) > 200 {
+			log = log[:200]
+		}
+		return "", fmt.Errorf("%w (code %d): %s", ErrBroadcastRejected, resp.TxResponse.Code, string(log))
+	}
+	return resp.TxResponse.TxHash, nil
+}
+
+// parseUint reads a decimal uint64 a node answered; empty is 0, and a number past uint64 is an
+// error and not a wrapped-around small one.
+func parseUint(s string) (uint64, error) {
+	if s == "" {
+		return 0, nil
+	}
+	n, err := strconv.ParseUint(s, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%q is not an unsigned 64-bit integer", printable(s))
+	}
+	return n, nil
+}
+
+func getJSON(ctx context.Context, url string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	return doLimited(req)
+}
+
+func postJSON(ctx context.Context, url string, payload []byte) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	return doLimited(req)
+}
+
+type httpClientKey struct{}
+
+// WithHTTPClient makes every chain request made with ctx use client instead
+// of the default client (which follows no redirect), and the client's Timeout instead of the default
+// request timeout when it is set. An onion submission passes a client whose
+// only route to the network is a Tor SOCKS proxy.
+func WithHTTPClient(ctx context.Context, client *http.Client) context.Context {
+	return context.WithValue(ctx, httpClientKey{}, client)
+}
+
+// StatusError is an HTTP error status from the chain API. Message is what the
+// node said, control characters removed and cut short, empty when it said
+// nothing readable.
+type StatusError struct {
+	Code    int
+	Message string
+}
+
+func (e *StatusError) Error() string { return fmt.Sprintf("chain API returned HTTP %d", e.Code) }
+
+// noRedirectClient is the client a request uses when its context names none. A node that answers
+// with a redirect is not followed: the request carries a signed transaction or the operator's
+// account, and a redirect (to plain http included) would send them wherever the node points.
+var noRedirectClient = &http.Client{
+	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+}
+
+func doLimited(req *http.Request) ([]byte, error) {
+	client, timeout := noRedirectClient, submitTimeout
+	if c, ok := req.Context().Value(httpClientKey{}).(*http.Client); ok && c != nil {
+		client = c
+		if c.Timeout > 0 {
+			timeout = c.Timeout
+		}
+	}
+	ctx, cancel := context.WithTimeout(req.Context(), timeout)
+	defer cancel()
+	req = req.WithContext(ctx)
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, submitLimit+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > submitLimit {
+		return nil, fmt.Errorf("response from the chain is over %d bytes", submitLimit)
+	}
+	// A redirect that was not followed is an answer that is not the node's reply to the request.
+	if resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, &StatusError{Code: resp.StatusCode, Message: errorMessage(body)}
+	}
+	return body, nil
+}
+
+// maxErrorMessage bounds how much of a node's error a StatusError keeps.
+const maxErrorMessage = 300
+
+// errorMessage reads the "message" of the gRPC-gateway error a node answers
+// with, or the start of the body when it is not one.
+func errorMessage(body []byte) string {
+	var doc struct {
+		Message string `json:"message"`
+	}
+	text := string(body)
+	if json.Unmarshal(body, &doc) == nil && doc.Message != "" {
+		text = doc.Message
+	}
+	runes := []rune(oneLine(text))
+	if len(runes) > maxErrorMessage {
+		runes = runes[:maxErrorMessage]
+	}
+	return string(runes)
+}

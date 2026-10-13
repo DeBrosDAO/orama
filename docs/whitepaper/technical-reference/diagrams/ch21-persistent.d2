@@ -1,0 +1,27 @@
+direction: down
+
+gate: "Upgrade gate" {
+  a: "capability or credential check\nCanInvokeFunction\nmanager.Acquire (5000 slots)"
+}
+inst: "Instantiate\nInstantiatePersistent:\n_initialize, else _start (5 s)"
+open: "ws_open(client_id, wallet, namespace)"
+live: "Live: read loop submits frames,\nRun calls ws_frame serially"
+refresh: "auth.refresh control frame\nswap InvocationContext"
+dead: "Instance stopped, socket still open\n(frame error, trap, timeout, ws_frame = 1)"
+closing: "Close: wait for Run, ws_close, module.Close"
+end: "Socket closed"
+
+gate.a -> inst: "accepted"
+gate.a -> end: "503 at capacity / 403"
+inst -> open: "module ready"
+inst -> end: "instantiate failed"
+open -> live: "returns 0"
+open -> closing: "returns non-zero (rejected_by_open)"
+live -> live: "frame 0 = ok"
+live -> refresh: "{__orama: auth.refresh, jwt}"
+refresh -> live: "ack ok, same subject"
+live -> dead: "Run returns"
+dead -> dead: "frames queue, nothing reads them"
+dead -> closing: "queue of 64 full: close 1009,\nor client leaves"
+live -> closing: "client disconnect, token expiry\n(4401, 4403), gateway shutdown"
+closing -> end

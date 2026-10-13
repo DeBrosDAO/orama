@@ -1,0 +1,20 @@
+shape: sequence_diagram
+
+op: "operator (operator:write + operator list)"
+a: "gateway A (answers the request)"
+ks: "key store (root-only tree or state dir)"
+r: "signing_keys (registry)"
+b: "gateway B (any other gateway)"
+
+op -> a: "POST /v1/operator/rotate-signing-key"
+a -> a: "generate Ed25519 key, kid = ed_ + 16 hex of SHA-256(public)"
+a -> ks: "1. Store(new private key) - atomic rename, fsync"
+a -> r: "2. INSERT signing_keys(kid, namespace, public_key) retired_at NULL"
+a -> a: "3. SetEdDSAKey: sign with the new key from here on"
+a -> r: "4. UPDATE retired_at = now + 15 min on the previous kid"
+a -> op: "kid, previous_kid, previous_accepted_for 15m0s"
+b -> b: "token arrives with kid ed_new, not in cache"
+b -> r: "reloadOnMiss: SELECT signing_keys (at most 1 per second)"
+r -> b: "new key, previous key with retired_at"
+b -> b: "verify EdDSA; iss; key binds token namespace; revocation list; nbf, exp, iat, aud"
+b -> b: "after retired_at the previous kid is refused\n(learned at the next 30 s reload)"

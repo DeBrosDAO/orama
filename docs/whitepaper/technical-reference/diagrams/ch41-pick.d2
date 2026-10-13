@@ -1,0 +1,20 @@
+direction: down
+
+start: "Open slot, seed = SHA-256(prev block hash, deal id, slot index)" {shape: oval}
+ops: "Operators of tracked nodes, sorted;\nstart at seed mod operator count"
+skip: "Skip operator if: already holds a slot of this deal,\nis the deal's repair delegate,\nor is this slot's excluded operator"
+nodes: "Within the operator, nodes sorted by id,\nstart at seed mod node count"
+elig: "Node eligible?" {
+  a: "Active (bonded, not jailed)"
+  b: "reserved + piece bytes at most declared capacity"
+  c: "Not on probation (user deals)"
+  d: "Protocol deals: known /16 and ASN,\nnot used by this deal,\nprobation caps respected"
+  a -> b -> c -> d
+}
+bind: "bindSlot: reserve bytes, index replica,\nstatus ASSIGNED, accept window opens" {shape: oval}
+fail: "No operator yields a node:\nunbind this pass's slots;\nrefund if the deal holds none" {shape: oval}
+
+start -> ops -> skip -> nodes -> elig
+elig -> bind: "yes"
+elig -> skip: "no, next node, next operator"
+skip -> fail: "operators exhausted"

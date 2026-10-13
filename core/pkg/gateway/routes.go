@@ -3,12 +3,24 @@ package gateway
 import (
 	"net/http"
 
+	nodeauth "github.com/DeBrosOfficial/network/pkg/auth"
+	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/deployments"
+	"github.com/DeBrosOfficial/network/pkg/gateway/statuspage"
+	"github.com/DeBrosOfficial/network/pkg/httputil"
+	"go.uber.org/zap"
+
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
+	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/chainread"
+	serverlesshandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/serverless"
+	"github.com/DeBrosOfficial/network/pkg/gateway/routepolicy"
 )
 
 // Routes returns the http.Handler with all routes and middleware configured
 func (g *Gateway) Routes() http.Handler {
-	mux := http.NewServeMux()
+	// Routes register against the policy table: a pattern with no declared
+	// policy cannot be wired here at all. See route_policy.go.
+	mux := routepolicy.NewMux(gatewayRoutes)
 
 	// root and v1 health/status
 	mux.HandleFunc("/health", g.healthHandler)
@@ -16,6 +28,29 @@ func (g *Gateway) Routes() http.Handler {
 	mux.HandleFunc("/v1/health", g.healthHandler)
 	mux.HandleFunc("/v1/version", g.versionHandler)
 	mux.HandleFunc("/v1/status", g.statusHandler)
+	// The status page's script and stylesheet (statuspage).
+	mux.Handle("/status/assets/", statuspage.Assets()) // statuspage.AssetsPrefix
+
+	// Explorer reads. The proxy refuses anything outside its allowlist.
+	chainCfg := chainread.ConfigFromEnv()
+	chainCfg.Logger = g.logger
+	if g.faucet != nil {
+		chainCfg.Faucet = g.faucet
+	}
+	if proxy, err := chainread.New(chainCfg); err != nil {
+		mux.Handle("/v1/chain/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "chain proxy is misconfigured", http.StatusServiceUnavailable)
+		}))
+	} else {
+		mux.Handle("/v1/chain/", proxy)
+	}
+
+	// Cluster monitoring (telemetry.go): a peer's cluster gateway asking for
+	// this node's report over the mesh, and the operator's view of the whole
+	// cluster, one-shot and streamed.
+	mux.HandleFunc("/v1/internal/telemetry", g.internalTelemetryHandler) // hub.InternalReportPath
+	mux.HandleFunc("/v1/operator/telemetry", g.operatorTelemetryHandler)
+	mux.HandleFunc("/v1/operator/telemetry/stream", g.operatorTelemetryStreamHandler)
 	// Schema-version contract (bug #214 audit follow-up): tenants can
 	// self-check whether their gateway's required schema is applied.
 	mux.HandleFunc("/v1/schema-status", g.handleSchemaStatus)
@@ -30,11 +65,14 @@ func (g *Gateway) Routes() http.Handler {
 	mux.HandleFunc("/v1/internal/acme/present", g.acmePresentHandler)
 	mux.HandleFunc("/v1/internal/acme/cleanup", g.acmeCleanupHandler)
 
-	// WireGuard peer exchange (internal, cluster-secret auth)
-	if g.wireguardHandler != nil {
-		mux.HandleFunc("/v1/internal/wg/peer", g.wireguardHandler.HandleRegisterPeer)
-		mux.HandleFunc("/v1/internal/wg/peers", g.wireguardHandler.HandleListPeers)
-		mux.HandleFunc("/v1/internal/wg/peer/remove", g.wireguardHandler.HandleRemovePeer)
+	// The cluster's certificate store, for this node's Caddy (tls_store_handler.go)
+	mux.HandleFunc("/v1/internal/tls-store", g.tlsStoreHandler)
+
+	// A node recording itself in the core cluster (internal, node-stamped)
+	if g.nodeAPIHandler != nil {
+		mux.HandleFunc("/v1/internal/node/register", g.nodeAPIHandler.HandleRegister)
+		mux.HandleFunc("/v1/internal/node/heartbeat", g.nodeAPIHandler.HandleHeartbeat)
+		mux.HandleFunc("/v1/internal/node/enrol-key", g.nodeAPIHandler.HandleEnrolKey)
 	}
 
 	// Node join endpoint (token-authenticated, no middleware auth needed)
@@ -58,11 +96,9 @@ func (g *Gateway) Routes() http.Handler {
 
 	// Namespace cluster repair (internal, handler does its own auth)
 	mux.HandleFunc("/v1/internal/namespace/repair", g.namespaceClusterRepairHandler)
-
-	// Namespace WebRTC enable/disable/status (internal, handler does its own auth)
-	mux.HandleFunc("/v1/internal/namespace/webrtc/enable", g.namespaceWebRTCEnableHandler)
-	mux.HandleFunc("/v1/internal/namespace/webrtc/disable", g.namespaceWebRTCDisableHandler)
-	mux.HandleFunc("/v1/internal/namespace/webrtc/status", g.namespaceWebRTCStatusHandler)
+	mux.HandleFunc("/v1/internal/secrets/reencrypt", g.handleInternalReencrypt)
+	// Push fan-out relay to this node's loopback ntfy (internal, coordination MAC v2)
+	mux.HandleFunc("/v1/internal/push/ntfy/", g.handleInternalNtfyPublish) // pushntfy.FanoutPathPrefix
 
 	// Namespace WebRTC enable/disable/status (public, JWT/API key auth via middleware)
 	mux.HandleFunc("/v1/namespace/webrtc/enable", g.namespaceWebRTCEnablePublicHandler)
@@ -84,25 +120,45 @@ func (g *Gateway) Routes() http.Handler {
 		// Issue JWT from API key; create or return API key for a wallet after verification
 		mux.HandleFunc("/v1/auth/token", g.authHandlers.APIKeyToJWTHandler)
 		mux.HandleFunc("/v1/auth/api-key", g.authHandlers.IssueAPIKeyHandler)
-		mux.HandleFunc("/v1/auth/simple-key", g.authHandlers.SimpleAPIKeyHandler)
-		mux.HandleFunc("/v1/auth/register", g.authHandlers.RegisterHandler)
 		mux.HandleFunc("/v1/auth/refresh", g.authHandlers.RefreshHandler)
+		mux.HandleFunc("/v1/auth/renew", g.authHandlers.RenewHandler)
 		mux.HandleFunc("/v1/auth/logout", g.authHandlers.LogoutHandler)
+		// Signing in from a machine with no wallet on it (RFC 8628).
+		mux.HandleFunc("/v1/auth/device", g.authHandlers.DeviceAuthorizationHandler)
+		mux.HandleFunc("/v1/auth/device/approve", g.authHandlers.DeviceApprovalHandler)
+		mux.HandleFunc("/v1/auth/device/token", g.authHandlers.DeviceTokenHandler)
 		mux.HandleFunc("/v1/auth/whoami", g.authHandlers.WhoamiHandler)
-		// Phantom Solana auth (QR code + deep link)
-		mux.HandleFunc("/v1/auth/phantom/session", g.authHandlers.PhantomSessionHandler)
-		mux.HandleFunc("/v1/auth/phantom/session/", g.authHandlers.PhantomSessionStatusHandler)
-		mux.HandleFunc("/v1/auth/phantom/complete", g.authHandlers.PhantomCompleteHandler)
+		// Which machines are signed in as you, and ending one of them.
+		mux.HandleFunc("/v1/auth/sessions", g.authHandlers.SessionsHandler)
+		mux.HandleFunc("/v1/auth/sessions/", g.authHandlers.SessionByIDHandler)
+		// The devices an account's sessions are bound to: list, revoke, and
+		// approve a device link from one of them.
+		mux.HandleFunc("/v1/auth/devices", g.authHandlers.DevicesHandler)
+		mux.HandleFunc("/v1/auth/devices/", g.authHandlers.DeviceByIDHandler)
+		// What a sign-in in this namespace must prove.
+		mux.HandleFunc("/v1/namespace/session-policy", g.authHandlers.SessionPolicyHandler)
+		// An operator revoking a user's device the user can no longer reach.
+		mux.HandleFunc("/v1/namespace/devices", g.authHandlers.NamespaceDevicesHandler)
+		mux.HandleFunc("/v1/namespace/devices/", g.authHandlers.NamespaceDeviceByIDHandler)
+		mux.HandleFunc("/v1/audit", g.authHandlers.AuditHandler)
 	}
 
 	// RQLite native backup/restore proxy (namespace auth via /v1/rqlite/ prefix)
 	mux.HandleFunc("/v1/rqlite/export", g.rqliteExportHandler)
 	mux.HandleFunc("/v1/rqlite/import", g.rqliteImportHandler)
 
-	// rqlite ORM HTTP gateway (mounts /v1/rqlite/* endpoints)
+	// Namespace backup (sealed to the owner's key) and restore (secrets sealed
+	// to this gateway's restore key). Namespace gateways only.
+	mux.HandleFunc("/v1/namespace/backup", g.namespaceBackupHandler)
+	mux.HandleFunc("/v1/namespace/restore-key", g.namespaceRestoreKeyHandler)
+	mux.HandleFunc("/v1/namespace/restore", g.namespaceRestoreHandler)
+
+	// rqlite ORM HTTP gateway (mounts /v1/rqlite/* endpoints). It composes its
+	// own patterns, so it reports them and they are checked against the policy
+	// table before its handlers go on.
 	if g.ormHTTP != nil {
-		g.ormHTTP.BasePath = "/v1/rqlite"
-		g.ormHTTP.RegisterRoutes(mux)
+		g.configureORMGateway()
+		mux.RegisterAll(g.ormHTTP.Routes(), g.ormHTTP.RegisterRoutes)
 	}
 
 	// namespace cluster status (public endpoint for polling during provisioning)
@@ -113,15 +169,31 @@ func (g *Gateway) Routes() http.Handler {
 		mux.Handle("/v1/namespace/delete", g.namespaceDeleteHandler)
 	}
 
+	// an operator's removal of a namespace whose owner is gone
+	if g.namespaceOperatorRemoveHandler != nil {
+		mux.Handle("/v1/operator/namespaces/remove", g.namespaceOperatorRemoveHandler)
+	}
+
 	// namespace list (authenticated — lists namespaces owned by the current wallet)
 	if g.namespaceListHandler != nil {
 		mux.Handle("/v1/namespace/list", g.namespaceListHandler)
+	}
+
+	// namespace create (authenticated — writes the namespace and its owner
+	// grant, and is the only thing that starts provisioning). Creating one
+	// used to be a side effect of asking for a login challenge.
+	if g.namespaceCreateHandler != nil {
+		mux.Handle("/v1/namespaces", g.namespaceCreateHandler)
 	}
 
 	// Scoped API-key management (bugboard #148) — admin-scoped + namespace-scoped.
 	// GET list / POST create; DELETE /{id} revoke one; POST /revoke-legacy sweep.
 	mux.HandleFunc("/v1/namespace/keys", g.namespaceKeysHandler)
 	mux.HandleFunc("/v1/namespace/keys/", g.namespaceKeysByIDHandler)
+
+	// Who else may work in this namespace, and at what role.
+	mux.HandleFunc("/v1/namespace/members", g.namespaceMembersHandler)
+	mux.HandleFunc("/v1/namespace/members/", g.namespaceMemberByIDHandler)
 
 	// network
 	mux.HandleFunc("/v1/network/status", g.networkStatusHandler)
@@ -149,6 +221,11 @@ func (g *Gateway) Routes() http.Handler {
 	// net/http mux doesn't extract path params; the handler parses {id}.
 	mux.HandleFunc("/v1/push/devices/", g.pushDevicesByIDHandler)
 	mux.HandleFunc("/v1/push/send", g.pushSendHandler)
+	// Registrations addressed by a rotating topic instead of the caller's
+	// account (FEAT-265). POST registers/refreshes, DELETE removes; both
+	// prove the topic by its secret. /send carries /v1/push/send's grant.
+	mux.HandleFunc("/v1/push/topics", g.pushTopicsHandler)
+	mux.HandleFunc("/v1/push/topics/send", g.pushTopicsSendHandler)
 
 	// Per-namespace push provider configuration (bug #220 follow-up):
 	// GET / PUT / DELETE — tenants self-serve their ntfy/expo credentials
@@ -176,8 +253,17 @@ func (g *Gateway) Routes() http.Handler {
 	// operator node management (wallet JWT auth via middleware)
 	if g.operatorHandler != nil {
 		mux.HandleFunc("/v1/operator/invite", g.operatorHandler.HandleInvite)
+		mux.HandleFunc("/v1/operator/operators", g.operatorHandler.HandleOperators)
+		mux.HandleFunc("/v1/operator/operators/", g.operatorHandler.HandleOperators)
+		mux.HandleFunc("/v1/operator/settings", g.operatorHandler.HandleSettings)
+		mux.HandleFunc("/v1/operator/settings/", g.operatorHandler.HandleSettings)
+		mux.HandleFunc("/v1/operator/creators", g.operatorHandler.HandleCreators)
+		mux.HandleFunc("/v1/operator/creators/", g.operatorHandler.HandleCreators)
 		mux.HandleFunc("/v1/operator/nodes", g.operatorHandler.HandleListNodes)
 		mux.HandleFunc("/v1/operator/node/register", g.operatorHandler.HandleRegister)
+		mux.HandleFunc("/v1/operator/rotate-signing-key", g.handleRotateSigningKey)
+		mux.HandleFunc("/v1/operator/rotate-secrets", g.handleRotateSecrets)
+		mux.HandleFunc("/v1/operator/health", g.operatorHealthHandler)
 	}
 
 	// vault proxy (public, rate-limited per identity within handler)
@@ -198,11 +284,22 @@ func (g *Gateway) Routes() http.Handler {
 		if g.webrtcServeSFURoutes {
 			mux.HandleFunc("/v1/webrtc/signal", g.webrtcHandlers.SignalHandler)
 			mux.HandleFunc("/v1/webrtc/rooms", g.webrtcHandlers.RoomsHandler)
+			// The namespace's WebRTC policy, and where its SFUs report
+			// membership (website/src/docs/developer/webrtc.mdx#admission).
+			mux.HandleFunc("/v1/webrtc/config", g.webrtcHandlers.ConfigHandler)
+			mux.HandleFunc("/v1/internal/webrtc/events", g.webrtcHandlers.EventsHandler) // ctrlauth.EventsPath
 		}
 	}
 
 	// anon proxy (authenticated users only)
 	mux.HandleFunc("/v1/proxy/anon", g.anonProxyHandler)
+	// Authenticated tunnelling proxy (bugboard #168): an opaque TCP stream over
+	// a WebSocket, so TLS stays end-to-end between the user's device and the
+	// destination and the gateway relays ciphertext. Same auth posture as
+	// /v1/proxy/anon — `proxy` grant plus a genuine wallet JWT.
+	mux.HandleFunc("/v1/proxy/tunnel", g.anonTunnelHandler)
+	// Anonymous destination-pinned tunnel of a relayed fetch (bugboard #266).
+	mux.HandleFunc("/v1/proxy/relay", g.relayTunnelHandler)
 
 	// cache endpoints (Olric) - always register, check handler dynamically
 	// This allows cache routes to work after background Olric reconnection
@@ -219,45 +316,59 @@ func (g *Gateway) Routes() http.Handler {
 		mux.HandleFunc("/v1/storage/pin", g.storageHandlers.PinHandler)
 		mux.HandleFunc("/v1/storage/status/", g.storageHandlers.StatusHandler)
 		mux.HandleFunc("/v1/storage/get/", g.storageHandlers.DownloadHandler)
+		mux.HandleFunc("/v1/storage/fetch-caps", g.storageHandlers.FetchCapsHandler)
+		mux.HandleFunc("/v1/storage/fetch-caps/", g.storageHandlers.FetchCapsHandler)
+		mux.HandleFunc("/v1/storage/relayed/", g.storageHandlers.RelayedDownloadHandler)
 		mux.HandleFunc("/v1/storage/unpin/", g.storageHandlers.UnpinHandler)
+		// Internal (WireGuard-only): per-node immediate block eviction for
+		// privacy-grade unpin fan-out (bugboard #153).
+		mux.HandleFunc("/v1/internal/storage/evict", g.storageHandlers.EvictHandler)
 	}
 
 	// serverless functions (if enabled)
 	if g.serverlessHandlers != nil {
-		g.serverlessHandlers.RegisterRoutes(mux)
+		mux.RegisterAll(serverlesshandlers.Routes(), g.serverlessHandlers.RegisterRoutes)
 	}
 
 	// deployment endpoints
 	if g.deploymentService != nil {
 		// Static deployments
 		mux.HandleFunc("/v1/deployments/static/upload", g.staticHandler.HandleUpload)
-		mux.HandleFunc("/v1/deployments/static/update", g.withHomeNodeProxy(g.updateHandler.HandleUpdate))
+		mux.HandleFunc("/v1/deployments/static/update", g.withHomeNodeOnly(g.updateHandler.HandleUpdate))
 
 		// Next.js deployments
 		mux.HandleFunc("/v1/deployments/nextjs/upload", g.nextjsHandler.HandleUpload)
-		mux.HandleFunc("/v1/deployments/nextjs/update", g.withHomeNodeProxy(g.updateHandler.HandleUpdate))
+		mux.HandleFunc("/v1/deployments/nextjs/update", g.withHomeNodeOnly(g.updateHandler.HandleUpdate))
 
 		// Go backend deployments
 		if g.goHandler != nil {
 			mux.HandleFunc("/v1/deployments/go/upload", g.goHandler.HandleUpload)
-			mux.HandleFunc("/v1/deployments/go/update", g.withHomeNodeProxy(g.updateHandler.HandleUpdate))
+			mux.HandleFunc("/v1/deployments/go/update", g.withHomeNodeOnly(g.updateHandler.HandleUpdate))
 		}
 
 		// Node.js backend deployments
 		if g.nodejsHandler != nil {
 			mux.HandleFunc("/v1/deployments/nodejs/upload", g.nodejsHandler.HandleUpload)
-			mux.HandleFunc("/v1/deployments/nodejs/update", g.withHomeNodeProxy(g.updateHandler.HandleUpdate))
+			mux.HandleFunc("/v1/deployments/nodejs/update", g.withHomeNodeOnly(g.updateHandler.HandleUpdate))
 		}
 
 		// Deployment management
 		mux.HandleFunc("/v1/deployments/list", g.listHandler.HandleList)
 		mux.HandleFunc("/v1/deployments/get", g.listHandler.HandleGet)
 		mux.HandleFunc("/v1/deployments/delete", g.withHomeNodeProxy(g.listHandler.HandleDelete))
-		mux.HandleFunc("/v1/deployments/rollback", g.withHomeNodeProxy(g.rollbackHandler.HandleRollback))
+		mux.HandleFunc("/v1/deployments/rollback", g.withHomeNodeOnly(g.rollbackHandler.HandleRollback))
 		mux.HandleFunc("/v1/deployments/versions", g.rollbackHandler.HandleListVersions)
 		mux.HandleFunc("/v1/deployments/logs", g.withHomeNodeProxy(g.logsHandler.HandleLogs))
 		mux.HandleFunc("/v1/deployments/stats", g.withHomeNodeProxy(g.statsHandler.HandleStats))
 		mux.HandleFunc("/v1/deployments/events", g.logsHandler.HandleGetEvents)
+
+		// Environment variables. The write runs on the home node because the
+		// variables live in a systemd unit on the machine the process runs on.
+		// What a deployment may do, as itself.
+		mux.HandleFunc("/v1/deployments/grants", g.appGrantsHandler)
+
+		mux.HandleFunc("/v1/deployments/env", g.envHandler.HandleGetEnv)
+		mux.HandleFunc("/v1/deployments/env/set", g.withHomeNodeOnly(g.envHandler.HandleSetEnv))
 
 		// Internal replica coordination endpoints
 		if g.replicaHandler != nil {
@@ -265,6 +376,7 @@ func (g *Gateway) Routes() http.Handler {
 			mux.HandleFunc("/v1/internal/deployments/replica/update", g.replicaHandler.HandleUpdate)
 			mux.HandleFunc("/v1/internal/deployments/replica/rollback", g.replicaHandler.HandleRollback)
 			mux.HandleFunc("/v1/internal/deployments/replica/teardown", g.replicaHandler.HandleTeardown)
+			mux.HandleFunc("/v1/internal/deployments/replica/env", g.replicaHandler.HandleEnv)
 		}
 
 		// Custom domains
@@ -279,24 +391,43 @@ func (g *Gateway) Routes() http.Handler {
 		mux.HandleFunc("/v1/db/sqlite/create", g.sqliteHandler.CreateDatabase)
 		mux.HandleFunc("/v1/db/sqlite/query", g.sqliteHandler.QueryDatabase)
 		mux.HandleFunc("/v1/db/sqlite/list", g.sqliteHandler.ListDatabases)
+		mux.HandleFunc("/v1/db/sqlite/delete", g.sqliteHandler.DeleteDatabase)
 		mux.HandleFunc("/v1/db/sqlite/backup", g.sqliteBackupHandler.BackupDatabase)
 		mux.HandleFunc("/v1/db/sqlite/backups", g.sqliteBackupHandler.ListBackups)
 	}
 
-	return g.withMiddleware(mux)
+	return dropForgedProxyNode(g.withMiddleware(mux))
 }
 
 // withHomeNodeProxy wraps a deployment handler to proxy requests to the home node
-// if the current node is not the home node for the deployment.
+// if the current node is not the home node for the deployment. When the home node
+// cannot be reached the handler runs here: for reads, which any node can answer.
 func (g *Gateway) withHomeNodeProxy(handler http.HandlerFunc) http.HandlerFunc {
+	return g.homeNodeHandler(handler, false)
+}
+
+// withHomeNodeOnly is withHomeNodeProxy for a route that changes the deployment
+// under the home node's version stamps (update, rollback, environment). Running
+// one on another node would change the deployment under a lock and a counter
+// nobody else uses. When the home node cannot be reached the request is
+// refused, not run here. Delete is not one of them: it carries no version stamp
+// and takes the lock wherever it runs, so a deployment whose home node is gone
+// for good can still be deleted.
+func (g *Gateway) withHomeNodeOnly(handler http.HandlerFunc) http.HandlerFunc {
+	return g.homeNodeHandler(handler, true)
+}
+
+func (g *Gateway) homeNodeHandler(handler http.HandlerFunc, mutating bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Already proxied — prevent loops
-		if r.Header.Get("X-Orama-Proxy-Node") != "" {
+		// Already proxied — prevent loops. The header is only ever set by a peer
+		// node's own hop: dropForgedProxyNode removes it from every other request.
+		if r.Header.Get(headerProxyNode) != "" {
 			handler(w, r)
 			return
 		}
 		name := r.URL.Query().Get("name")
-		if name == "" {
+		id := r.URL.Query().Get("id")
+		if name == "" && id == "" {
 			handler(w, r)
 			return
 		}
@@ -306,17 +437,71 @@ func (g *Gateway) withHomeNodeProxy(handler http.HandlerFunc) http.HandlerFunc {
 			handler(w, r)
 			return
 		}
-		deployment, err := g.deploymentService.GetDeployment(ctx, namespace, name)
+		// A request may name the deployment by id (delete does): it is routed
+		// to the same node as one that names it.
+		var (
+			deployment *deployments.Deployment
+			err        error
+		)
+		if name != "" {
+			deployment, err = g.deploymentService.GetDeployment(ctx, namespace, name)
+		} else {
+			deployment, err = g.deploymentService.GetDeploymentByID(ctx, namespace, id)
+		}
 		if err != nil {
 			handler(w, r) // let handler return proper error
 			return
 		}
 		if g.nodePeerID != "" && deployment.HomeNodeID != "" &&
 			deployment.HomeNodeID != g.nodePeerID {
-			if g.proxyCrossNode(w, r, deployment) {
+			if g.routeToHomeNode(w, r, deployment, mutating) {
 				return
 			}
 		}
 		handler(w, r)
 	}
+}
+
+// routeToHomeNode forwards the request to the deployment's home node and
+// reports whether it answered it. A request that changes the deployment is
+// answered here with 503 when the home node did not answer, and gets the longer
+// limits its work there needs, on this gateway's response and on the hop
+// (constants/timeouts.go).
+func (g *Gateway) routeToHomeNode(w http.ResponseWriter, r *http.Request, deployment *deployments.Deployment, mutating bool) bool {
+	timeout := constants.GatewayProxyTimeout
+	if mutating {
+		timeout = constants.GatewayDeploymentProxyTimeout
+		if err := httputil.ExtendIO(w, constants.GatewayDeploymentWriteBudget); err != nil {
+			g.logger.Error("Failed to extend the deadlines of a deployment change", zap.Error(err))
+			http.Error(w, "the request could not be given time to finish", http.StatusInternalServerError)
+			return true
+		}
+	}
+	if g.proxyCrossNodeWithin(w, r, deployment, timeout) {
+		return true
+	}
+	if !mutating {
+		return false
+	}
+	w.Header().Set("Retry-After", "5")
+	http.Error(w, "the home node of this deployment did not answer, so the change was not made from this node; run the command again", http.StatusServiceUnavailable)
+	return true
+}
+
+// headerProxyNode marks a request one gateway forwarded to another, so the
+// second does not forward it again.
+const headerProxyNode = "X-Orama-Proxy-Node"
+
+// dropForgedProxyNode removes headerProxyNode from a request that did not come
+// from a peer node on the overlay. The header decides that a request is run on
+// this node rather than routed to the deployment's home node, so a client able
+// to set it could run an update, a rollback or an environment change on any
+// node, outside the home node's lock and version stamps.
+func dropForgedProxyNode(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(headerProxyNode) != "" && !nodeauth.IsWireGuardPeer(r.RemoteAddr) {
+			r.Header.Del(headerProxyNode)
+		}
+		next.ServeHTTP(w, r)
+	})
 }

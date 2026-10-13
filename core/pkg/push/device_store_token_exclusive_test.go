@@ -3,6 +3,7 @@ package push
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"testing"
 
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
@@ -15,7 +16,7 @@ const testClusterSecret = "test-cluster-secret-for-push-device-fingerprints-0123
 
 // newDeviceTestStore builds an RqliteDeviceStore over an in-memory sqlite3 DB
 // (via rqlite.NewClient, which passes straight through to *sql.DB) with a schema
-// mirroring migrations 023 + 033. This exercises the real Upsert/eviction SQL —
+// mirroring migrations 023 + 033 + 060. This exercises the real Upsert/eviction SQL —
 // UNIQUE constraints, ON CONFLICT, and the rowid-ordered DELETE — not a stub.
 func newDeviceTestStore(t *testing.T) (*RqliteDeviceStore, *sql.DB) {
 	t.Helper()
@@ -39,6 +40,7 @@ func newDeviceTestStore(t *testing.T) (*RqliteDeviceStore, *sql.DB) {
 			updated_at      INTEGER NOT NULL,
 			last_seen       INTEGER,
 			token_fp        TEXT,
+			session_device_id TEXT,
 			UNIQUE(namespace, user_id, device_id)
 		)`,
 		`CREATE INDEX idx_push_devices_token_fp ON push_devices(namespace, token_fp)`,
@@ -286,5 +288,58 @@ func TestBackfillTokenFP(t *testing.T) {
 	mustUpsert(t, s, PushDevice{Namespace: "ns", UserID: "new", DeviceID: "d2", Provider: "apns", Token: "legacy-token"})
 	if countRows(t, db, "id=?", "legacy-id") != 0 {
 		t.Fatal("legacy row should have been evicted after backfill + re-register")
+	}
+}
+
+// feat-422: revoking a session device and ending its push registrations are
+// one fact. A registration of a revoked device is not listed — so not sent
+// to — and is removed, while the account's other registrations stay.
+func TestListForUser_dropsTheRegistrationsOfRevokedDevices(t *testing.T) {
+	s, db := newDeviceTestStore(t)
+	s.SetSessionDeviceGate(func(_ context.Context, _ string, ids []string) (map[string]bool, error) {
+		return map[string]bool{"lost-phone": true}, nil
+	})
+	mustUpsert(t, s, PushDevice{Namespace: "ns", UserID: "u", DeviceID: "a", Provider: "ntfy", Token: "t-a", SessionDeviceID: "lost-phone"})
+	mustUpsert(t, s, PushDevice{Namespace: "ns", UserID: "u", DeviceID: "b", Provider: "ntfy", Token: "t-b", SessionDeviceID: "kept-phone"})
+	mustUpsert(t, s, PushDevice{Namespace: "ns", UserID: "u", DeviceID: "c", Provider: "ntfy", Token: "t-c"})
+
+	devs := mustList(t, s, "ns", "u")
+	if len(devs) != 2 {
+		t.Fatalf("listed %d registrations, want the 2 that are not the revoked device's: %+v", len(devs), devs)
+	}
+	for _, d := range devs {
+		if d.SessionDeviceID == "lost-phone" {
+			t.Error("a revoked device's registration was listed")
+		}
+	}
+	if n := countRows(t, db, "session_device_id = ?", "lost-phone"); n != 0 {
+		t.Errorf("%d registration(s) of the revoked device are still stored", n)
+	}
+}
+
+// Without a way to ask, a device-bound registration cannot be shown to be
+// unrevoked, and listing it fails rather than wake a device that may be gone.
+func TestListForUser_refusesDeviceBoundRowsItCannotCheck(t *testing.T) {
+	s, _ := newDeviceTestStore(t)
+	mustUpsert(t, s, PushDevice{Namespace: "ns", UserID: "u", DeviceID: "a", Provider: "ntfy", Token: "t-a", SessionDeviceID: "phone"})
+	if _, err := s.ListForUser(context.Background(), "ns", "u"); err == nil {
+		t.Error("device-bound registrations were listed with no way to check the device")
+	}
+
+	s2, _ := newDeviceTestStore(t)
+	mustUpsert(t, s2, PushDevice{Namespace: "ns", UserID: "u", DeviceID: "a", Provider: "ntfy", Token: "t-a"})
+	if devs := mustList(t, s2, "ns", "u"); len(devs) != 1 {
+		t.Errorf("an unbound registration needs no check, got %d", len(devs))
+	}
+}
+
+func TestListForUser_surfacesAGateFailure(t *testing.T) {
+	s, _ := newDeviceTestStore(t)
+	s.SetSessionDeviceGate(func(context.Context, string, []string) (map[string]bool, error) {
+		return nil, errors.New("registry unreachable")
+	})
+	mustUpsert(t, s, PushDevice{Namespace: "ns", UserID: "u", DeviceID: "a", Provider: "ntfy", Token: "t-a", SessionDeviceID: "phone"})
+	if _, err := s.ListForUser(context.Background(), "ns", "u"); err == nil {
+		t.Error("a registry failure was treated as \"not revoked\"")
 	}
 }

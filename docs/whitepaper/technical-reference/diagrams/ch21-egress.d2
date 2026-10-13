@@ -1,0 +1,21 @@
+direction: right
+
+fn: "function: http_fetch / anon_fetch"
+deny: "denyInternalURL\nscheme http or https,\nnot localhost, *.localhost,\nmetadata.google.internal,\nno reserved IP literal"
+direct: "http_fetch client\n30 s total timeout"
+dial: "net.Dialer.Control\nGuardAddress(resolved IP)"
+redirect: "redirect hop\n(same client, same dial check)"
+tor: "anon_fetch client\nSOCKS5 to node Tor,\nhost name sent unresolved"
+exit: "Tor exit resolves;\nTor refuses internal addresses"
+out: "{status, headers, body}\nor {error, status: 0}"
+
+fn -> deny
+deny -> direct: "http_fetch"
+deny -> tor: "anon_fetch, anyone_fetch"
+direct -> dial: "every attempt, every address"
+dial -> redirect: "allowed"
+redirect -> dial
+dial -> out: "BlockedError -> error envelope"
+tor -> exit
+exit -> out
+dial -> out: "response"

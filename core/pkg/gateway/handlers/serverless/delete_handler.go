@@ -5,19 +5,15 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 )
 
 // DeleteFunction handles DELETE /v1/functions/{name}
 // Deletes a function from the registry.
 func (h *ServerlessHandlers) DeleteFunction(w http.ResponseWriter, r *http.Request, name string, version int) {
-	namespace := r.URL.Query().Get("namespace")
-	if namespace == "" {
-		namespace = h.getNamespaceFromRequest(r)
-	}
-
-	if namespace == "" {
-		writeError(w, http.StatusBadRequest, "namespace required")
+	namespace, ok := managedNamespace(w, r)
+	if !ok {
 		return
 	}
 
@@ -28,10 +24,12 @@ func (h *ServerlessHandlers) DeleteFunction(w http.ResponseWriter, r *http.Reque
 		if serverless.IsNotFound(err) {
 			writeError(w, http.StatusNotFound, "Function not found")
 		} else {
-			writeError(w, http.StatusInternalServerError, "Failed to delete function")
+			writeStoreError(w, "Failed to delete function", err)
 		}
 		return
 	}
+
+	h.recordAudit(r, namespace, auth.AuditFunctionDeleted, name)
 
 	writeJSON(w, http.StatusOK, map[string]string{
 		"message": "Function deleted successfully",

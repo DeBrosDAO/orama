@@ -1,0 +1,16 @@
+shape: sequence_diagram
+
+c: "Client"
+gw: "Gateway handler"
+g1: "Guardian 1"
+gn: "Guardian N"
+
+c -> gw: "POST /v1/vault/pull\nidentity, pubkey, signature, timestamp"
+gw -> gw: "per-IP bucket (60/min), then verifyPull\n(timestamp within 120 s), then\nper-identity bucket (burst 20, 120/h)"
+gw -> g1: "challenge, session, POST /v1/vault/pull"
+g1 -> gw: "share, version, threshold"
+gw -> gn: "challenge, session, POST /v1/vault/pull"
+gn -> gw: "share, version, threshold"
+gw -> gw: "group shares by version\nK of a version = stored threshold\n(legacy 0: current K)\npick the highest version with at least K shares"
+gw -> gw: "combine exactly K shares of that version\nzero all shares and the envelope after encoding"
+gw -> c: "envelope, collected, threshold\nor 503 not enough consistent shares"

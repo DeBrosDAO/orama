@@ -1,0 +1,19 @@
+direction: right
+
+joining: "joining\nstart state"
+active: "active\nevery component ready"
+degraded: "degraded\nserving, not fully converged"
+draining: "draining\noperator-driven"
+maintenance: "maintenance\nTTL at most 15 min"
+
+joining -> active: "snapshot all ready"
+joining -> degraded: "serving core ready\n(rqlite-local and gateway),\nnot all ready"
+active -> degraded: "any component not ready"
+degraded -> active: "all ready again"
+active -> maintenance: "Stop() on SIGTERM\nEnterMaintenance(5 min)"
+degraded -> maintenance: "Stop() on SIGTERM"
+active -> draining: "valid, no production caller"
+degraded -> draining: "valid, no production caller"
+draining -> maintenance: "valid, but Stop() announces\nonly from active or degraded"
+maintenance -> active: "valid, nothing calls it\nbefore the process exits"
+maintenance -> degraded: "valid, nothing calls it"

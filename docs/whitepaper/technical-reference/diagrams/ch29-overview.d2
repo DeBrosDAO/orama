@@ -1,0 +1,65 @@
+direction: right
+
+src: Source of truth {
+  version: "VERSION (0.3.0)"
+  txt: "core/pkg/version/version.txt\n(go:embed)"
+  pkgjson: "sdk/package.json\nsdk-vault/package.json"
+  bump: "make -C core bump VER=X.Y.Z"
+  bump -> version: writes
+  bump -> txt: writes
+  bump -> pkgjson: writes
+}
+
+fleet: "Channel 1: fleet archive" {
+  build: "orama build\n(core/cmd/orama/internal/build)"
+  agent: "RootWallet agent\nwallet:sign:orama-archive"
+  archive: "orama-VERSION-linux-ARCH.tar.gz\nbin/ systemd/ manifest.json manifest.sig" {
+    shape: cylinder
+  }
+  push: "orama push / node setup\n(verify on the operator machine)"
+  stage: "orama node stage-archive\n(verify on the node)"
+  anchor: "/etc/orama/archive-signers\n(trust anchor)" {
+    shape: cylinder
+  }
+  opt: "/opt/orama\nbin/ systemd/ manifest.*" {
+    shape: cylinder
+  }
+  build -> agent: "EIP-191 personal_sign\nover SigningMessage"
+  build -> archive: "SHA-256 of every file"
+  archive -> push
+  push -> stage: "canonical re-pack"
+  anchor -> stage: "trusted signers"
+  stage -> opt: "swap after verify"
+}
+
+gh: "Channel 2: public release" {
+  rel: "core/scripts/release.sh\n(git tag)"
+  wf: ".github/workflows/release.yaml\nVERSION == tag check"
+  gr: "GoReleaser\n.goreleaser.yaml"
+  out: "GitHub Release, deb, Homebrew,\nrelease-apt.yml, publish-sdk.yml" {
+    shape: cylinder
+  }
+  rel -> wf: "tag push"
+  wf -> gr
+  gr -> out
+}
+
+tuf: "Optional: TUF release root" {
+  rv: "pkg/releaseverify\nCheckFile"
+  root: "/etc/orama/release-root.json\n/etc/orama/release-seen.json" {
+    shape: cylinder
+  }
+  rs: "pkg/releasesign\n(no caller outside tests)"
+  root -> rv
+}
+
+book: "Book gate" {
+  gate: "core/tools/whitepaper check\n(make test)"
+  yaml: "book.yaml\nversion + verified"
+  yaml -> gate
+}
+
+src.version -> fleet.build: "read at build"
+src.version -> gh.wf: "compared with the tag"
+src.version -> book.gate: "must equal version and verified"
+fleet.stage -> tuf.rv: "--release-metadata\n--release-target"

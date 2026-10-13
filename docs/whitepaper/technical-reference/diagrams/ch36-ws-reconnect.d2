@@ -1,0 +1,18 @@
+direction: right
+
+idle: "not connected"
+connecting: "connecting\n(timeout 30 s)"
+open: "open\nwasConnected = true"
+backoff: "backoff\nmin(500 ms x 2^(n-1), 30 s) + up to 25%"
+closed: "closed for good\nclose handlers fire"
+
+idle -> connecting: "connect()"
+connecting -> open: "open event"
+connecting -> closed: "timeout, error or close\nbefore first open"
+open -> backoff: "close not asked for\n(any code), attempts < 10"
+backoff -> connecting: "timer fires\nsame URL, same token"
+connecting -> open: "reopened\nattempts reset to 0"
+connecting -> backoff: "attempt failed"
+backoff -> closed: "10 consecutive failures"
+open -> closed: "close() by caller"
+backoff -> closed: "close() by caller"

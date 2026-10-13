@@ -14,21 +14,16 @@ import (
 // mockHomeNodeDB extends mockRQLiteClient for home node testing
 type mockHomeNodeDB struct {
 	*mockRQLiteClient
-	assignments   map[string]string           // namespace -> homeNodeID
-	nodes         map[string]nodeData         // nodeID -> nodeData
-	deployments   map[string][]deploymentData // nodeID -> deployments
-	resourceUsage map[string]resourceData     // nodeID -> resource usage
+	assignments   map[string]string       // namespace -> homeNodeID
+	nodes         map[string]nodeData     // nodeID -> nodeData
+	deployments   map[string]int          // nodeID -> deployment count
+	resourceUsage map[string]resourceData // nodeID -> resource usage
 }
 
 type nodeData struct {
 	id       string
 	status   string
 	lastSeen time.Time
-}
-
-type deploymentData struct {
-	id     string
-	status string
 }
 
 type resourceData struct {
@@ -41,7 +36,7 @@ func newMockHomeNodeDB() *mockHomeNodeDB {
 		mockRQLiteClient: newMockRQLiteClient(),
 		assignments:      make(map[string]string),
 		nodes:            make(map[string]nodeData),
-		deployments:      make(map[string][]deploymentData),
+		deployments:      make(map[string]int),
 		resourceUsage:    make(map[string]resourceData),
 	}
 }
@@ -89,7 +84,7 @@ func (m *mockHomeNodeDB) Query(ctx context.Context, dest any, query string, args
 		// Deployment count or port count
 		if len(args) > 0 {
 			if nodeID, ok := args[0].(string); ok {
-				count := len(m.deployments[nodeID])
+				count := m.deployments[nodeID]
 				countRes := reflect.New(elemType).Elem()
 				countRes.FieldByName("Count").SetInt(int64(count))
 				sliceVal.Set(reflect.Append(sliceVal, countRes))
@@ -183,20 +178,6 @@ func (m *mockHomeNodeDB) Tx(ctx context.Context, fn func(tx rqlite.Tx) error) er
 
 func (m *mockHomeNodeDB) Batch(ctx context.Context, ops []rqlite.BatchOp) (*rqlite.BatchResult, error) {
 	return m.mockRQLiteClient.Batch(ctx, ops)
-}
-
-func (m *mockHomeNodeDB) addDeployment(nodeID, deploymentID, status string) {
-	m.deployments[nodeID] = append(m.deployments[nodeID], deploymentData{
-		id:     deploymentID,
-		status: status,
-	})
-}
-
-func (m *mockHomeNodeDB) setResourceUsage(nodeID string, memoryMB, cpuPercent int) {
-	m.resourceUsage[nodeID] = resourceData{
-		memoryMB:   memoryMB,
-		cpuPercent: cpuPercent,
-	}
 }
 
 func TestHomeNodeManager_AssignHomeNode(t *testing.T) {

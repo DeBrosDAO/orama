@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/DeBrosOfficial/network/pkg/deployments"
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
@@ -134,6 +135,10 @@ func (m *mockIPFSClient) Add(ctx context.Context, r io.Reader, filename string) 
 	return &ipfs.AddResponse{Cid: "QmTestCID123456789"}, nil
 }
 
+func (m *mockIPFSClient) AddLocal(ctx context.Context, r io.Reader, filename string) (*ipfs.AddResponse, error) {
+	return m.Add(ctx, r, filename)
+}
+
 func (m *mockIPFSClient) AddDirectory(ctx context.Context, dirPath string) (*ipfs.AddResponse, error) {
 	if m.AddDirectoryFunc != nil {
 		return m.AddDirectoryFunc(ctx, dirPath)
@@ -167,6 +172,14 @@ func (m *mockIPFSClient) Unpin(ctx context.Context, cid string) error {
 		return m.UnpinFunc(ctx, cid)
 	}
 	return nil
+}
+
+func (m *mockIPFSClient) GetStored(ctx context.Context, cid string, ipfsAPIURL string) (io.ReadCloser, error) {
+	return m.Get(ctx, cid, ipfsAPIURL)
+}
+
+func (m *mockIPFSClient) EvictLocal(ctx context.Context, cid string) (int, error) {
+	return 0, nil
 }
 
 func (m *mockIPFSClient) Health(ctx context.Context) error {
@@ -341,10 +354,10 @@ func TestCreateDatabase_InvalidName(t *testing.T) {
 	handler.basePath = tmpDir
 
 	invalidNames := []string{
-		"test db",       // Space
-		"test@db",       // Special char
-		"test/db",       // Slash
-		"",              // Empty
+		"test db",                // Space
+		"test@db",                // Special char
+		"test/db",                // Slash
+		"",                       // Empty
 		strings.Repeat("a", 100), // Too long
 	}
 
@@ -406,11 +419,19 @@ func TestListDatabases(t *testing.T) {
 	}
 }
 
-// TestBackupDatabase tests backing up a database to IPFS
+// TestBackupDatabase tests backing up a database to IPFS.
+//
+// The record's file_path is where a pre-upgrade gateway created the database
+// (<oramaDir>/sqlite/...); the upgrade moved the tree to <oramaDir>/data/sqlite.
+// The handler resolves the file from its base, not from that column.
 func TestBackupDatabase(t *testing.T) {
-	// Create a temporary database file
+	// Create a temporary database file where the layout puts it.
 	tmpDir := t.TempDir()
-	dbPath := filepath.Join(tmpDir, "test.db")
+	if err := os.MkdirAll(filepath.Join(tmpDir, "test-namespace"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(tmpDir, "test-namespace", "test-db.db")
+	staleRecordedPath := "/opt/orama/.orama/sqlite/test-namespace/test-db.db"
 
 	// Create a real SQLite database
 	db, err := sql.Open("sqlite3", dbPath)
@@ -439,7 +460,7 @@ func TestBackupDatabase(t *testing.T) {
 
 						filePathField := newElem.FieldByName("FilePath")
 						if filePathField.IsValid() && filePathField.CanSet() {
-							filePathField.SetString(dbPath)
+							filePathField.SetString(staleRecordedPath)
 						}
 
 						sliceValue.Set(reflect.Append(sliceValue, newElem))
@@ -467,7 +488,7 @@ func TestBackupDatabase(t *testing.T) {
 	portAlloc := deployments.NewPortAllocator(mockDB, zap.NewNop())
 	homeNodeMgr := deployments.NewHomeNodeManager(mockDB, portAlloc, zap.NewNop())
 
-	sqliteHandler := NewSQLiteHandler(mockDB, homeNodeMgr, zap.NewNop(), "", "")
+	sqliteHandler := NewSQLiteHandler(mockDB, homeNodeMgr, zap.NewNop(), tmpDir, "")
 
 	backupHandler := NewBackupHandler(sqliteHandler, mockIPFS, zap.NewNop())
 
@@ -478,6 +499,7 @@ func TestBackupDatabase(t *testing.T) {
 
 	req := httptest.NewRequest("POST", "/v1/db/sqlite/backup", bytes.NewReader(bodyBytes))
 	ctx := context.WithValue(req.Context(), ctxkeys.NamespaceOverride, "test-namespace")
+	ctx = context.WithValue(ctx, ctxkeys.JWT, &auth.JWTClaims{Sub: "0xowner"})
 	req = req.WithContext(ctx)
 
 	rr := httptest.NewRecorder()
@@ -507,10 +529,10 @@ func TestIsValidDatabaseName(t *testing.T) {
 		{"valid-db", true},
 		{"ValidDB123", true},
 		{"test_db_123", true},
-		{"test db", false},      // Space
-		{"test@db", false},      // Special char
-		{"test/db", false},      // Slash
-		{"", false},             // Empty
+		{"test db", false},               // Space
+		{"test@db", false},               // Special char
+		{"test/db", false},               // Slash
+		{"", false},                      // Empty
 		{strings.Repeat("a", 65), false}, // Too long
 	}
 
@@ -544,5 +566,147 @@ func TestIsWriteQuery(t *testing.T) {
 		if result != tt.isWrite {
 			t.Errorf("isWriteQuery(%q) = %v, expected %v", tt.query, result, tt.isWrite)
 		}
+	}
+}
+
+// The base the handler is given is where databases go: nothing is appended to
+// it. It used to be handed the orama directory and append "sqlite", which put
+// every database outside the gateway's writable paths.
+func TestNewSQLiteHandler_createsUnderTheGivenBase(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "data", "sqlite")
+	handler := NewSQLiteHandler(&mockRQLiteClient{}, nil, zap.NewNop(), base, "")
+
+	want := filepath.Join(base, "acme", "app.db")
+	if got := handler.databasePath("acme", "app"); got != want {
+		t.Errorf("database path = %q, want %q", got, want)
+	}
+}
+
+// Query, delete and backup joined the requested name into a file path after
+// only checking it was non-empty; a registry match was all that stood between
+// "../x" and a path outside the namespace. The name is checked on the way in.
+func TestSQLiteHandlers_refuseANameThatIsNotAName(t *testing.T) {
+	handler := NewSQLiteHandler(nil, nil, zap.NewNop(), t.TempDir(), "")
+	backup := NewBackupHandler(handler, nil, zap.NewNop())
+	routes := map[string]http.HandlerFunc{
+		"query":  handler.QueryDatabase,
+		"delete": handler.DeleteDatabase,
+		"backup": backup.BackupDatabase,
+	}
+	for name, h := range routes {
+		for _, db := range []string{"../../etc/passwd", "a/b", "", strings.Repeat("x", 65)} {
+			body, _ := json.Marshal(map[string]string{"database_name": db, "query": "SELECT 1"})
+			req := httptest.NewRequest("POST", "/v1/db/sqlite/"+name, bytes.NewReader(body))
+			req = req.WithContext(context.WithValue(req.Context(), ctxkeys.NamespaceOverride, "test-namespace"))
+			rec := httptest.NewRecorder()
+			h(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("%s with database_name %q: status %d, want 400", name, db, rec.Code)
+			}
+		}
+	}
+}
+
+// A tenant's database is the gateway's alone: created 0600 in 0700
+// directories, and directories an older node created 0755 are narrowed. They
+// were 0644 and 0755, readable by every user on the host.
+func TestCreatePrivateDBFile_readableByTheGatewayAlone(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "sqlite")
+	nsDir := filepath.Join(base, "acme")
+	if err := os.MkdirAll(nsDir, 0o755); err != nil { // as an older node left it
+		t.Fatal(err)
+	}
+	h := &SQLiteHandler{basePath: base, logger: zap.NewNop()}
+	dbPath := h.databasePath("acme", "orders")
+
+	if err := h.createPrivateDBFile(dbPath); err != nil {
+		t.Fatalf("createPrivateDBFile: %v", err)
+	}
+	for path, want := range map[string]os.FileMode{base: 0o700, nsDir: 0o700, dbPath: 0o600} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != want {
+			t.Errorf("%s mode = %v, want %v", path, got, want)
+		}
+	}
+
+	// SQLite gives its -wal file the database file's mode.
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, stmt := range []string{"PRAGMA journal_mode=WAL", "CREATE TABLE t (x)", "INSERT INTO t VALUES (1)"} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+	info, err := os.Stat(dbPath + "-wal")
+	if err != nil {
+		t.Fatalf("no WAL file: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Errorf("WAL file mode = %v, want 0600", got)
+	}
+}
+
+// A file left by an earlier failed create is narrowed, not trusted; a symlink
+// in its place is refused rather than followed.
+func TestCreatePrivateDBFile_leftoversAndSymlinks(t *testing.T) {
+	base := t.TempDir()
+	h := &SQLiteHandler{basePath: base, logger: zap.NewNop()}
+
+	left := h.databasePath("acme", "left")
+	if err := os.MkdirAll(filepath.Dir(left), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(left, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.createPrivateDBFile(left); err != nil {
+		t.Fatalf("createPrivateDBFile over a leftover: %v", err)
+	}
+	if info, _ := os.Stat(left); info.Mode().Perm() != 0o600 {
+		t.Errorf("leftover mode = %v, want 0600", info.Mode().Perm())
+	}
+
+	target := filepath.Join(t.TempDir(), "elsewhere")
+	if err := os.WriteFile(target, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := h.databasePath("acme", "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.createPrivateDBFile(link); err == nil {
+		t.Error("a symlink in the database's place was followed")
+	}
+	if info, _ := os.Stat(target); info.Mode().Perm() != 0o644 {
+		t.Errorf("the symlink's target was changed to %v", info.Mode().Perm())
+	}
+}
+
+// An existing node's data/sqlite was 0755. The gateway narrows it when it
+// starts, before any request, which closes every database below it.
+func TestNewSQLiteHandler_narrowsAnExistingBase(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "sqlite")
+	if err := os.Mkdir(base, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	NewSQLiteHandler(nil, nil, zap.NewNop(), base, "")
+	info, err := os.Stat(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Errorf("base mode = %v, want 0700", got)
+	}
+
+	missing := filepath.Join(t.TempDir(), "not-yet")
+	NewSQLiteHandler(nil, nil, zap.NewNop(), missing, "")
+	if _, err := os.Stat(missing); err == nil {
+		t.Error("the constructor created the base; the first create does that, 0700")
 	}
 }

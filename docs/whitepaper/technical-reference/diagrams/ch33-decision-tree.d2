@@ -1,0 +1,64 @@
+direction: down
+
+start: "Something is wrong with the cluster" {
+  shape: oval
+}
+
+q1: "Does the index RQLite have a leader\nand a reachable majority of voters?" {
+  shape: diamond
+}
+q2: "Is the problem one machine\n(dead, replaced, retired)?" {
+  shape: diamond
+}
+q2b: "Is it already retired cluster-side,\nor did it never join?" {
+  shape: diamond
+}
+q3: "Is the target still in the raft\nconfiguration and not a non-voter?" {
+  shape: diamond
+}
+q4: "Is the machine reachable over SSH\nand meant to be erased now?" {
+  shape: diamond
+}
+q5: "Is a namespace broken,\nnot the index?" {
+  shape: diamond
+}
+q6: "Is the namespace RQLite\nrunning but leaderless?" {
+  shape: diamond
+}
+q7: "Is the namespace data wrong or lost\nrather than the cluster unavailable?" {
+  shape: diamond
+}
+q8: "Does migrate-raft-id --dry-run list\nnodes still registered under\ntheir address?" {
+  shape: diamond
+}
+
+a_rr: "orama node recover-raft\nkeep one node's data, reform around it\n(--leader-raft-addr when rqlite answers nowhere)\nlosers' data is deleted" 
+a_rm: "orama node remove --node IP\nquorum check, raft remove, tombstone,\nregistry retire, then wipe"
+a_off: "orama node remove --node IP --offline\n(cluster side only)"
+a_wipe: "orama node wipe --node IP\n(target side only)"
+a_gap: "remove refuses: not a member or a non-voter.\nRetire by hand (Known gaps), then wipe"
+a_nsrepair: "wait for the tenant sweep (60 s)\nor orama namespace repair NS"
+a_nspeers: "stop the namespace rqlite unit, write\nraft/peers.json by hand (no CLI)"
+a_nsrestore: "orama namespace restore\nfrom a sealed backup (owner key)"
+a_mig: "orama node migrate-raft-id --dry-run,\nthen run it; one node at a time"
+a_none: "no recovery command: use the\nrolling-upgrade and monitoring paths" 
+
+start -> q1
+q1 -> q5: "yes"
+q1 -> q2: "no, quorum or leader lost"
+q2 -> a_rr: "no: split brain, no leader,\nmany voters lost"
+q2 -> q2b: "yes"
+q2b -> a_wipe: "yes"
+q2b -> q3: "no"
+q3 -> q4: "yes"
+q3 -> a_gap: "no"
+q4 -> a_rm: "yes"
+q4 -> a_off: "no, machine gone"
+q5 -> q6: "yes"
+q5 -> q8: "no, index healthy"
+q6 -> a_nspeers: "yes, quorum lost\nbelow a majority"
+q6 -> q7: "no"
+q7 -> a_nsrestore: "yes"
+q7 -> a_nsrepair: "no, members missing"
+q8 -> a_mig: "yes"
+q8 -> a_none: "no"

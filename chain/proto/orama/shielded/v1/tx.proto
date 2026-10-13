@@ -1,0 +1,81 @@
+syntax = "proto3";
+package orama.shielded.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/shielded/types";
+
+import "amino/amino.proto";
+import "cosmos/msg/v1/msg.proto";
+import "cosmos_proto/cosmos.proto";
+import "orama/nodes/v1/nodes.proto";
+import "orama/shielded/v1/shielded.proto";
+
+// Msg is x/shielded's transaction service.
+service Msg {
+  option (cosmos.msg.v1.service) = true;
+
+  rpc ShieldedTransfer(MsgShieldedTransfer) returns (MsgShieldedTransferResponse);
+  rpc Shield(MsgShield) returns (MsgShieldResponse);
+  rpc ShieldEarnings(MsgShieldEarnings) returns (MsgShieldEarningsResponse);
+  rpc Unshield(MsgUnshield) returns (MsgUnshieldResponse);
+}
+
+// MsgShieldedTransfer moves value inside the shielded pool. It has no
+// Cosmos signer: `signer` must be the protocol's fixed signer-less address
+// (types.SignerlessAddress), the tx carries no signature and no fee, and it
+// must be the only message in its tx. The fee is the bundle's value balance:
+// the base part is burned and the rest goes to the block proposer.
+message MsgShieldedTransfer {
+  option (cosmos.msg.v1.signer) = "signer";
+  option (amino.name) = "orama/shielded/MsgShieldedTransfer";
+
+  string signer = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  bytes bundle = 2;
+}
+
+message MsgShieldedTransferResponse {}
+
+// MsgShield moves norama from the signer's own bank balance into the pool.
+// The bundle's value balance is minus the amount.
+message MsgShield {
+  option (cosmos.msg.v1.signer) = "signer";
+  option (amino.name) = "orama/shielded/MsgShield";
+
+  string signer = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  bytes bundle = 2;
+}
+
+message MsgShieldResponse {}
+
+// MsgShieldEarnings moves norama from the signer's own earnings account into
+// the pool. The bundle's value balance is minus the amount.
+message MsgShieldEarnings {
+  option (cosmos.msg.v1.signer) = "signer";
+  option (amino.name) = "orama/shielded/MsgShieldEarnings";
+
+  string signer = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  bytes bundle = 2;
+}
+
+message MsgShieldEarningsResponse {}
+
+// MsgUnshield moves value out of the pool to a target owned by the signer.
+// The bundle's value balance is the amount that leaves the pool.
+message MsgUnshield {
+  option (cosmos.msg.v1.signer) = "signer";
+  option (amino.name) = "orama/shielded/MsgUnshield";
+
+  string signer = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  bytes bundle = 2;
+  UnshieldTarget target = 3;
+  // validator is the operator address of the validator to delegate to
+  // (UNSHIELD_TARGET_BOND).
+  string validator = 4 [(cosmos_proto.scalar) = "cosmos.ValidatorAddressString"];
+  // node_id and role name the role bond (UNSHIELD_TARGET_NODE_BOND).
+  string node_id = 5;
+  orama.nodes.v1.Role role = 6;
+}
+
+message MsgUnshieldResponse {
+  // queued is true when the cap was exhausted and the unshield joined the queue.
+  bool queued = 1;
+}

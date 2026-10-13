@@ -3,6 +3,7 @@ package rqlite
 import (
 	"database/sql"
 	"fmt"
+	"sync"
 	"time"
 
 	_ "github.com/rqlite/gorqlite/stdlib" // Import the database/sql driver
@@ -12,6 +13,11 @@ import (
 type RQLiteAdapter struct {
 	manager *RQLiteManager
 	db      *sql.DB
+
+	// localDB is the lazily-created level=none read handle returned by
+	// LocalDB(). Guarded by localMu. See localReadConsistencyLevel.
+	localMu sync.Mutex
+	localDB *sql.DB
 }
 
 // adapterReadConsistencyLevel is the rqlite consistency level used for
@@ -25,25 +31,39 @@ type RQLiteAdapter struct {
 // the WireGuard mesh.
 const adapterReadConsistencyLevel = "weak"
 
-// buildRQLiteDSN composes the DSN URL passed to gorqlite's stdlib driver.
-// Pulled out for unit testing — the URL must encode `level=weak` (bug #235)
-// in addition to `disableClusterDiscovery=true`.
-func buildRQLiteDSN(host string, port int, username, password string) string {
+// buildRQLiteDSNWithLevel composes the DSN URL passed to gorqlite's stdlib
+// driver at an explicit read level: the main pool asks for `weak` (bug #235),
+// the bootstrap-only local handle (LocalDB) for `none`. It always carries
+// `disableClusterDiscovery=true`. Reached through Endpoint.SQLDSN.
+//
+// The credentials are interpolated, not URL-escaped. That is safe for the only
+// credentials this system generates — EnsureRQLiteAuth produces a 64-character
+// hex password — but it would mangle a hand-set password containing `@` or `%`,
+// and would defeat RedactDSN's parse. Escaping belongs with the rest of the
+// credential path in chg-312.
+func buildRQLiteDSNWithLevel(host string, port int, username, password, level string) string {
 	if username != "" && password != "" {
 		return fmt.Sprintf("http://%s:%s@%s:%d?disableClusterDiscovery=true&level=%s",
-			username, password, host, port, adapterReadConsistencyLevel)
+			username, password, host, port, level)
 	}
 	return fmt.Sprintf("http://%s:%d?disableClusterDiscovery=true&level=%s",
-		host, port, adapterReadConsistencyLevel)
+		host, port, level)
 }
 
 // NewRQLiteAdapter creates a new adapter that provides sql.DB interface for RQLite.
 func NewRQLiteAdapter(manager *RQLiteManager) (*RQLiteAdapter, error) {
-	dsn := buildRQLiteDSN("localhost", manager.config.RQLitePort,
-		manager.config.RQLiteUsername, manager.config.RQLitePassword)
+	ep, err := manager.LocalEndpoint()
+	if err != nil {
+		return nil, err
+	}
+	dsn := ep.SQLDSN(adapterReadConsistencyLevel)
 	db, err := sql.Open("rqlite", dsn)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open RQLite SQL connection: %w", err)
+		// The DSN embeds the RQLite password, and gorqlite echoes the DSN back
+		// in its errors. This is on the boot supervisor's retry path now, so an
+		// unredacted wrap would rewrite the password into the node log on every
+		// attempt. Same convention as NewClientWithDSN.
+		return nil, fmt.Errorf("failed to open RQLite SQL connection: %s", RedactError(err, dsn))
 	}
 
 	// Configure connection pool with proper timeouts and limits
@@ -74,5 +94,64 @@ func (a *RQLiteAdapter) Close() error {
 	if a.db != nil {
 		a.db.Close()
 	}
+	a.localMu.Lock()
+	if a.localDB != nil {
+		a.localDB.Close()
+		a.localDB = nil
+	}
+	a.localMu.Unlock()
 	return a.manager.Stop()
+}
+
+// localReadConsistencyLevel is the rqlite read level used by LocalDB(). Unlike
+// adapterReadConsistencyLevel ("weak", leader-routed), `none` is answered from
+// THIS node's local SQLite without contacting the raft leader.
+//
+// It exists for exactly one job: BOOTSTRAP reads that must succeed while the
+// cluster has no leader. The canonical case is the WireGuard peer list — raft
+// runs over the WireGuard mesh, so a node with no peers can never elect a
+// leader, and a leader-routed read of `wireguard_peers` can never succeed. That
+// is a deadlock: the data needed to repair connectivity is unreachable because
+// connectivity is down. Reading the local replica breaks the cycle; the rows
+// are already on disk.
+//
+// A `none` read may be stale (bug #235), so callers MUST treat it as a
+// best-effort hint, never as authoritative cluster state — see
+// (*Node).loadDesiredWireGuardPeers for the additive-only contract this
+// enables.
+const localReadConsistencyLevel = "none"
+
+// LocalDB returns a lazily-created *sql.DB bound to this node's own rqlite at
+// read level `none`. Reads never leave the box and therefore work with no raft
+// leader; writes still route to the leader and fail without one, so this handle
+// is for reads only.
+//
+// The handle is created on first use and cached. Callers must not Close it —
+// Close() on the adapter owns its lifecycle.
+func (a *RQLiteAdapter) LocalDB() (*sql.DB, error) {
+	a.localMu.Lock()
+	defer a.localMu.Unlock()
+	if a.localDB != nil {
+		return a.localDB, nil
+	}
+	if a.manager == nil {
+		return nil, fmt.Errorf("rqlite adapter: manager unavailable, cannot open local read connection")
+	}
+	ep, err := a.manager.LocalEndpoint()
+	if err != nil {
+		return nil, err
+	}
+	dsn := ep.SQLDSN(localReadConsistencyLevel)
+	db, err := sql.Open("rqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open local (level=none) RQLite connection: %s", RedactError(err, dsn))
+	}
+	// Bootstrap-only path: a couple of connections is plenty and keeps the
+	// footprint next to the main pool negligible.
+	db.SetMaxOpenConns(4)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(30 * time.Second)
+	db.SetConnMaxIdleTime(10 * time.Second)
+	a.localDB = db
+	return a.localDB, nil
 }

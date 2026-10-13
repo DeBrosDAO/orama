@@ -1,0 +1,32 @@
+direction: right
+
+bins: "Binaries (core/cmd)" {
+  node: "orama-node"
+  gw: "gateway"
+  ph: "orama-privhelper"
+  cli: "orama"
+  rest: "pubsub, identity,\nsfu, turn, sni-router"
+}
+
+common: "Shared foundation (this chapter)" {
+  const: "pkg/constants\nports, paths, timeouts,\nURLs, versions, digests"
+  err: "pkg/errors\ntyped errors, codes,\nHTTP mapping"
+  http: "pkg/httputil\nresponses, request parsing,\nvalidation, deadlines, RPC envelope"
+}
+
+wire: "On the wire" {
+  flat: "error: message"
+  rpc: "ok:false, error:code,message,retryable"
+  auth: "error, code, hint"
+}
+
+bins.node -> common.const
+bins.gw -> common.const
+bins.gw -> common.http
+bins.ph -> common.const
+bins.cli -> common.const
+bins.rest -> common.const
+common.http -> wire.flat: "WriteError"
+common.http -> wire.rpc: "WriteRPCError"
+bins.gw -> wire.auth: "writeAuthError\n(pkg/gateway, not httputil)"
+common.err -> bins.cli: "client status errors only"

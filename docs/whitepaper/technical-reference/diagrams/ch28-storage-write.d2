@@ -1,0 +1,20 @@
+direction: down
+
+start: "push or PUT arrives\nproof and session verified"
+rb: "V1: meta.json exists and version <= stored?\nV2: share.bin exists and version <= meta.version?"
+reject: "V1: 409 Conflict\nV2: 400 Bad Request\nnothing written"
+w1: "1. share.bin.tmp written, renamed to share.bin\n(no fsync)"
+w2: "2. checksum.bin.tmp written, renamed\nHMAC-SHA256(integrity.key, share)"
+w3: "3. meta.json.tmp written, renamed\nV1: version, threshold\nV2: version, created_ns, updated_ns, size"
+done: "200 stored"
+c1: "crash before step 1 completes:\nold share, old checksum, old meta\nretry at the same version succeeds"
+c2: "crash between 1 and 2:\nnew share, old checksum\npull answers 500 (integrity check failed)\nuntil a push repairs it"
+c3: "crash between 2 and 3:\nnew share, valid checksum, old meta\npull serves the new share under the OLD version"
+
+start -> rb
+rb -> reject: "yes"
+rb -> w1: "no"
+w1 -> w2 -> w3 -> done
+w1 -> c1: "crash"
+w1 -> c2: "crash"
+w2 -> c3: "crash"

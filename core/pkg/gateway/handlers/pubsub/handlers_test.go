@@ -7,11 +7,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
+	"github.com/DeBrosOfficial/network/pkg/gateway/wssession"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/libp2p/go-libp2p/core/host"
 	"go.uber.org/zap"
@@ -21,12 +23,14 @@ import (
 
 // mockPubSubClient implements client.PubSubClient for testing
 type mockPubSubClient struct {
-	PublishFunc       func(ctx context.Context, topic string, data []byte) error
-	PublishBatchFunc  func(ctx context.Context, msgs []client.TopicMessage, opts client.PublishBatchOptions) error
-	PublishSameFunc   func(ctx context.Context, topics []string, data []byte, opts client.PublishBatchOptions) error
-	SubscribeFunc     func(ctx context.Context, topic string, handler client.MessageHandler) error
-	UnsubscribeFunc   func(ctx context.Context, topic string) error
-	ListTopicsFunc    func(ctx context.Context) ([]string, error)
+	PublishFunc      func(ctx context.Context, topic string, data []byte) error
+	PublishBatchFunc func(ctx context.Context, msgs []client.TopicMessage, opts client.PublishBatchOptions) error
+	PublishSameFunc  func(ctx context.Context, topics []string, data []byte, opts client.PublishBatchOptions) error
+	SubscribeFunc    func(ctx context.Context, topic string, handler client.MessageHandler) error
+	// SubscribeHandleFunc, when set, receives every SubscribeHandle call.
+	SubscribeHandleFunc func(ctx context.Context, topic string, handler client.MessageHandler) (func() error, error)
+	UnsubscribeFunc     func(ctx context.Context, topic string) error
+	ListTopicsFunc      func(ctx context.Context) ([]string, error)
 }
 
 func (m *mockPubSubClient) Publish(ctx context.Context, topic string, data []byte) error {
@@ -57,6 +61,13 @@ func (m *mockPubSubClient) Subscribe(ctx context.Context, topic string, handler 
 	return nil
 }
 
+func (m *mockPubSubClient) SubscribeHandle(ctx context.Context, topic string, handler client.MessageHandler) (func() error, error) {
+	if m.SubscribeHandleFunc != nil {
+		return m.SubscribeHandleFunc(ctx, topic, handler)
+	}
+	return func() error { return nil }, nil
+}
+
 func (m *mockPubSubClient) Unsubscribe(ctx context.Context, topic string) error {
 	if m.UnsubscribeFunc != nil {
 		return m.UnsubscribeFunc(ctx, topic)
@@ -78,10 +89,10 @@ type mockNetworkClient struct {
 
 func (m *mockNetworkClient) Database() client.DatabaseClient { return nil }
 func (m *mockNetworkClient) PubSub() client.PubSubClient     { return m.pubsub }
-func (m *mockNetworkClient) Network() client.NetworkInfo      { return nil }
-func (m *mockNetworkClient) Storage() client.StorageClient    { return nil }
-func (m *mockNetworkClient) Connect() error                   { return nil }
-func (m *mockNetworkClient) Disconnect() error                { return nil }
+func (m *mockNetworkClient) Network() client.NetworkInfo     { return nil }
+func (m *mockNetworkClient) Storage() client.StorageClient   { return nil }
+func (m *mockNetworkClient) Connect() error                  { return nil }
+func (m *mockNetworkClient) Disconnect() error               { return nil }
 func (m *mockNetworkClient) Health() (*client.HealthStatus, error) {
 	return &client.HealthStatus{Status: "healthy"}, nil
 }
@@ -93,7 +104,7 @@ func (m *mockNetworkClient) Host() host.Host              { return nil }
 // newTestHandlers creates a PubSubHandlers with the given mock client for testing.
 func newTestHandlers(nc client.NetworkClient) *PubSubHandlers {
 	logger := &logging.ColoredLogger{Logger: zap.NewNop()}
-	return NewPubSubHandlers(nc, logger)
+	return NewPubSubHandlers(nc, wssession.NewRegistry(nil), logger)
 }
 
 // withNamespace adds a namespace to the request context.
@@ -252,18 +263,17 @@ func TestPublishHandler_Success(t *testing.T) {
 		t.Errorf("expected status 'ok', got %q", resp["status"])
 	}
 
-	// The publish to libp2p happens asynchronously; wait briefly for it
+	// The hand-off to the pubsub service is made inside the request.
 	select {
 	case <-published:
-		// success
-	case <-time.After(2 * time.Second):
-		t.Error("timed out waiting for async publish call")
+	default:
+		t.Error("the answer went out before the pubsub service was called")
 	}
 }
 
 func TestPublishHandler_NilClient(t *testing.T) {
 	logger := &logging.ColoredLogger{Logger: zap.NewNop()}
-	h := NewPubSubHandlers(nil, logger)
+	h := NewPubSubHandlers(nil, wssession.NewRegistry(nil), logger)
 
 	body, _ := json.Marshal(PublishRequest{Topic: "chat", DataB64: "aGVsbG8="})
 	req := httptest.NewRequest(http.MethodPost, "/v1/pubsub/publish", bytes.NewReader(body))
@@ -277,40 +287,54 @@ func TestPublishHandler_NilClient(t *testing.T) {
 	}
 }
 
-func TestPublishHandler_LocalDelivery(t *testing.T) {
-	mock := &mockPubSubClient{}
+// A publish fires the serverless PubSub triggers once and publishes to the
+// pubsub service once; delivering to subscribers is the service's job.
+func TestPublishHandler_firesTriggersAndPublishesOnce(t *testing.T) {
+	var mu sync.Mutex
+	var published []string
+	mock := &mockPubSubClient{PublishFunc: func(_ context.Context, topic string, data []byte) error {
+		mu.Lock()
+		defer mu.Unlock()
+		published = append(published, topic+":"+string(data))
+		return nil
+	}}
 	h := newTestHandlers(&mockNetworkClient{pubsub: mock})
-
-	// Register a local subscriber
-	msgChan := make(chan []byte, 1)
-	localSub := &localSubscriber{
-		msgChan:   msgChan,
-		namespace: "test-ns",
-	}
-	topicKey := "test-ns.chat"
-	h.mu.Lock()
-	h.localSubscribers[topicKey] = append(h.localSubscribers[topicKey], localSub)
-	h.mu.Unlock()
+	fired := make(chan string, 4)
+	h.SetOnPublish(func(_ context.Context, ns, topic string, data []byte) {
+		fired <- ns + "/" + topic + ":" + string(data)
+	})
 
 	body, _ := json.Marshal(PublishRequest{Topic: "chat", DataB64: "aGVsbG8="}) // "hello"
-	req := httptest.NewRequest(http.MethodPost, "/v1/pubsub/publish", bytes.NewReader(body))
-	req = withNamespace(req, "test-ns")
+	req := withNamespace(httptest.NewRequest(http.MethodPost, "/v1/pubsub/publish", bytes.NewReader(body)), "test-ns")
 	rr := httptest.NewRecorder()
-
 	h.PublishHandler(rr, req)
-
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, rr.Code)
 	}
 
-	// Verify local delivery
 	select {
-	case msg := <-msgChan:
-		if string(msg) != "hello" {
-			t.Errorf("expected 'hello', got %q", string(msg))
+	case got := <-fired:
+		if got != "test-ns/chat:hello" {
+			t.Errorf("trigger fired with %q", got)
 		}
-	case <-time.After(1 * time.Second):
-		t.Error("timed out waiting for local delivery")
+	case <-time.After(time.Second):
+		t.Fatal("the publish trigger never fired")
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		mu.Lock()
+		n := len(published)
+		mu.Unlock()
+		if n == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("service saw %d publishes, want 1", n)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if len(fired) != 0 {
+		t.Errorf("the trigger fired more than once")
 	}
 }
 
@@ -354,7 +378,7 @@ func TestTopicsHandler_MissingNamespace(t *testing.T) {
 
 func TestTopicsHandler_NilClient(t *testing.T) {
 	logger := &logging.ColoredLogger{Logger: zap.NewNop()}
-	h := NewPubSubHandlers(nil, logger)
+	h := NewPubSubHandlers(nil, wssession.NewRegistry(nil), logger)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/pubsub/topics", nil)
 	req = withNamespace(req, "test-ns")
@@ -616,32 +640,5 @@ func TestNamespacePrefix(t *testing.T) {
 	expected := "ns::my-ns::"
 	if result != expected {
 		t.Errorf("expected %q, got %q", expected, result)
-	}
-}
-
-func TestGetLocalSubscribers(t *testing.T) {
-	h := newTestHandlers(&mockNetworkClient{pubsub: &mockPubSubClient{}})
-
-	// No subscribers
-	subs := h.getLocalSubscribers("chat", "test-ns")
-	if subs != nil {
-		t.Errorf("expected nil for no subscribers, got %v", subs)
-	}
-
-	// Add a subscriber
-	sub := &localSubscriber{
-		msgChan:   make(chan []byte, 1),
-		namespace: "test-ns",
-	}
-	h.mu.Lock()
-	h.localSubscribers["test-ns.chat"] = []*localSubscriber{sub}
-	h.mu.Unlock()
-
-	subs = h.getLocalSubscribers("chat", "test-ns")
-	if len(subs) != 1 {
-		t.Errorf("expected 1 subscriber, got %d", len(subs))
-	}
-	if subs[0] != sub {
-		t.Error("returned subscriber does not match registered subscriber")
 	}
 }

@@ -175,20 +175,20 @@ func TestShutdown_flushes_all_buffers(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		a.Buffer(BufferRequest{
 			Namespace: "ns", FunctionID: "fn", TriggerID: "tr",
-			WindowMs:  30_000,
-			FlushFn:   flush,
-			Event:     Event{Topic: "t"},
+			WindowMs: 30_000,
+			FlushFn:  flush,
+			Event:    Event{Topic: "t"},
 		})
 	}
 	// Different trigger key — should produce a separate flush.
 	a.Buffer(BufferRequest{
 		Namespace: "ns", FunctionID: "fn", TriggerID: "other",
-		WindowMs:  30_000,
-		FlushFn:   flush,
-		Event:     Event{Topic: "t2"},
+		WindowMs: 30_000,
+		FlushFn:  flush,
+		Event:    Event{Topic: "t2"},
 	})
 
-	a.Shutdown(2*time.Second)
+	a.Shutdown(2 * time.Second)
 
 	deadline := time.Now().Add(2 * time.Second)
 	for atomic.LoadInt32(&flushed) < 2 {
@@ -224,7 +224,7 @@ func TestShutdown_skips_empty_buffers(t *testing.T) {
 	}
 
 	// Now the buffer is empty. Shutdown should not flush again.
-	a.Shutdown(2*time.Second)
+	a.Shutdown(2 * time.Second)
 	time.Sleep(200 * time.Millisecond)
 	if atomic.LoadInt32(&flushed) != 1 {
 		t.Errorf("Shutdown flushed an empty buffer: total flushes %d", flushed)
@@ -272,7 +272,7 @@ func TestBuffer_concurrent_writes_no_race(t *testing.T) {
 	}
 	wg.Wait()
 	// Drain.
-	a.Shutdown(2*time.Second)
+	a.Shutdown(2 * time.Second)
 }
 
 func TestBuffer_payload_includes_batched_true_and_topic(t *testing.T) {

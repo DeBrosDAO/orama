@@ -1,0 +1,110 @@
+[
+  {
+    "name": "plain",
+    "url": "https://h/oramad?checksum=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "checksum": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "chain_accepts": true
+  },
+  {
+    "name": "a decoy in the path before the real query",
+    "url": "https://h/p/checksum=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&x/oramad?checksum=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "checksum": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "chain_accepts": false
+  },
+  {
+    "name": "an uppercase parameter name beside the real one",
+    "url": "https://h/oramad?CHECKSUM=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&checksum=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "checksum": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "chain_accepts": true
+  },
+  {
+    "name": "an uppercase decoy in the path",
+    "url": "https://h/CHECKSUM=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/oramad?checksum=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "checksum": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "chain_accepts": false
+  },
+  {
+    "name": "two checksum values",
+    "url": "https://h/o?checksum=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&checksum=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "checksum": "",
+    "chain_accepts": false
+  },
+  {
+    "name": "an uppercase digest",
+    "url": "https://h/o?checksum=sha256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+    "checksum": "",
+    "chain_accepts": false
+  },
+  {
+    "name": "no query",
+    "url": "https://h/oramad",
+    "checksum": "",
+    "chain_accepts": false
+  },
+  {
+    "name": "a decoy in the path and no query",
+    "url": "https://h/checksum=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "checksum": "",
+    "chain_accepts": false
+  },
+  {
+    "name": "an undecodable pair before the checksum",
+    "url": "https://h/o?a=%zz&checksum=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "checksum": "",
+    "chain_accepts": false
+  },
+  {
+    "name": "a semicolon in the query",
+    "url": "https://h/o?checksum=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb;x=1",
+    "checksum": "",
+    "chain_accepts": false
+  },
+  {
+    "name": "another parameter after it",
+    "url": "https://h/o?checksum=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb&archive=false",
+    "checksum": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "chain_accepts": true
+  },
+  {
+    "name": "another parameter before it",
+    "url": "https://h/o?archive=false&checksum=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "checksum": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "chain_accepts": true
+  },
+  {
+    "name": "a percent-encoded separator",
+    "url": "https://h/o?checksum=sha256%3Abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "checksum": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "chain_accepts": true
+  },
+  {
+    "name": "md5",
+    "url": "https://h/o?checksum=md5:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "checksum": "",
+    "chain_accepts": false
+  },
+  {
+    "name": "a short digest",
+    "url": "https://h/o?checksum=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "checksum": "",
+    "chain_accepts": false
+  },
+  {
+    "name": "a fragment",
+    "url": "https://h/o?checksum=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb#frag",
+    "checksum": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "chain_accepts": false
+  },
+  {
+    "name": "not a url",
+    "url": "http://[::1",
+    "checksum": "",
+    "chain_accepts": false
+  },
+  {
+    "name": "empty",
+    "url": "",
+    "checksum": "",
+    "chain_accepts": false
+  }
+]

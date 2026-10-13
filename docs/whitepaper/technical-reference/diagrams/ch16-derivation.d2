@@ -1,0 +1,36 @@
+direction: down
+
+cs: "cluster-secret\n32 random bytes, 64 hex"
+er: "encryption root IKM\ngeneration 1 is a copy of cluster-secret;\nlater generations are 32 random bytes"
+
+cs_keys: "HKDF-SHA256(cluster-secret, purpose)" {
+  coord: "internal-coordination"
+  hop: "internal-auth-hop"
+  acme: "acme-challenge"
+  tls: "caddy-tls-store\nthen mac-v1 and seal-v1 by HKDF-Expand"
+  kubo: "ipfs-kubo-api"
+  clusterrest: "ipfs-cluster-rest-api"
+  wrap: "ipfs-wrap-v1"
+  cap: "orama-ws-capability-v1:ns\norama-storage-fetch-cap-v1:ns\norama-storage-fetch-cap-tag-v1:ns\norama-storage-fetch-cap-revoke-v1:ns"
+  fp: "push-topic-token-fp"
+  legacy: "orama-jwt-eddsa-v1\nverify-only, one token lifetime"
+}
+
+er_keys: "HKDF-SHA256(root IKM, purpose)" {
+  fs: "orama-secrets-encryption-v1\nfunction_secrets"
+  pd: "push-device-tokens\npush-topic-tokens\nnamespace-push-config\nnamespace-push-credentials"
+  turn: "turn-encryption"
+  agent: "node-agent-token"
+  env: "orama-deployment-environment-v1"
+  restore: "orama-restore-v1:ns\nX25519 restore keypair, never stored"
+  pfp: "push-device-token-fp\n(derived from the rotating root)"
+}
+
+cs -> cs_keys
+er -> er_keys
+cs -> er: "copied once, at generation 1"
+
+turnsecret: "namespace TURN secret\n(random, sealed under turn-encryption)"
+sfu: "webrtc-sfu-control\nSFU join tickets"
+turnsecret -> sfu: "HKDF"
+er_keys.turn -> turnsecret: "seals"

@@ -1,14 +1,17 @@
 package deployments
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
-	"path/filepath"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/deployments"
 	"github.com/DeBrosOfficial/network/pkg/deployments/process"
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"go.uber.org/zap"
 )
@@ -219,26 +222,36 @@ func (h *ListHandler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Delete takes turns with updates, rollbacks and environment changes: it
+	// removes the unit and files they are restarting. It carries no version
+	// stamp, so it does not need the home node, and a deployment whose home
+	// node is gone for good can still be deleted from any node.
+	lockCtx, cancelLock := context.WithTimeout(ctx, constants.DeploymentEnvLocalBudget)
+	defer cancelLock()
+	unlock, err := h.service.lockDeployment(lockCtx, namespace, deployment.Name)
+	if err != nil {
+		http.Error(w, err.Error()+"; run the command again", http.StatusServiceUnavailable)
+		return
+	}
+	defer unlock()
+
 	// 0. Fan out teardown to replica nodes (before local cleanup so replicas can stop processes)
 	h.service.FanOutToReplicas(ctx, deployment, "/v1/internal/deployments/replica/teardown", nil)
 
-	// 1. Stop systemd service
-	if err := h.processManager.Stop(ctx, deployment); err != nil {
-		h.logger.Warn("Failed to stop deployment service (may not exist)", zap.Error(err), zap.String("name", deployment.Name))
-	}
-
-	// 2. Remove deployment files from disk
-	if h.baseDeployPath != "" {
-		deployDir := filepath.Join(h.baseDeployPath, deployment.Namespace, deployment.Name)
-		if err := os.RemoveAll(deployDir); err != nil {
-			h.logger.Warn("Failed to remove deployment files", zap.Error(err), zap.String("path", deployDir))
-		}
+	// 1-2. Stop the unit and remove the files — the directory is the
+	// deployment's claim on its instance on this host, so removing it
+	// releases the name. Both are skipped when another deployment on this
+	// host holds the instance: they are that one's.
+	if err := h.removeLocalInstance(ctx, deployment); err != nil {
+		h.logger.Error("Failed to remove the deployment from this node", zap.Error(err), zap.String("name", deployment.Name))
+		http.Error(w, "Failed to remove the deployment's files; retry the delete", http.StatusInternalServerError)
+		return
 	}
 
 	// 3. Unpin IPFS content
-	if deployment.ContentCID != "" {
-		if err := h.ipfsClient.Unpin(ctx, deployment.ContentCID); err != nil {
-			h.logger.Warn("Failed to unpin IPFS content", zap.Error(err), zap.String("cid", deployment.ContentCID))
+	for _, cid := range []string{deployment.ContentCID, deployment.BuildCID} {
+		if err := h.service.releaseCID(ctx, h.ipfsClient, deployment.ID, namespace, cid); err != nil {
+			h.logger.Warn("Failed to unpin IPFS content", zap.Error(err), zap.String("cid", cid))
 		}
 	}
 
@@ -263,11 +276,15 @@ func (h *ListHandler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.service.forgetDeployment(namespace, deployment.Name)
+
 	h.logger.Info("Deployment deleted",
 		zap.String("id", deployment.ID),
 		zap.String("namespace", namespace),
 		zap.String("name", name),
 	)
+
+	h.service.RecordAudit(r, namespace, auth.AuditDeploymentDeleted, deployment.Name)
 
 	resp := map[string]interface{}{
 		"message": "Deployment deleted successfully",
@@ -276,4 +293,39 @@ func (h *ListHandler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+// removeLocalInstance stops a deployment's unit and removes its directory on
+// this node. Removing the directory is what releases the deployment's claim on
+// its instance here (instance_claim.go). When another deployment on this host
+// holds the instance, the unit and the files are that one's and are left
+// alone.
+func (h *ListHandler) removeLocalInstance(ctx context.Context, deployment *deployments.Deployment) error {
+	deployDir := ""
+	if h.baseDeployPath != "" {
+		deployDir = process.DeployDir(h.baseDeployPath, deployment.Namespace, deployment.Name)
+		owned, err := h.service.ownsInstanceDir(ctx, deployDir, deployment.Namespace, deployment.Name)
+		if err != nil {
+			return err
+		}
+		if !owned {
+			h.logger.Warn("Left the unit and directory alone: another deployment on this host holds the instance",
+				zap.String("instance", process.InstanceName(deployment.Namespace, deployment.Name)))
+			return nil
+		}
+	}
+
+	// A deployment whose unit could not be stopped keeps its rows and its
+	// port: freed while the unit still ran, the port went to the next
+	// deployment, which then crash-looped behind this one.
+	if err := h.processManager.Stop(ctx, deployment); err != nil {
+		return fmt.Errorf("stop the deployment's unit: %w", err)
+	}
+	if deployDir == "" {
+		return nil
+	}
+	if err := os.RemoveAll(deployDir); err != nil {
+		return fmt.Errorf("remove deployment directory %s: %w", deployDir, err)
+	}
+	return nil
 }

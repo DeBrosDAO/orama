@@ -17,28 +17,28 @@ func TestCheckBaseURLSyntax(t *testing.T) {
 		url     string
 		wantErr bool
 	}{
-		{"", false},                          // empty = use default
-		{"https://push.example.com", false},  // public host
+		{"", false},                         // empty = use default
+		{"https://push.example.com", false}, // public host
 		{"http://push.example.com:8090", false},
-		{"https://1.1.1.1", false},           // public literal IP
+		{"https://1.1.1.1", false},                // public literal IP
 		{"https://[2606:4700:4700::1111]", false}, // public v6
-		{"ftp://push.example.com", true},     // bad scheme
-		{"notaurl", true},                    // no scheme/host
-		{"http://", true},                    // missing host
-		{"http://169.254.169.254", true},     // cloud metadata (link-local)
-		{"http://127.0.0.1", true},           // loopback
-		{"http://127.0.0.1:8090", true},      // loopback + port
-		{"http://10.0.0.5", true},            // RFC1918 (WireGuard mesh)
-		{"http://192.168.1.1", true},         // RFC1918
-		{"http://172.16.0.1", true},          // RFC1918
-		{"http://100.64.0.1", true},          // CGNAT
-		{"http://0.0.0.0", true},             // unspecified
-		{"http://[::1]", true},               // v6 loopback
-		{"http://[fd00::1]", true},           // v6 ULA
-		{"http://[64:ff9b::a00:5]", true},    // NAT64-embedded 10.0.0.5
-		{"http://0x7f000001", true},          // hex-encoded 127.0.0.1
-		{"http://2130706433", true},          // decimal-encoded 127.0.0.1
-		{"http://0177.0.0.1", true},          // octal-encoded 127.0.0.1
+		{"ftp://push.example.com", true},          // bad scheme
+		{"notaurl", true},                         // no scheme/host
+		{"http://", true},                         // missing host
+		{"http://169.254.169.254", true},          // cloud metadata (link-local)
+		{"http://127.0.0.1", true},                // loopback
+		{"http://127.0.0.1:8090", true},           // loopback + port
+		{"http://10.0.0.5", true},                 // RFC1918 (WireGuard mesh)
+		{"http://192.168.1.1", true},              // RFC1918
+		{"http://172.16.0.1", true},               // RFC1918
+		{"http://100.64.0.1", true},               // CGNAT
+		{"http://0.0.0.0", true},                  // unspecified
+		{"http://[::1]", true},                    // v6 loopback
+		{"http://[fd00::1]", true},                // v6 ULA
+		{"http://[64:ff9b::a00:5]", true},         // NAT64-embedded 10.0.0.5
+		{"http://0x7f000001", true},               // hex-encoded 127.0.0.1
+		{"http://2130706433", true},               // decimal-encoded 127.0.0.1
+		{"http://0177.0.0.1", true},               // octal-encoded 127.0.0.1
 	}
 	for _, tc := range cases {
 		err := CheckBaseURLSyntax(tc.url)
@@ -59,7 +59,7 @@ func TestIsReservedIP(t *testing.T) {
 		"64:ff9b::a00:1",     // NAT64-embedded 10.0.0.1
 		"64:ff9b::a9fe:a9fe", // NAT64-embedded 169.254.169.254 (metadata)
 	}
-	public := []string{"1.1.1.1", "8.8.8.8", "203.0.113.10", "2606:4700:4700::1111"}
+	public := []string{"1.1.1.1", "8.8.8.8", "93.184.216.10", "2606:4700:4700::1111"}
 	for _, s := range reserved {
 		if ip := net.ParseIP(s); !isReservedIP(ip) {
 			t.Errorf("isReservedIP(%s) = false; want true (reserved)", s)
@@ -117,7 +117,7 @@ func TestCheckBaseURLResolvable(t *testing.T) {
 
 	t.Run("hostname resolving to public is allowed", func(t *testing.T) {
 		lookupIP = func(_ context.Context, host string) ([]net.IP, error) {
-			return []net.IP{net.ParseIP("203.0.113.50")}, nil
+			return []net.IP{net.ParseIP("93.184.216.50")}, nil
 		}
 		if err := CheckBaseURLResolvable(context.Background(), "https://push.example.com"); err != nil {
 			t.Fatalf("public-resolving host should pass: %v", err)
@@ -126,19 +126,26 @@ func TestCheckBaseURLResolvable(t *testing.T) {
 
 	t.Run("any internal IP among results is rejected", func(t *testing.T) {
 		lookupIP = func(_ context.Context, host string) ([]net.IP, error) {
-			return []net.IP{net.ParseIP("203.0.113.50"), net.ParseIP("127.0.0.1")}, nil
+			return []net.IP{net.ParseIP("93.184.216.50"), net.ParseIP("127.0.0.1")}, nil
 		}
 		if err := CheckBaseURLResolvable(context.Background(), "https://mixed.example.com"); err == nil {
 			t.Fatal("a host resolving to ANY internal address must be rejected")
 		}
 	})
 
-	t.Run("resolution failure is allowed (fail open)", func(t *testing.T) {
+	t.Run("resolution failure is refused (fail closed)", func(t *testing.T) {
 		lookupIP = func(_ context.Context, host string) ([]net.IP, error) {
 			return nil, errors.New("nxdomain")
 		}
-		if err := CheckBaseURLResolvable(context.Background(), "https://unresolvable.example.com"); err != nil {
-			t.Fatalf("an unresolvable host should fail open (be allowed); got %v", err)
+		if err := CheckBaseURLResolvable(context.Background(), "https://unresolvable.example.com"); err == nil {
+			t.Fatal("an unresolvable host cannot be checked and must be refused")
+		}
+	})
+
+	t.Run("an empty answer is refused (fail closed)", func(t *testing.T) {
+		lookupIP = func(_ context.Context, host string) ([]net.IP, error) { return nil, nil }
+		if err := CheckBaseURLResolvable(context.Background(), "https://empty.example.com"); err == nil {
+			t.Fatal("a host that resolves to nothing cannot be checked and must be refused")
 		}
 	})
 

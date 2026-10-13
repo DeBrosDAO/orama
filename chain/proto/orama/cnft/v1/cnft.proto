@@ -1,0 +1,111 @@
+syntax = "proto3";
+package orama.cnft.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/cnft/types";
+
+import "gogoproto/gogo.proto";
+
+// Collection is one cNFT collection. Royalty is fixed at creation: a creator
+// address plus a basis-point rate. There is no admin key and no message that
+// changes it afterwards (plans/open-network.md D18).
+message Collection {
+  uint64 id = 1;
+  string creator = 2;
+  uint32 royalty_bps = 3;
+  string name = 4;
+}
+
+// ChangeLog is one entry in a tree's ring buffer of recent roots. Path[0] is
+// the leaf written by that change; path[i] is the node at height i on the way
+// to the root. Index is the leaf that changed.
+message ChangeLog {
+  bytes root = 1;
+  repeated bytes path = 2;
+  uint32 index = 3;
+}
+
+// RightmostProof is the on-chain proof of the rightmost occupied leaf. Index
+// is the next append position (the tree's rightmost index). Appends use this
+// path and do not need a client proof.
+message RightmostProof {
+  repeated bytes proof = 1;
+  bytes leaf = 2;
+  uint32 index = 3;
+}
+
+// Tree is one concurrent Merkle tree. State kept per tree is the current root
+// (the newest changelog entry), a ring buffer of recent roots and the paths
+// that produced them, and the rightmost index. Leaves themselves are not
+// stored; a leaf is rebuilt from the transaction body that wrote it.
+message Tree {
+  uint64 id = 1;
+  string creator = 2;
+  uint64 collection_id = 3;
+  uint32 depth = 4;
+  uint32 buffer_size = 5;
+  uint32 canopy_depth = 6;
+  uint64 sequence = 7;
+  uint64 active_index = 8;
+  uint64 filled_buffer = 9;
+  repeated ChangeLog change_logs = 10 [(gogoproto.nullable) = false];
+  RightmostProof rightmost = 11 [(gogoproto.nullable) = false];
+  // canopy caches the uppermost nodes so a proof may omit them. Empty when
+  // canopy_depth is 0. Indexed by heap index minus 2.
+  repeated bytes canopy = 12;
+  string deposit_id = 13;
+}
+
+// Leaf is the preimage of one compressed asset. The leaf hash is SHA-256 of
+// EncodeLeaf over these fields, in this order.
+message Leaf {
+  bytes asset_id = 1;
+  string owner = 2;
+  string delegate = 3;
+  string metadata_cid = 4;
+  bytes creator_hash = 5;
+  uint64 nonce = 6;
+  uint32 hash_id = 7;
+}
+
+// MerkleProof authenticates a leaf against one root in the tree's changelog
+// buffer. Siblings run from the leaf toward the root. The uppermost
+// canopy_depth siblings may be omitted.
+message MerkleProof {
+  bytes root = 1;
+  uint32 index = 2;
+  repeated bytes siblings = 3;
+}
+
+// MintLeaf is the caller-supplied part of a new leaf. The module fills
+// creator_hash, nonce and hash_id.
+message MintLeaf {
+  bytes asset_id = 1;
+  string owner = 2;
+  string delegate = 3;
+  string metadata_cid = 4;
+}
+
+// DecompressedAsset is the on-chain handle created by MsgDecompress. The
+// compressed leaf is cleared; MsgCompress requires this owner and appends a
+// new leaf.
+message DecompressedAsset {
+  bytes asset_id = 1;
+  uint64 tree_id = 2;
+  uint32 leaf_index = 3;
+  string owner = 4;
+  string delegate = 5;
+  string metadata_cid = 6;
+  bytes creator_hash = 7;
+  uint64 nonce = 8;
+  uint32 hash_id = 9;
+  uint64 collection_id = 10;
+}
+
+// Snapshot is a content id recorded for a tree. Recording it does not open a
+// storage deal.
+message Snapshot {
+  uint64 tree_id = 1;
+  uint64 id = 2;
+  string cid = 3;
+  uint64 sequence = 4;
+}

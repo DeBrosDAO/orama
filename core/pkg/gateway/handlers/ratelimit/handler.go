@@ -11,8 +11,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
+	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/ratelimit"
 	"go.uber.org/zap"
@@ -56,8 +56,8 @@ type GetResponse struct {
 	Namespace            string `json:"namespace"`
 	RequestsPerMinute    int    `json:"requests_per_minute"`
 	Burst                int    `json:"burst"`
-	Source               string `json:"source"`            // "override" | "default"
-	Scope                string `json:"scope"`             // "per-gateway" — see doc
+	Source               string `json:"source"` // "override" | "default"
+	Scope                string `json:"scope"`  // "per-gateway" — see doc
 	MaxRequestsPerMinute int    `json:"max_requests_per_minute,omitempty"`
 	MaxBurst             int    `json:"max_burst,omitempty"`
 	UpdatedAt            int64  `json:"updated_at,omitempty"`

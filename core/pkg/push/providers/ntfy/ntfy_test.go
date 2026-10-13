@@ -3,6 +3,7 @@ package ntfy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -311,21 +312,27 @@ func TestName(t *testing.T) {
 // ----------------------------------------------------------------------------
 // Bugboard #858 — cluster fan-out. Each push node runs an independent ntfy with
 // no shared store, so a publish must reach EVERY node for the subscriber's
-// instance (round-robin DNS picks one) to receive it.
+// instance (round-robin DNS picks one) to receive it. The fan-out travels the
+// overlay to each node's internal gateway, signed for that node.
 // ----------------------------------------------------------------------------
 
-// fanoutRecorder is a test ntfy node that records the topics it received.
+// fanoutRecorder is a test node internal gateway that records what it received.
 type fanoutRecorder struct {
-	mu     sync.Mutex
-	topics []string
+	mu      sync.Mutex
+	paths   []string
+	bodies  []string
+	headers []http.Header
 }
 
 func newFanoutNode(t *testing.T) (*httptest.Server, *fanoutRecorder) {
 	t.Helper()
 	rec := &fanoutRecorder{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
 		rec.mu.Lock()
-		rec.topics = append(rec.topics, strings.TrimPrefix(r.URL.Path, "/"))
+		rec.paths = append(rec.paths, r.URL.Path)
+		rec.bodies = append(rec.bodies, string(b))
+		rec.headers = append(rec.headers, r.Header.Clone())
 		rec.mu.Unlock()
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -335,33 +342,76 @@ func newFanoutNode(t *testing.T) (*httptest.Server, *fanoutRecorder) {
 func (r *fanoutRecorder) count() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return len(r.topics)
+	return len(r.paths)
 }
 
-func TestSend_fanout_publishesToAllNodes(t *testing.T) {
+// stampSigner records the node each request was signed for and marks the
+// request so a test can tell it was signed.
+func stampSigner(mu *sync.Mutex, audiences map[string]string) func(*http.Request, string) error {
+	return func(req *http.Request, nodeID string) error {
+		req.Header.Set("X-Test-Stamp", nodeID)
+		mu.Lock()
+		audiences[req.URL.Host] = nodeID
+		mu.Unlock()
+		return nil
+	}
+}
+
+func targetsOf(servers map[string]*httptest.Server) func(context.Context) ([]FanoutTarget, error) {
+	return func(context.Context) ([]FanoutTarget, error) {
+		out := make([]FanoutTarget, 0, len(servers))
+		for id, s := range servers {
+			out = append(out, FanoutTarget{NodeID: id, BaseURL: s.URL})
+		}
+		return out, nil
+	}
+}
+
+func TestSend_fanout_publishesToAllNodesSigned(t *testing.T) {
 	s1, r1 := newFanoutNode(t)
 	defer s1.Close()
 	s2, r2 := newFanoutNode(t)
 	defer s2.Close()
 	s3, r3 := newFanoutNode(t)
 	defer s3.Close()
+	var mu sync.Mutex
+	audiences := map[string]string{}
 
 	p := New(Config{
-		BaseURL: s1.URL, // base URL still required; fan-out targets come from the resolver
-		FanoutResolver: func(context.Context) ([]string, error) {
-			return []string{s1.URL, s2.URL, s3.URL}, nil
-		},
+		BaseURL:        "https://push.example.com", // never dialled when fanning out
+		AuthToken:      "tok",
+		FanoutResolver: targetsOf(map[string]*httptest.Server{"peer-1": s1, "peer-2": s2, "peer-3": s3}),
+		FanoutSigner:   stampSigner(&mu, audiences),
 	}, nil)
 
-	if err := p.Send(context.Background(), push.PushMessage{DeviceToken: "user-1", Body: "hi"}); err != nil {
+	err := p.Send(context.Background(), push.PushMessage{
+		DeviceToken: "user-1", Body: "hi", Title: "T", Priority: push.PriorityHigh, Channel: "chat",
+	})
+	if err != nil {
 		t.Fatalf("Send: %v", err)
 	}
-	for i, r := range []*fanoutRecorder{r1, r2, r3} {
-		if r.count() != 1 {
-			t.Errorf("node %d received %d publishes; want exactly 1 (the publish must reach every node)", i+1, r.count())
+	for i, tc := range []struct {
+		rec  *fanoutRecorder
+		peer string
+	}{{r1, "peer-1"}, {r2, "peer-2"}, {r3, "peer-3"}} {
+		if tc.rec.count() != 1 {
+			t.Fatalf("node %d received %d publishes; want exactly 1", i+1, tc.rec.count())
 		}
-		if r.count() == 1 && r.topics[0] != "user-1" {
-			t.Errorf("node %d got topic %q; want user-1", i+1, r.topics[0])
+		if got := tc.rec.paths[0]; got != FanoutPathPrefix+"user-1" {
+			t.Errorf("node %d path = %q; want the internal fan-out route", i+1, got)
+		}
+		if tc.rec.bodies[0] != "hi" {
+			t.Errorf("node %d body = %q; want hi", i+1, tc.rec.bodies[0])
+		}
+		h := tc.rec.headers[0]
+		if h.Get("X-Test-Stamp") != tc.peer {
+			t.Errorf("node %d request was signed for %q; want %q", i+1, h.Get("X-Test-Stamp"), tc.peer)
+		}
+		if h.Get("Title") != "T" || h.Get("Priority") != "high" || h.Get("Tags") != "chat" {
+			t.Errorf("node %d headers = %v; want Title/Priority/Tags carried", i+1, h)
+		}
+		if h.Get("Authorization") != "" {
+			t.Errorf("node %d got the ntfy bearer token on an internal hop", i+1)
 		}
 	}
 }
@@ -371,16 +421,14 @@ func TestSend_fanout_oneNodeDown_stillSucceeds(t *testing.T) {
 	defer up.Close()
 	down, _ := newFanoutNode(t)
 	down.Close() // unreachable
+	var mu sync.Mutex
 
 	p := New(Config{
-		BaseURL: up.URL,
-		FanoutResolver: func(context.Context) ([]string, error) {
-			return []string{up.URL, down.URL}, nil
-		},
+		BaseURL:        up.URL,
+		FanoutResolver: targetsOf(map[string]*httptest.Server{"up": up, "down": down}),
+		FanoutSigner:   stampSigner(&mu, map[string]string{}),
 	}, nil)
 
-	// At least one node accepted it → Send succeeds; the message still reached
-	// the reachable instances.
 	if err := p.Send(context.Background(), push.PushMessage{DeviceToken: "t", Body: "x"}); err != nil {
 		t.Fatalf("Send should succeed when at least one node is up; got %v", err)
 	}
@@ -394,49 +442,133 @@ func TestSend_fanout_allNodesDown_returnsError(t *testing.T) {
 	d1.Close()
 	d2, _ := newFanoutNode(t)
 	d2.Close()
+	var mu sync.Mutex
 
 	p := New(Config{
-		BaseURL: "http://127.0.0.1:1", // unused for posting; just non-empty
-		FanoutResolver: func(context.Context) ([]string, error) {
-			return []string{d1.URL, d2.URL}, nil
-		},
+		BaseURL:        "http://127.0.0.1:1",
+		FanoutResolver: targetsOf(map[string]*httptest.Server{"a": d1, "b": d2}),
+		FanoutSigner:   stampSigner(&mu, map[string]string{}),
+	}, nil)
+
+	err := p.Send(context.Background(), push.PushMessage{DeviceToken: "t", Body: "x"})
+	if err == nil {
+		t.Fatal("Send should fail when every node is unreachable")
+	}
+	if !strings.Contains(err.Error(), "all 2 push nodes failed") {
+		t.Errorf("error should say every node failed; got %v", err)
+	}
+}
+
+func TestSend_fanout_everyNodeRefuses_returnsError(t *testing.T) {
+	refuse := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	}))
+	defer refuse.Close()
+	var mu sync.Mutex
+
+	p := New(Config{
+		BaseURL:        "http://127.0.0.1:1",
+		FanoutResolver: targetsOf(map[string]*httptest.Server{"a": refuse}),
+		FanoutSigner:   stampSigner(&mu, map[string]string{}),
+	}, nil)
+
+	err := p.Send(context.Background(), push.PushMessage{DeviceToken: "t", Body: "x"})
+	if err == nil || !strings.Contains(err.Error(), "401") {
+		t.Fatalf("a node refusing the publish must fail the Send with its status; got %v", err)
+	}
+}
+
+func TestSend_fanout_noNodes_returnsErrorWithoutPublishingElsewhere(t *testing.T) {
+	base, rBase := newFanoutNode(t)
+	defer base.Close()
+	var mu sync.Mutex
+
+	p := New(Config{
+		BaseURL:        base.URL,
+		FanoutResolver: func(context.Context) ([]FanoutTarget, error) { return nil, nil },
+		FanoutSigner:   stampSigner(&mu, map[string]string{}),
 	}, nil)
 
 	if err := p.Send(context.Background(), push.PushMessage{DeviceToken: "t", Body: "x"}); err == nil {
-		t.Fatal("Send should fail when every node is unreachable")
+		t.Fatal("Send with no push nodes must fail, not pretend it published")
+	}
+	if rBase.count() != 0 {
+		t.Errorf("an empty node set must not fall back to the base URL; base got %d publishes", rBase.count())
 	}
 }
 
-func TestSend_fanout_resolverEmpty_fallsBackToBaseURL(t *testing.T) {
+func TestSend_fanout_resolverError_returnsErrorWithoutPublishingElsewhere(t *testing.T) {
 	base, rBase := newFanoutNode(t)
 	defer base.Close()
+	var mu sync.Mutex
 
 	p := New(Config{
 		BaseURL:        base.URL,
-		FanoutResolver: func(context.Context) ([]string, error) { return nil, nil }, // no active nodes
+		FanoutResolver: func(context.Context) ([]FanoutTarget, error) { return nil, context.DeadlineExceeded },
+		FanoutSigner:   stampSigner(&mu, map[string]string{}),
 	}, nil)
 
-	if err := p.Send(context.Background(), push.PushMessage{DeviceToken: "t", Body: "x"}); err != nil {
-		t.Fatalf("Send: %v", err)
+	err := p.Send(context.Background(), push.PushMessage{DeviceToken: "t", Body: "x"})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a resolver failure must surface; got %v", err)
 	}
-	if rBase.count() != 1 {
-		t.Errorf("empty resolver must fall back to the base URL; base got %d publishes", rBase.count())
+	if rBase.count() != 0 {
+		t.Errorf("a resolver failure must not fall back to the base URL; base got %d publishes", rBase.count())
 	}
 }
 
-func TestSend_fanout_resolverError_fallsBackToBaseURL(t *testing.T) {
-	base, rBase := newFanoutNode(t)
-	defer base.Close()
+func TestSend_fanout_signerError_failsEveryNode(t *testing.T) {
+	s, rec := newFanoutNode(t)
+	defer s.Close()
 
 	p := New(Config{
-		BaseURL:        base.URL,
-		FanoutResolver: func(context.Context) ([]string, error) { return nil, context.DeadlineExceeded },
+		BaseURL:        s.URL,
+		FanoutResolver: targetsOf(map[string]*httptest.Server{"a": s}),
+		FanoutSigner:   func(*http.Request, string) error { return errors.New("no cluster secret") },
 	}, nil)
 
-	if err := p.Send(context.Background(), push.PushMessage{DeviceToken: "t", Body: "x"}); err != nil {
-		t.Fatalf("resolver error must not fail the push (fall back to base URL); got %v", err)
+	err := p.Send(context.Background(), push.PushMessage{DeviceToken: "t", Body: "x"})
+	if err == nil || !strings.Contains(err.Error(), "no cluster secret") {
+		t.Fatalf("a signing failure must surface; got %v", err)
 	}
-	if rBase.count() != 1 {
-		t.Errorf("resolver error must fall back to the base URL; base got %d publishes", rBase.count())
+	if rec.count() != 0 {
+		t.Errorf("an unsigned request was sent to a node (%d)", rec.count())
+	}
+}
+
+func TestSend_fanout_withoutSigner_returnsError(t *testing.T) {
+	s, rec := newFanoutNode(t)
+	defer s.Close()
+
+	p := New(Config{
+		BaseURL:        s.URL,
+		FanoutResolver: targetsOf(map[string]*httptest.Server{"a": s}),
+	}, nil)
+
+	if err := p.Send(context.Background(), push.PushMessage{DeviceToken: "t", Body: "x"}); err == nil {
+		t.Fatal("fan-out without a signer must fail")
+	}
+	if rec.count() != 0 {
+		t.Errorf("an unsigned request was sent to a node (%d)", rec.count())
+	}
+}
+
+// The ntfy topic is in the request URL and the client's error quotes the URL.
+// The error the provider returns keeps the cause and drops the URL.
+func TestSend_TransportErrorDropsTheTopicURL(t *testing.T) {
+	dead := httptest.NewServer(http.NotFoundHandler())
+	base := dead.URL
+	dead.Close()
+	p := New(Config{BaseURL: base}, nil)
+
+	err := p.Send(context.Background(), push.PushMessage{DeviceToken: "SECRET-TOPIC", Body: "x"})
+	if err == nil {
+		t.Fatal("Send to a closed server succeeded")
+	}
+	if strings.Contains(err.Error(), "SECRET-TOPIC") {
+		t.Errorf("error repeats the topic URL: %v", err)
+	}
+	if !strings.Contains(err.Error(), "refused") {
+		t.Errorf("cause lost: %v", err)
 	}
 }

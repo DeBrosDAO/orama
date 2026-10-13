@@ -1,0 +1,22 @@
+direction: down
+
+op: "Operator sets sni_router.enabled: true\nin node.yaml, runs install or upgrade"
+carry: "ConfigGenerator carries the flag forward\non every node.yaml regeneration"
+caddy: "Caddyfile gets https_port 8443"
+cfg: "SNIRouterInstaller.Configure writes\nconfigs/sni-router.yaml"
+boot: "orama-node edge-serving phase:\nvault, then EnsureSNIRouter, then EnsureCaddy"
+bin: "orama-sni-router binary present?" {shape: diamond}
+fail: "error: sni_router.enabled but\norama-sni-router binary missing"
+start: "write env file, start\norama-namespace-sni-router@index\n(Before= caddy unit)"
+health: "edge health: Caddy and router\nboth must be active before\nthe node stays advertised in DNS"
+off: "flag false: stop leftover units,\nstop router@index, Caddy reclaims :443\non the next upgrade's Caddyfile"
+
+op -> carry -> caddy
+carry -> cfg
+caddy -> boot
+cfg -> boot
+boot -> bin
+bin -> fail: "no"
+bin -> start: "yes"
+start -> health
+op -> off: "set to false instead"

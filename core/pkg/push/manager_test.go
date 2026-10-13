@@ -238,7 +238,9 @@ func TestManager_concurrent_dispatcherFor_no_race(t *testing.T) {
 	// Run with -race.
 	store := newFakeConfigStore()
 	store.Upsert(context.Background(), Config{Namespace: "ns", NtfyBaseURL: "u"})
-	factory := func(_ context.Context, _ Config) []PushProvider { return []PushProvider{&managerFakeProvider{name: "ntfy"}} }
+	factory := func(_ context.Context, _ Config) []PushProvider {
+		return []PushProvider{&managerFakeProvider{name: "ntfy"}}
+	}
 
 	m := NewManager(&fakeDeviceStore{}, store, Defaults{}, factory, zap.NewNop())
 
@@ -261,7 +263,7 @@ type fakeDeviceStore struct{}
 func (s *fakeDeviceStore) Upsert(_ context.Context, dev PushDevice) (string, error) {
 	return dev.ID, nil
 }
-func (s *fakeDeviceStore) Delete(_ context.Context, _, _ string) error  { return nil }
+func (s *fakeDeviceStore) Delete(_ context.Context, _, _ string) error { return nil }
 func (s *fakeDeviceStore) ListForUser(_ context.Context, _, _ string) ([]PushDevice, error) {
 	return nil, nil
 }
@@ -310,5 +312,27 @@ func TestConfig_IsEmpty(t *testing.T) {
 				t.Errorf("IsEmpty() = %v, want %v", got, c.want)
 			}
 		})
+	}
+}
+
+// Provenance, not the URL, decides which ntfy server is reached through the guarded client: the
+// operator's default is not tenant-supplied, a namespace override is.
+func TestManager_marksATenantSuppliedNtfyURL(t *testing.T) {
+	store := newFakeConfigStore()
+	store.Upsert(context.Background(), Config{Namespace: "ns-tenant", NtfyBaseURL: "https://tenant-ntfy.example.com"})
+	defaults := Defaults{NtfyBaseURL: "http://default-ntfy"}
+	seen := map[string]bool{}
+	factory := func(_ context.Context, c Config) []PushProvider {
+		seen[c.Namespace] = c.NtfyBaseURLTenant
+		return []PushProvider{&managerFakeProvider{name: "ntfy"}}
+	}
+	m := NewManager(&fakeDeviceStore{}, store, defaults, factory, zap.NewNop())
+	for _, ns := range []string{"ns-tenant", "ns-default"} {
+		if _, err := m.dispatcherFor(context.Background(), ns); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !seen["ns-tenant"] || seen["ns-default"] {
+		t.Errorf("tenant flag = %v, want true for the override and false for the operator default", seen)
 	}
 }

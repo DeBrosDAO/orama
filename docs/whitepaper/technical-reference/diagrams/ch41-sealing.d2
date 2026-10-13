@@ -1,0 +1,22 @@
+direction: right
+
+plain: "Plaintext" {shape: page}
+inner: "Inner file\nORSF v1: wrapped file key + AEAD body\nXChaCha20-Poly1305" {shape: page}
+s0: "Slot 0 bytes\nChaCha20, key = HKDF(repair seed, nonce || 0)" {shape: page}
+s1: "Slot 1 bytes\nkey = HKDF(repair seed, nonce || 1)" {shape: page}
+s2: "Slot 2 bytes\nkey = HKDF(repair seed, nonce || 2)" {shape: page}
+root0: "piece root 0" {shape: hexagon}
+root1: "piece root 1" {shape: hexagon}
+root2: "piece root 2" {shape: hexagon}
+
+plain -> inner: "storage key (RootWallet orama-storage-v1)\nwraps a random file key"
+inner -> s0
+inner -> s1
+inner -> s2
+s0 -> root0: "Merkle commit"
+s1 -> root1
+s2 -> root2
+
+rep: "Repair delegate\nrepair seed only" {shape: hexagon}
+s1 -> rep: "strip layer 1,\napply layer 2"
+rep -> s2: "byte-identical to slot 2"

@@ -1,0 +1,27 @@
+direction: down
+
+chain: "orama-global-chain.service\nuser orama-chain\nP2P 31000 tcp+udp public\nRPC 31001, gRPC 31002, REST 31003,\nPrometheus 31004 loopback"
+pre: "ExecStartPre (root, +)\norama global validator\ncheck-sign-floor"
+cv: "cosmovisor run\nDAEMON_HOME /var/lib/orama-global/chain"
+od: "cosmovisor/current/bin/oramad"
+pre -> chain: "must pass"
+chain -> cv
+cv -> od: "exec"
+
+ipfs: "orama-global-ipfs.service\nuser orama-ipfs-pub\nswarm 31010 tcp+udp public\nRPC 31011 (token)"
+gc: "ipfs-gc.timer -> ipfs-gc.service\n20 min after start, every 6 h"
+prov: "orama-global-provider.service\nuser orama-provider\nHTTP 31013 public"
+arch: "orama-global-archiver.service\nuser orama-archiver"
+idx: "orama-global-indexer.service\nuser orama-indexer\nread API 31015"
+rep: "orama-global-repair.service\nuser orama-repair"
+onion: "orama-global-tor-onion.service\n+ orama-global-txgate.service\nusers orama-tor-onion, orama-txgate\ntx gate 31022 loopback"
+relay: "orama-global-tor-relay.service\nORPort 31020\nstandalone, no chain"
+dir: "orama-global-tor-dirauth.service\nORPort 31020, DirPort 31021\nstandalone, no chain"
+
+prov -> chain: "After + Wants"
+arch -> chain: "After + Wants"
+idx -> chain: "After + Wants"
+rep -> chain: "After + Wants"
+onion -> chain: "After + Wants"
+prov -> ipfs: "After + Wants\n(pins public deals)"
+ipfs -> gc: "companion"

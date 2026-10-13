@@ -1,0 +1,24 @@
+# Namespace self-healing under injected faults: a hung namespace gateway
+# withdraws its node from ns-<name> DNS and comes back, the last record is
+# never withdrawn, the tenant reconciler starts stopped units, rewrites a
+# drifted gateway config and restarts the gateway onto it, and rewrites a
+# drifted Olric config without restarting Olric. Runs alone: it hangs and
+# stops tenant services on the core nodes.
+id: namespaces-chaos
+title: Namespace health probes and the tenant reconciler under faults
+area: tenancy
+subtasks: [2830]
+stage: 11
+destructive: true
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  units:
+    - orama-namespace-gateway@.service
+    - orama-namespace-olric@.service
+    - orama-namespace-rqlite@.service
+  claims:
+    - "website/src/docs/contributor/architecture-reference.mdx: a node withdraws itself from a namespace's DNS after three failed probes and returns after three healthy ones; the last record is never withdrawn"
+    - "website/src/docs/contributor/architecture-reference.mdx#node-process-model: the reconciler starts missing services and rewrites drifted configs; the gateway is restarted onto its config, Olric is not"

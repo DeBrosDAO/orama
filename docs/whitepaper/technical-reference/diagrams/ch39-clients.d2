@@ -1,0 +1,20 @@
+shape: sequence_diagram
+
+w: "wallet / CLI" 
+gw: "gateway chainread"
+node: "oramad"
+chain: "block"
+
+w -> w: "build TxRaw, SIGN_MODE_DIRECT, fee = base fee x gas"
+w -> gw: "POST /v1/chain/simulate"
+gw -> node: "abci_query /cosmos.tx.v1beta1.Service/Simulate"
+node -> gw: "gas_wanted, gas_used"
+gw -> w: "gas, fee at current base fee"
+w -> gw: "POST /v1/chain/broadcast"
+gw -> node: "broadcast_tx_sync"
+node -> gw: "CheckTx code, hash"
+gw -> w: "code, tx_hash (422 with sanitised log on refusal)"
+node -> chain: "included in a block"
+w -> gw: "GET /v1/chain/tx?hash=..."
+gw -> node: "/tx"
+node -> gw: "result, or 404 with Retry-After until included"

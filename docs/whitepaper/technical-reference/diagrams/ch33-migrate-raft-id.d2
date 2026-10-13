@@ -1,0 +1,16 @@
+shape: sequence_diagram
+
+cli: "operator\norama node migrate-raft-id"
+s: "survivor"
+t: "target node"
+
+cli -> t: "pre-flight: every node must hold a raft-node-id marker"
+cli -> s: "plan: GET /nodes, dns_nodes peer id and overlay IP;\nmatch member by raft address"
+cli -> cli: "confirm, then for each node needing it, serially:"
+cli -> s: "GET /nodes; SafeToRemoveMember(old id)"
+cli -> s: "DELETE /remove {old id}"
+cli -> s: "INSERT raft_evicted_nodes (old id, new peer id)"
+cli -> t: "stop rqlite@index; rm raft.db, snapshots, raft/, db.sqlite*;\nwrite raft-node-id = peer id;\nrewrite rqlite.env: -node-id, JOIN_ARGS; start"
+t -> s: "join under the peer id, replicate from the leader"
+cli -> s: "poll /nodes (5 min, 5 s) until voter and reachable"
+cli -> s: "DELETE the spent tombstone; next node"

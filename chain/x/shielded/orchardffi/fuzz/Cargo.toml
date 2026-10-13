@@ -1,0 +1,31 @@
+[package]
+name = "orama-orchard-ffi-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "cargo-fuzz targets for the Orchard verifier library's C ABI. Fuzz-only: never built into oramad."
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+orama-orchard-ffi = { path = ".." }
+
+# Its own workspace root, so the fuzz crate's lock file and build directory stay out of the
+# library's (whose Cargo.lock is pinned and audited).
+[workspace]
+
+[[bin]]
+name = "ffi_verify"
+path = "fuzz_targets/ffi_verify.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tree_append"
+path = "fuzz_targets/tree_append.rs"
+test = false
+doc = false
+bench = false

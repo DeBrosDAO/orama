@@ -1,0 +1,20 @@
+direction: down
+
+prop: "PrepareProposal (proposer)\nprevious height's extended commit first,\nthen the listed transactions it requires,\nthen the SDK default selection"
+proc: "ProcessProposal (every validator)\nrejects a block that omits or misorders\na valid listed transaction"
+fin: "FinalizeBlock"
+strip: "strip the injected commit\n(first transaction), add an empty OK result"
+pre: "PreBlockers\n1 upgrade   2 auth"
+begin: "BeginBlockers\n1 emission (close epoch?)   2 storage   3 distribution\n4 slashing   5 evidence   6 staking   7 genutil"
+txs: "each transaction\nante chain, then messages in a cache branch,\nthen post handler (empty)"
+end: "EndBlockers\nbank, shielded, staking (updates discarded), nodes, houses,\nstorage, relay, genutil, feegrant,\npower (the only ValidatorUpdates), fees (next base fee),\nemission (ReconcileBurns)"
+commit: "Commit\nBaseApp.Commit, then retain height\nlowered to the archive's"
+
+prop -> proc
+proc -> fin
+fin -> strip
+strip -> pre
+pre -> begin
+begin -> txs
+txs -> end
+end -> commit

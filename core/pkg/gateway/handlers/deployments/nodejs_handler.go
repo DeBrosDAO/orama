@@ -13,6 +13,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/deployments"
 	"github.com/DeBrosOfficial/network/pkg/deployments/process"
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -68,8 +69,16 @@ func (h *NodeJSHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	healthCheckPath := r.FormValue("health_check_path")
 	skipInstall := r.FormValue("skip_install") == "true"
 
-	if name == "" {
-		http.Error(w, "Deployment name is required", http.StatusBadRequest)
+	if err := h.service.CheckNewDeploymentName(ctx, namespace, name); err != nil {
+		writeDeploymentNameError(w, h.logger, err)
+		return
+	}
+
+	// Environment variables arrive as env_<NAME> form fields. Only the Go
+	// handler read these, so a Node.js app could not be configured at all.
+	envVars, err := parseFormEnv(r.MultipartForm.Value)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -84,6 +93,19 @@ func (h *NodeJSHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer file.Close()
+
+	// Claim the instance on this host before anything is uploaded or written.
+	claim, err := h.service.claimNewInstance(ctx, h.baseDeployPath, namespace, name)
+	if err != nil {
+		writeDeploymentNameError(w, h.logger, err)
+		return
+	}
+	registered := false
+	defer func() {
+		if !registered {
+			h.service.releaseClaim(claim)
+		}
+	}()
 
 	h.logger.Info("Deploying Node.js backend",
 		zap.String("namespace", namespace),
@@ -104,7 +126,10 @@ func (h *NodeJSHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	cid := addResp.Cid
 
 	// Deploy the Node.js backend
-	deployment, err := h.deploy(ctx, namespace, name, subdomain, cid, healthCheckPath, skipInstall)
+	deployment, err := h.deploy(ctx, namespace, name, subdomain, cid, healthCheckPath, skipInstall, envVars)
+	// A deployment with a registry row keeps its directory even if it failed
+	// to start: it exists, and a delete removes both.
+	registered = deployment != nil
 	if err != nil {
 		h.logger.Error("Failed to deploy Node.js backend", zap.Error(err))
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -112,6 +137,8 @@ func (h *NodeJSHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Build response
+	h.service.RecordAudit(r, deployment.Namespace, auth.AuditDeploymentCreated, deployment.Name)
+
 	urls := h.service.BuildDeploymentURLs(deployment)
 
 	resp := map[string]interface{}{
@@ -133,12 +160,9 @@ func (h *NodeJSHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 // deploy deploys a Node.js backend
-func (h *NodeJSHandler) deploy(ctx context.Context, namespace, name, subdomain, cid, healthCheckPath string, skipInstall bool) (*deployments.Deployment, error) {
-	// Create deployment directory
-	deployPath := filepath.Join(h.baseDeployPath, namespace, name)
-	if err := os.MkdirAll(deployPath, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create deployment directory: %w", err)
-	}
+func (h *NodeJSHandler) deploy(ctx context.Context, namespace, name, subdomain, cid, healthCheckPath string, skipInstall bool, envVars map[string]string) (*deployments.Deployment, error) {
+	// The directory exists: HandleUpload claimed it.
+	deployPath := process.DeployDir(h.baseDeployPath, namespace, name)
 
 	// Download and extract from IPFS
 	if err := h.extractFromIPFS(ctx, cid, deployPath); err != nil {
@@ -151,15 +175,22 @@ func (h *NodeJSHandler) deploy(ctx context.Context, namespace, name, subdomain, 
 		return nil, fmt.Errorf("package.json not found in deployment")
 	}
 
-	// Install dependencies if needed
-	nodeModulesPath := filepath.Join(deployPath, "node_modules")
-	if !skipInstall {
-		if _, err := os.Stat(nodeModulesPath); os.IsNotExist(err) {
-			h.logger.Info("Installing npm dependencies", zap.String("deployment", name))
-			if err := h.npmInstall(deployPath); err != nil {
-				return nil, fmt.Errorf("failed to install dependencies: %w", err)
-			}
+	// Install dependencies if the app did not ship them. The install is the
+	// tenant's (npm reads its package.json, lockfile and registry), so it runs
+	// in its own sandboxed unit, never in this process (process/build.go).
+	// Without an install, whatever an earlier holder of this instance
+	// installed is removed: the runtime unit would bind it under the app.
+	install, err := needsInstall(filepath.Join(deployPath, "node_modules"), skipInstall)
+	if err != nil {
+		return nil, err
+	}
+	if install {
+		h.logger.Info("Installing npm dependencies", zap.String("deployment", name))
+		if err := h.processManager.InstallDependencies(ctx, namespace, name, deployPath); err != nil {
+			return nil, fmt.Errorf("failed to install dependencies: %w", err)
 		}
+	} else if err := h.processManager.ClearDependencies(namespace, name); err != nil {
+		return nil, err
 	}
 
 	// Parse package.json to determine entry point
@@ -187,7 +218,7 @@ func (h *NodeJSHandler) deploy(ctx context.Context, namespace, name, subdomain, 
 		Status:              deployments.DeploymentStatusDeploying,
 		ContentCID:          cid,
 		Subdomain:           subdomain,
-		Environment:         map[string]string{"ENTRY_POINT": entryPoint},
+		Environment:         withEntryPoint(envVars, entryPoint),
 		MemoryLimitMB:       512,
 		CPULimitPercent:     100,
 		HealthCheckPath:     healthCheckPath,
@@ -248,7 +279,7 @@ func (h *NodeJSHandler) extractFromIPFS(ctx context.Context, cid, destPath strin
 	tmpFile.Close()
 
 	// Extract tarball
-	cmd := exec.Command("tar", "-xzf", tmpFile.Name(), "-C", destPath)
+	cmd := exec.Command("tar", tarExtractArgs(tmpFile.Name(), destPath)...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		h.logger.Error("Failed to extract tarball",
@@ -261,30 +292,31 @@ func (h *NodeJSHandler) extractFromIPFS(ctx context.Context, cid, destPath strin
 	return nil
 }
 
-// npmInstall runs npm install --production in the deployment directory
-func (h *NodeJSHandler) npmInstall(deployPath string) error {
-	cmd := exec.Command("npm", "install", "--production")
-	cmd.Dir = deployPath
-	cmd.Env = append(os.Environ(), "NODE_ENV=production")
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		h.logger.Error("npm install failed",
-			zap.String("output", string(output)),
-			zap.Error(err),
-		)
-		return fmt.Errorf("npm install failed: %w", err)
+// needsInstall reports whether the server installs the dependencies: the
+// tenant did not skip it and did not ship node_modules.
+func needsInstall(nodeModulesPath string, skipInstall bool) (bool, error) {
+	if skipInstall {
+		return false, nil
 	}
-
-	return nil
+	_, err := os.Lstat(nodeModulesPath)
+	switch {
+	case err == nil:
+		return false, nil
+	case os.IsNotExist(err):
+		return true, nil
+	default:
+		return false, fmt.Errorf("inspect %s: %w", nodeModulesPath, err)
+	}
 }
 
 // determineEntryPoint reads package.json to find the entry point
+//
+// package.json is the tenant's file: it is read as a bounded regular file,
+// never through a symlink or from a FIFO that would block this request.
 func (h *NodeJSHandler) determineEntryPoint(deployPath string) (string, error) {
-	packageJSONPath := filepath.Join(deployPath, "package.json")
-	data, err := os.ReadFile(packageJSONPath)
+	data, err := process.ReadManifest(deployPath)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("read package.json: %w", err)
 	}
 
 	var pkg struct {

@@ -1,0 +1,42 @@
+direction: right
+
+mk: "make test (root Makefile)" {
+  a: "core: go test -v ./...\n(no race, no vet)"
+  b: "caddy: go vet + go test"
+  c: "e2e: go vet (both tags),\nlint, harness unit tests"
+  d: "e2e coverage gate\n(enforcing by default)"
+  e: "whitepaper-check\n(all book gates)"
+  f: "chain: go test -tags nowasm\n(no cgo, no race)"
+}
+
+both: "Both" {
+  x: "core Go tests\n(CI adds -race, -timeout 5m, go vet)"
+  y: "CLI reference test\n(CI forces -count=1)"
+  z: "chain pure-Go tests\n(CI adds vet, -race, and links\nlibwasmvm and the Orchard verifiers)"
+}
+
+ci: "CI (.gitea/workflows)" {
+  a: "core: go vet, race tests,\nContract tests -count=1"
+  b: "os/agent: vet, race, seal vector,\nlinux build"
+  c: "sdk and sdk-vault:\nlint, typecheck, build, unit"
+  d: "vault: zig build, zig build test"
+  e: "version-sanity (warns only)"
+  f: "security.yml: govulncheck,\npnpm audit (main, weekly)"
+  g: "chain: build, vet, race tests,\nstaticcheck, gosec, govulncheck,\nsemgrep, clippy, audit, deny"
+  h: "secrets: gitleaks"
+  i: "chain-nightly.yml: mutation,\nnilaway, Miri, ASan"
+}
+
+none: "No automated gate" {
+  a: "chain simulation\n(make chain-sim, by hand)"
+  b: "website tests"
+  c: "core/e2e tagged suites"
+  d: "the fleet suite (owner runs it)"
+}
+
+mk.a -> both.x
+ci.a -> both.x
+mk.a -> both.y
+ci.a -> both.y
+mk.f -> both.z
+ci.g -> both.z

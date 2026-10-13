@@ -17,9 +17,22 @@ const (
 	// request (bugboard #148). Set by the auth middleware after key lookup.
 	Scopes ContextKey = "api_key_scopes"
 
-	// OwnerConfirmed is set to true by the authorization middleware when the
-	// request's SIWE wallet JWT was verified to own the namespace. It lets the
-	// scope gate grant admin to the namespace owner acting via a wallet JWT,
-	// without granting admin to every authenticated user.
-	OwnerConfirmed ContextKey = "owner_confirmed"
+	// Grant holds the *auth.Grant the authorization middleware resolved for a
+	// request's SIWE wallet JWT in the namespace it names. It is what the scope
+	// gate turns into the caller's grant set, so an owner or admin reaches the
+	// control plane and a runtime member does not.
+	//
+	// It used to be a bare true — "a wallet owner was confirmed" — which is why
+	// everyone with access to a namespace was an admin: a boolean has one thing
+	// to say. See pkg/gateway/auth/grants.go.
+	Grant ContextKey = "namespace_grant"
+
+	// Permissions holds the auth.PermissionSet this request's credential
+	// amounts to, computed once by the scope middleware.
+	//
+	// It exists so that the gate and the handler ask the same question of the
+	// same answer. The gate asks "does this reach the domain at all", before
+	// the handler knows which object; the handler asks again with the object.
+	// They used to be computed separately, from different inputs.
+	Permissions ContextKey = "permissions"
 )

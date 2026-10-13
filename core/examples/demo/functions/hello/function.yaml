@@ -1,0 +1,4 @@
+name: hello
+public: true
+memory: 16
+timeout: 10

@@ -1,0 +1,27 @@
+direction: down
+
+start: "orama node stage-archive --archive A"
+root: "Require root;\n/opt/orama root-owned, not group/other writable"
+lock: "flock /opt/orama/.archive.lock"
+clean: "Remove leftover .archive-staging-* and .archive-cli-*"
+mk: "mkdir .archive-staging-XXXX (0700)"
+tuf: "Optional: copy archive into staging,\nTUF check (--release-metadata, --release-target)"
+ext: "Extract into staging/new"
+anchor: "Anchor present?" {shape: diamond}
+have: "Verify against anchor\n(signature, every file, arch, rotation)"
+none: "--trust-signers given?" {shape: diamond}
+mint: "VerifyTree against --trust-signers;\ncreate anchor after it passes"
+refuse: "Refuse; /opt/orama unchanged"
+lockbin: "bin/ and files root:orama 0750"
+swap: "swapArchive: move owned paths to staging/old,\nmove new in (manifest last), roll back on error"
+done: "Remove staging; release lock"
+
+start -> root -> lock -> clean -> mk -> tuf -> ext -> anchor
+anchor -> have: "yes"
+anchor -> none: "no"
+none -> mint: "yes"
+none -> refuse: "no"
+have -> lockbin: "ok"
+have -> refuse: "fail"
+mint -> lockbin
+lockbin -> swap -> done

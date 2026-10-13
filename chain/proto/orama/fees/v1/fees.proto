@@ -1,0 +1,79 @@
+syntax = "proto3";
+package orama.fees.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/fees/types";
+
+import "gogoproto/gogo.proto";
+
+// Params are x/fees's genesis-set parameters
+// (plans/open-network/track-c-chain.md C2). There is no Msg service: nothing
+// can change these after genesis short of a coordinated hard fork
+// (plans/open-network.md D18).
+message Params {
+  // target_block_gas_fraction is the block-fullness target the base fee
+  // adjusts toward: 0.5 (50%), per the EIP-1559-style rule.
+  string target_block_gas_fraction = 1 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+  // max_base_fee_change_fraction is the largest fraction the base fee may
+  // move by from one block to the next: 0.125 (12.5%).
+  string max_base_fee_change_fraction = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+  // min_base_fee is the floor on the per-gas-unit base fee, in norama (P2).
+  // The base fee never adjusts below it.
+  string min_base_fee = 3 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  // initial_base_fee is the per-gas-unit base fee (norama) a fresh genesis
+  // starts from.
+  string initial_base_fee = 4 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  // deposit_refund_fraction is the fraction of a released state deposit
+  // refunded to the owner's earnings account: 0.99.
+  string deposit_refund_fraction = 5 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+  // deposit_burn_fraction is the fraction of a released state deposit
+  // burned: 0.01. Must equal exactly 1 - deposit_refund_fraction (Validate).
+  string deposit_burn_fraction = 6 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+}
+
+// EarningsAccount is one address's earnings balance: every protocol payout
+// (today: x/power's validator/delegator reward path) lands here, credited
+// automatically each epoch, never as a public bank balance
+// (plans/open-network.md D7, C2). It can be spent only through this module's
+// keeper API (paying tx fees, or a future module bonding/depositing from it)
+// - there is no Msg that moves it to another address.
+message EarningsAccount {
+  string address = 1;
+  string balance = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+}
+
+// Deposit is one locked state-deposit ledger entry (C2 "State deposits").
+// No module consumes this yet; it exists so a future module (x/token,
+// x/cnft, x/market, x/nodes, CosmWasm storage) can lock, and later release,
+// a per-byte deposit through Keeper.LockDeposit / Keeper.ReleaseDeposit
+// without re-implementing the 99%-refund/1%-burn split.
+message Deposit {
+  // id is the caller-assigned, globally unique deposit id (e.g.
+  // "storage/deal/42"); x/fees does not interpret it.
+  string id = 1;
+  string owner = 2;
+  string amount = 3 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+}

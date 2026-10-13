@@ -246,3 +246,23 @@ func TestTokenBucketLimiter_legacy_works(t *testing.T) {
 		t.Error("first call should be allowed")
 	}
 }
+
+// TestMultiTier_default_per_wallet_limit_matches_docs pins the figures
+// website/src/docs/developer/functions.mdx ("Invoke rate limits") states: a wallet gets a 60-invoke
+// burst, the 61st is refused as per_wallet, and the refill is 10 a second.
+func TestMultiTier_default_per_wallet_limit_matches_docs(t *testing.T) {
+	l := NewMultiTierLimiter(DefaultLimiterConfig())
+	req := RateLimitRequest{Namespace: "ns", Function: "fn", Wallet: "w1"}
+	for i := 0; i < 60; i++ {
+		if d, _ := l.AllowRequest(context.Background(), req); !d.Allowed {
+			t.Fatalf("invoke %d of the documented 60-invoke burst refused (scope=%s)", i+1, d.Scope)
+		}
+	}
+	d, _ := l.AllowRequest(context.Background(), req)
+	if d.Allowed || d.Scope != "per_wallet" {
+		t.Fatalf("invoke 61 = %+v, want refused with scope=per_wallet", d)
+	}
+	if d.RetryAfter <= 0 || d.RetryAfter > 150*time.Millisecond {
+		t.Errorf("RetryAfter = %s, want about 100ms (10 a second)", d.RetryAfter)
+	}
+}

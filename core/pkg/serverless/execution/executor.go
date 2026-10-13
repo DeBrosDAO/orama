@@ -6,10 +6,12 @@ import (
 	cryptorand "crypto/rand"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
+	"github.com/tetratelabs/wazero/experimental"
 	"go.uber.org/zap"
 )
 
@@ -36,29 +38,100 @@ func instantiateTimingFrom(ctx context.Context) *InstantiateTiming {
 	return t
 }
 
+type namespaceKey struct{}
+
+// WithNamespace tags an execution ctx so the limiter can cap one tenant
+// without letting it fill the process-wide semaphore (bugboard #85).
+func WithNamespace(ctx context.Context, ns string) context.Context {
+	return context.WithValue(ctx, namespaceKey{}, ns)
+}
+
+func namespaceFrom(ctx context.Context) string {
+	ns, _ := ctx.Value(namespaceKey{}).(string)
+	return ns
+}
+
 // Executor handles WASM module execution.
 type Executor struct {
 	runtime wazero.Runtime
 	logger  *zap.Logger
-	sem     chan struct{} // concurrency limiter
+	sem     chan struct{} // process-wide limiter
+	perNS   map[string]chan struct{}
+	perNSN  int
+	mu      sync.Mutex
 }
 
 // NewExecutor creates a new Executor.
 // maxConcurrent limits simultaneous module instantiations (0 = unlimited).
 func NewExecutor(runtime wazero.Runtime, logger *zap.Logger, maxConcurrent int) *Executor {
 	var sem chan struct{}
+	perNSN := 0
 	if maxConcurrent > 0 {
 		sem = make(chan struct{}, maxConcurrent)
+		perNSN = maxConcurrent / 2
+		if perNSN < 1 {
+			perNSN = 1
+		}
 	}
 	return &Executor{
 		runtime: runtime,
 		logger:  logger,
 		sem:     sem,
+		perNS:   make(map[string]chan struct{}),
+		perNSN:  perNSN,
 	}
 }
 
+func (e *Executor) nsSlot(ns string) chan struct{} {
+	if e.perNSN <= 0 || ns == "" {
+		return nil
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	ch := e.perNS[ns]
+	if ch == nil {
+		ch = make(chan struct{}, e.perNSN)
+		e.perNS[ns] = ch
+	}
+	return ch
+}
+
+// acquire takes ns's slot, then a process-wide one, and returns the release of
+// both. The namespace slot comes first: a burst from one namespace queues on
+// its own slot without holding a process-wide token, so it cannot take every
+// token while it waits and starve the other namespaces.
+func (e *Executor) acquire(ctx context.Context, ns string) (func(), error) {
+	slot := e.nsSlot(ns)
+	if slot != nil {
+		select {
+		case slot <- struct{}{}:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	if e.sem != nil {
+		select {
+		case e.sem <- struct{}{}:
+		case <-ctx.Done():
+			if slot != nil {
+				<-slot
+			}
+			return nil, ctx.Err()
+		}
+	}
+	return func() {
+		if e.sem != nil {
+			<-e.sem
+		}
+		if slot != nil {
+			<-slot
+		}
+	}, nil
+}
+
 // ExecuteModule instantiates and runs a WASM module with the given input.
-// The contextSetter callback is used to set invocation context on host services.
+// The invocation's identity rides ctx; there is nothing to set on the host
+// services, which hold no per-invocation state.
 //
 // Bug #221 fix: each invocation gets an ANONYMOUS module instance (no name
 // in the wazero runtime registry). Previously we used the function name
@@ -73,14 +146,8 @@ func NewExecutor(runtime wazero.Runtime, logger *zap.Logger, maxConcurrent int) 
 // function name is still surfaced via WithArgs(moduleName) so WASI
 // `argv[0]` shows it inside the function (matches the prior behavior
 // that user code may depend on).
-func (e *Executor) ExecuteModule(ctx context.Context, compiled wazero.CompiledModule, moduleName string, input []byte, contextSetter func(), contextClearer func()) ([]byte, error) {
+func (e *Executor) ExecuteModule(ctx context.Context, compiled wazero.CompiledModule, moduleName string, input []byte) ([]byte, error) {
 	// Set invocation context for host functions
-	if contextSetter != nil {
-		contextSetter()
-		if contextClearer != nil {
-			defer contextClearer()
-		}
-	}
 
 	// Create buffers for stdin/stdout (WASI uses these for I/O)
 	stdin := bytes.NewReader(input)
@@ -115,21 +182,28 @@ func (e *Executor) ExecuteModule(ctx context.Context, compiled wazero.CompiledMo
 		// engine.go for the persistent-WS path.
 		WithRandSource(cryptorand.Reader)
 
-	// Acquire concurrency slot
-	if e.sem != nil {
-		select {
-		case e.sem <- struct{}{}:
-			defer func() { <-e.sem }()
-		case <-ctx.Done():
-			return nil, ctx.Err()
+	// Enforce the function's own memory limit for this invocation only: the
+	// allocator rides the instantiate ctx, so it never touches another function.
+	limitMB := memoryLimitMBFrom(ctx)
+	startRefused := false
+	if limitMB > 0 {
+		if err := checkMinMemory(compiled, limitMB); err != nil {
+			return nil, err
 		}
+		ctx = experimental.WithMemoryAllocator(ctx, cappedAllocator{limitBytes: uint64(limitMB) * bytesPerMB, startRefused: &startRefused})
 	}
+
+	release, err := e.acquire(ctx, namespaceFrom(ctx))
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 
 	// Instantiate and run the module (WASI _start will be called automatically).
 	// Time the instantiate so the engine can attribute cold-start vs handler
 	// work (bugboard #27 cold-start floor); no-op when no collector is attached.
 	instStart := time.Now()
-	instance, err := e.runtime.InstantiateModule(ctx, compiled, moduleConfig)
+	instance, err := e.instantiate(ctx, compiled, moduleConfig, &startRefused, limitMB)
 	if t := instantiateTimingFrom(ctx); t != nil {
 		t.InstantiateNs = time.Since(instStart).Nanoseconds()
 	}
@@ -271,4 +345,20 @@ func (e *Executor) UnmarshalJSONFromGuest(mod api.Module, ptr, size uint32, v in
 		return fmt.Errorf("failed to read from guest memory")
 	}
 	return json.Unmarshal(data, v)
+}
+
+// instantiate instantiates compiled. A memory whose start the function's limit
+// refused makes wazero panic slicing the buffer it was denied; that panic, and
+// only that one, is the module not fitting its limit and is returned as an
+// error. Any other panic is not this package's to interpret and goes on.
+func (e *Executor) instantiate(ctx context.Context, compiled wazero.CompiledModule, cfg wazero.ModuleConfig, startRefused *bool, limitMB int) (instance api.Module, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			if !*startRefused {
+				panic(r)
+			}
+			instance, err = nil, instantiateRefused(limitMB)
+		}
+	}()
+	return e.runtime.InstantiateModule(ctx, compiled, cfg)
 }

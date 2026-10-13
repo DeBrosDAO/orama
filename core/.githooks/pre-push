@@ -6,13 +6,32 @@ GREEN='\033[0;32m'
 RED='\033[0;31m'
 NOCOLOR='\033[0m'
 
+ROOT="$(git rev-parse --show-toplevel)"
+
+# Git sets these for every hook it runs. A test that calls git and inherits them runs against
+# the repository being pushed, not its own: it can rewrite the index or set core.bare. Nothing
+# below needs them, so none of it inherits them.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_PREFIX
+
 # Run tests before push
 echo -e "\n${CYAN}Running tests...${NOCOLOR}"
-cd "$(git rev-parse --show-toplevel)/core" && go test ./...
+cd "$ROOT/core" && go test ./...
 status=$?
 if [ $status -ne 0 ]; then
   echo -e "${RED}Push aborted: some tests failed.${NOCOLOR}"
   exit 1
-else
-  echo -e "${GREEN}All tests passed. Proceeding with push.${NOCOLOR}"
 fi
+
+# The chain: build, and vet the default and nowasm tag sets. The third set ("nowasm orchardffi", the cgo
+# files) and the race-detector tests (CosmWasm, the Orchard verifier and the verifier binary all
+# linked, several minutes) run in CI, not here: this hook has to stay fast. `make -C chain vet-all`
+# vets all three by hand, `make -C chain test` runs the pure-Go unit tests.
+echo -e "\n${CYAN}Building and vetting the chain...${NOCOLOR}"
+cd "$ROOT/chain" && CGO_ENABLED=0 go build -tags nowasm ./... && make vet-all TAGSETS='"" "nowasm"'
+status=$?
+if [ $status -ne 0 ]; then
+  echo -e "${RED}Push aborted: the chain does not build or vet.${NOCOLOR}"
+  exit 1
+fi
+
+echo -e "${GREEN}All tests passed. Proceeding with push.${NOCOLOR}"

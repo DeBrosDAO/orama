@@ -1,0 +1,34 @@
+direction: down
+
+start: "IndexSupervisor.EnsureRQLite"
+read: "readIndexStart\nraft state on disk? recovery peers.json?\nmembership record?"
+rec: "recovery peers.json pending"
+state: "has raft state"
+nostate: "no raft state"
+nojoin: "start with no -join\n(operator reform wins)"
+same: "address unchanged"
+changed: "recorded raft address differs\nfrom the advertised one"
+restart: "start with no -join\n(restart into own configuration)"
+rejoin: "join recorded members\nand join address, not itself"
+rejoinnone: "refuse to start\n(point to orama node recover-raft)"
+norecord: "no membership record"
+record: "membership record exists"
+fresh: "join node.yaml rqlite_join_address,\nor bootstrap a NEW cluster\n(fresh genesis install)"
+lost: "lost data: join recorded members\nand join address"
+lostnone: "refuse: would create\na second empty registry"
+
+start -> read
+read -> rec
+read -> state
+read -> nostate
+rec -> nojoin
+state -> same
+state -> changed
+same -> restart
+changed -> rejoin: "targets exist"
+changed -> rejoinnone: "none"
+nostate -> norecord
+nostate -> record
+norecord -> fresh
+record -> lost: "targets exist"
+record -> lostnone: "none"

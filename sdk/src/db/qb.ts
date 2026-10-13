@@ -70,7 +70,7 @@ export class QueryBuilder {
     return this;
   }
 
-  async getMany<T = any>(ctx?: any): Promise<T[]> {
+  async getMany<T = any>(_ctx?: any): Promise<T[]> {
     const response = await this.httpClient.post<QueryResponse>(
       "/v1/rqlite/select",
       {
@@ -81,7 +81,7 @@ export class QueryBuilder {
     return response.items || [];
   }
 
-  async getOne<T = any>(ctx?: any): Promise<T | null> {
+  async getOne<T = any>(_ctx?: any): Promise<T | null> {
     const response = await this.httpClient.post<QueryResponse>(
       "/v1/rqlite/select",
       {

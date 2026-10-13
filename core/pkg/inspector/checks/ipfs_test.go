@@ -25,11 +25,11 @@ func TestCheckIPFS_HealthyNode(t *testing.T) {
 	nd.IPFS = &inspector.IPFSData{
 		DaemonActive:     true,
 		ClusterActive:    true,
-		SwarmPeerCount:   0,  // single node: expected peers = 0
-		ClusterPeerCount: 1,  // single node cluster
+		SwarmPeerCount:   0, // single node: expected peers = 0
+		ClusterPeerCount: 1, // single node cluster
 		ClusterErrors:    0,
 		RepoSizeBytes:    500 * 1024 * 1024,  // 500MB
-		RepoMaxBytes:     1024 * 1024 * 1024,  // 1GB
+		RepoMaxBytes:     1024 * 1024 * 1024, // 1GB
 		KuboVersion:      "0.22.0",
 		ClusterVersion:   "1.0.8",
 		HasSwarmKey:      true,
@@ -112,8 +112,8 @@ func TestCheckIPFS_RepoSize(t *testing.T) {
 		max    int64
 		status inspector.Status
 	}{
-		{"healthy", 500 * 1024 * 1024, 1024 * 1024 * 1024, inspector.StatusPass},    // 50%
-		{"elevated", 870 * 1024 * 1024, 1024 * 1024 * 1024, inspector.StatusWarn},   // 85%
+		{"healthy", 500 * 1024 * 1024, 1024 * 1024 * 1024, inspector.StatusPass},     // 50%
+		{"elevated", 870 * 1024 * 1024, 1024 * 1024 * 1024, inspector.StatusWarn},    // 85%
 		{"nearly full", 980 * 1024 * 1024, 1024 * 1024 * 1024, inspector.StatusFail}, // 96%
 	}
 	for _, tt := range tests {

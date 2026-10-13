@@ -1,0 +1,26 @@
+direction: down
+
+cfg: "ClientConfig\nAppName, GatewayURL, APIKey / JWT,\nDatabaseEndpoints, DatabaseReadLevel,\nBootstrapPeers, PubSubSocket, ListenAddrs"
+connect: "Connect()\nderive namespace, build libp2p host,\nattach pubsub socket client,\ndial bootstrap peers (failures only warn)"
+access: "requireAccess(ctx)\ninternal ctx, or key/JWT present;\nnamespace override must match"
+
+db: "Database()" {
+  choose: "DatabaseEndpoints set?"
+  gw: "gatewayDatabaseClient\nPOST /v1/rqlite/exec|query|transaction|\ncreate-table|drop-table, GET /schema\n60 s, no redirects, 64 MiB cap"
+  direct: "DatabaseClientImpl\ngorqlite to RQLite endpoints,\nlevel none or weak,\n3 attempts, reconnect between"
+  choose -> gw: "no"
+  choose -> direct: "yes"
+}
+st: "Storage()\nHTTP /v1/storage/*\nupload 5 min, get 5 min, others 30-60 s"
+ps: "PubSub()\nunix socket HTTP client\n(node-local only)"
+net: "Network()\nlibp2p peers, local IPFS API,\nIPFS Cluster REST"
+err: "Errors\ngatewayStatusError -> pkg/errors sentinels\nClientError, ErrNotConnected, ..."
+
+cfg -> connect
+connect -> access
+access -> db.choose
+access -> st
+access -> ps
+access -> net
+db.gw -> err
+st -> err

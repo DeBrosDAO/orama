@@ -1,0 +1,23 @@
+shape: sequence_diagram
+
+op: "operator (RemoteUpgrader)"
+n: "node N"
+peers: "other voters"
+
+op -> n: "ssh: guard script + staged orama node upgrade --restart"
+n -> n: "pre-stop: record raft id, quorum check (reachable-1 >= V/2+1)"
+n -> n: "maintenance flag, TransferLeadership (index + tenant)"
+n -> peers: "leader steps down"
+peers -> n: "a voter wins; node sees leader that is not itself (60 s)"
+n -> n: "stop units, swap binaries, re-exec new CLI"
+n -> n: "regenerate configs and units, restart orama-node"
+n -> n: "nodehealth gate on the index rqlite + gateway (5 min)"
+n -> n: "restart tenant units (failures are printed, not fatal)"
+n -> n: "clear maintenance flag"
+n -> op: "ssh returns 0"
+loop: "every 5 s until budget" {
+  op -> n: "ssh: curl rqlite /status, curl gateway /health"
+  n -> op: "raft state, leader, applied/commit index, HTTP code"
+}
+op -> op: "Ready: Leader or Follower, leader known, lag at most 200, gateway 200"
+op -> n: "next node starts (skipped after the last step)"

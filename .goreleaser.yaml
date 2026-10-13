@@ -16,7 +16,7 @@ builds:
   # orama CLI binary
   - id: orama
     dir: core
-    main: ./cmd/cli
+    main: ./cmd/orama
     binary: orama
     goos:
       - linux
@@ -77,7 +77,7 @@ nfpms:
     ids:
       - orama
     vendor: DeBros
-    homepage: https://github.com/DeBrosDAO/orama
+    homepage: https://github.com/Orama-Network/orama
     maintainer: DeBros <dev@debros.io>
     description: CLI tool for the Orama decentralized network
     license: MIT
@@ -99,7 +99,7 @@ nfpms:
     ids:
       - orama-node
     vendor: DeBros
-    homepage: https://github.com/DeBrosDAO/orama
+    homepage: https://github.com/Orama-Network/orama
     maintainer: DeBros <dev@debros.io>
     description: Node daemon for the Orama decentralized network
     license: MIT
@@ -123,11 +123,11 @@ brews:
     ids:
       - orama-archives
     repository:
-      owner: DeBrosDAO
+      owner: Orama-Network
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     directory: Formula
-    homepage: https://github.com/DeBrosDAO/orama
+    homepage: https://github.com/Orama-Network/orama
     description: CLI tool for the Orama decentralized network
     license: MIT
     skip_upload: '{{ if .Prerelease }}true{{ else }}false{{ end }}'
@@ -157,7 +157,7 @@ changelog:
 
 release:
   github:
-    owner: DeBrosDAO
+    owner: Orama-Network
     name: orama
   draft: false
   prerelease: auto

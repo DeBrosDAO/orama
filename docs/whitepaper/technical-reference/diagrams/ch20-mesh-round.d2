@@ -1,0 +1,20 @@
+shape: sequence_diagram
+
+gw: Index gateway (PubsubMesh)
+svc: Pubsub service (Mesh, OverlayGater)
+db: Index RQLite
+peer: Peer services
+
+gw -> db: "CREATE TABLE IF NOT EXISTS _pubsub_mesh_peers"
+gw -> svc: "GET /mesh/self"
+svc -> gw: "peer id + /ip4/<wg ip>/tcp/<port>/p2p/<id>"
+gw -> db: "INSERT OR REPLACE (peer_id, node_id, multiaddr, last_seen)"
+gw -> db: "DELETE rows older than 24 h"
+gw -> db: "SELECT peers seen in the last 2 min, ordered by peer id"
+gw -> gw: "successors (dial) and predecessors (allow), at most 256 each"
+gw -> svc: "POST /mesh/peers {addrs, allow}"
+svc -> svc: "validate: one overlay /ip4/.../tcp/.../p2p entry each"
+svc -> svc: "gater.SetMeshPeers(allow + addrs)"
+svc -> svc: "close connections to peers no longer admitted"
+svc -> peer: "dial every addr in parallel, 5 s each"
+svc -> gw: "{connected, failed[]}"

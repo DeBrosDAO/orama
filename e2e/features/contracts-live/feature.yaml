@@ -1,0 +1,42 @@
+# Every route fixture under contracts/ (the request/response shapes the
+# gateway and the TypeScript SDK share) sent to the live fleet: the fixture's
+# own request, with only placeholders that cannot work live replaced (a real
+# wallet and signature, a real refresh token, a real CID, a Tor-reachable
+# URL), must be accepted, and the answer must have the fixture's response
+# shape (members and JSON types, not values). Members only the live answer
+# has are logged. A fixture without a live case fails the package, so a new
+# contract cannot skip this check.
+id: contracts-live
+title: Gateway contract fixtures against the live fleet
+area: clients
+subtasks: [2846]
+stage: 4
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  routes:
+    - /v1/auth/challenge
+    - /v1/auth/verify
+    - /v1/auth/refresh
+    - /v1/auth/logout
+    - /v1/cache/put
+    - /v1/cache/get
+    - /v1/cache/scan
+    - /v1/cache/delete
+    - /v1/rqlite/create-table
+    - /v1/rqlite/exec
+    - /v1/rqlite/query
+    - /v1/rqlite/find
+    - /v1/rqlite/find-one
+    - /v1/rqlite/transaction
+    - /v1/rqlite/drop-table
+    - /v1/pubsub/publish
+    - /v1/storage/upload
+    - /v1/storage/pin
+    - /v1/storage/unpin/
+    - /v1/proxy/anon
+  claims:
+    - "docs/whitepaper/technical-reference/appendices/i-api-surface.md: the contracts/ fixtures are what the SDK sends and what the gateway answers, on the live fleet too"

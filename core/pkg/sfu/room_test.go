@@ -225,7 +225,7 @@ func TestRoomBuildICEServersNoSecret(t *testing.T) {
 func TestRoomBuildICEServersMultipleTURN(t *testing.T) {
 	cfg := testConfig()
 	cfg.TURNServers = []TURNServerConfig{
-		{Host: "1.2.3.4", Port: 3478},              // non-secure → UDP + TCP = 2 URIs
+		{Host: "1.2.3.4", Port: 3478},               // non-secure → UDP + TCP = 2 URIs
 		{Host: "5.6.7.8", Port: 5349, Secure: true}, // secure → 1 URI
 	}
 
@@ -246,13 +246,11 @@ func TestRoomBuildICEServersMultipleTURN(t *testing.T) {
 
 func TestEmptyRoomCleanup(t *testing.T) {
 	// Override timeAfter for instant timer
-	origTimeAfter := timeAfter
-	timeAfter = func(d time.Duration) <-chan time.Time {
+	defer overrideTimeAfter(func(d time.Duration) <-chan time.Time {
 		ch := make(chan time.Time, 1)
 		ch <- time.Now()
 		return ch
-	}
-	defer func() { timeAfter = origTimeAfter }()
+	})()
 
 	rm := NewRoomManager(testConfig(), testLogger())
 	room := rm.GetOrCreateRoom("room-1")
@@ -285,8 +283,8 @@ func TestHealthEndpointOK(t *testing.T) {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
 	}
 	body := w.Body.String()
-	if body != `{"status":"ok","rooms":0}` {
-		t.Errorf("body = %q, want %q", body, `{"status":"ok","rooms":0}`)
+	if body != `{"status":"ok","rooms":0,"hasRoom":false}` {
+		t.Errorf("body = %q, want %q", body, `{"status":"ok","rooms":0,"hasRoom":false}`)
 	}
 }
 
@@ -310,20 +308,18 @@ func TestHealthEndpointDraining(t *testing.T) {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusServiceUnavailable)
 	}
 	body := w.Body.String()
-	if body != `{"status":"draining","rooms":0}` {
-		t.Errorf("body = %q, want %q", body, `{"status":"draining","rooms":0}`)
+	if body != `{"status":"draining","rooms":0,"hasRoom":false}` {
+		t.Errorf("body = %q, want %q", body, `{"status":"draining","rooms":0,"hasRoom":false}`)
 	}
 }
 
 func TestServerDrainSetsFlag(t *testing.T) {
 	// Override timeAfter for instant timer
-	origTimeAfter := timeAfter
-	timeAfter = func(d time.Duration) <-chan time.Time {
+	defer overrideTimeAfter(func(d time.Duration) <-chan time.Time {
 		ch := make(chan time.Time, 1)
 		ch <- time.Now()
 		return ch
-	}
-	defer func() { timeAfter = origTimeAfter }()
+	})()
 
 	cfg := testConfig()
 	server, err := NewServer(cfg, testLogger())
@@ -369,4 +365,10 @@ func TestServerSignalEndpointRejectsDraining(t *testing.T) {
 	if w.Code != http.StatusServiceUnavailable {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusServiceUnavailable)
 	}
+}
+
+// overrideTimeAfter replaces timeAfter and returns the function that restores it.
+func overrideTimeAfter(f func(time.Duration) <-chan time.Time) func() {
+	timeAfterHook.Store(&f)
+	return func() { timeAfterHook.Store(nil) }
 }

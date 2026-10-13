@@ -1,0 +1,39 @@
+{
+  "route": "/v1/auth/challenge",
+  "method": "POST",
+  "sdk": "auth.challenge()",
+  "goStruct": "auth.ChallengeRequest",
+  "call": {
+    "module": "auth",
+    "method": "challenge",
+    "args": [
+      {
+        "wallet": "0xWALLET"
+      }
+    ]
+  },
+  "request": {
+    "wallet": "0xWALLET",
+    "purpose": "authentication",
+    "namespace": "default",
+    "chain_type": "ETH"
+  },
+  "response": {
+    "message": "gateway.example wants you to sign in with your Ethereum account:\n0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB\n\nSign in to the default namespace on Orama.\n\nURI: https://gateway.example\nVersion: 1\nChain ID: 1\nNonce: 4f3c2b1a9e8d7c6b\nIssued At: 2026-01-01T00:00:00Z\nExpiration Time: 2026-01-01T00:05:00Z\nResources:\n- urn:orama:namespace:default",
+    "nonce": "4f3c2b1a9e8d7c6b",
+    "wallet": "0xWALLET",
+    "namespace": "default",
+    "chain_type": "ETH",
+    "issued_at": "2026-01-01T00:00:00Z",
+    "expires_at": "2026-01-01T00:05:00Z"
+  },
+  "returns": {
+    "message": "gateway.example wants you to sign in with your Ethereum account:\n0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB\n\nSign in to the default namespace on Orama.\n\nURI: https://gateway.example\nVersion: 1\nChain ID: 1\nNonce: 4f3c2b1a9e8d7c6b\nIssued At: 2026-01-01T00:00:00Z\nExpiration Time: 2026-01-01T00:05:00Z\nResources:\n- urn:orama:namespace:default",
+    "nonce": "4f3c2b1a9e8d7c6b",
+    "wallet": "0xWALLET",
+    "namespace": "default",
+    "chain_type": "ETH",
+    "issued_at": "2026-01-01T00:00:00Z",
+    "expires_at": "2026-01-01T00:05:00Z"
+  }
+}

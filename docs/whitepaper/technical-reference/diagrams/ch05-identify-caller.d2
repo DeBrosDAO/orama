@@ -1,0 +1,31 @@
+direction: down
+
+start: "connection accepted\nSO_PEERCRED gives uid, pid" {shape: oval}
+isroot: "uid 0?" {shape: diamond}
+rootok: "root: everything"
+open: "pidfd_open(pid)"
+t1: "read /proc/pid/stat starttime\nread /proc/self/stat starttime"
+cg: "read /proc/pid/cgroup"
+alive: "pidfd_send_signal(0)\nprocess still alive?" {shape: diamond}
+late: "caller starttime later than helper's?" {shape: diamond}
+parse: "UnitFromCgroup:\n0:: line under /system.slice/\nfirst .service component"
+unit: "unit name" {shape: oval}
+uidok: "uid is the orama user?" {shape: diamond}
+refuse: "refuse: pid reused or no system unit" {shape: oval}
+authz: "Authorize: orama-node.service all,\nindex gateway narrow, anything else none"
+
+start -> isroot
+isroot -> rootok: "yes"
+isroot -> open: "no"
+open -> t1
+t1 -> cg
+cg -> alive
+alive -> refuse: "no: exited, number may be reused"
+alive -> late: "yes"
+late -> refuse: "yes: a later process took the number"
+late -> parse: "no"
+parse -> unit: "ok"
+parse -> refuse: "user.slice, .., no service, cgroup v1"
+unit -> uidok
+uidok -> refuse: "no"
+uidok -> authz: "yes"

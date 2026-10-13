@@ -133,17 +133,17 @@ func (r *Registry) invalidateFn(namespace, name string) {
 	r.cacheMu.Unlock()
 }
 
-// invalidateEnv drops the cached env vars for a function ID. A redeploy REUSES
-// the existing function ID (Register: id = oldFn.ID) and rewrites env vars
-// under it, so without this an env-var change would be masked by the cache for
-// up to the TTL.
+// invalidateEnv drops the cached env vars for a function ID, so an env-var
+// rewrite is never masked by the cache for up to the TTL.
 func (r *Registry) invalidateEnv(functionID string) {
 	r.cacheMu.Lock()
 	delete(r.envCache, functionID)
 	r.cacheMu.Unlock()
 }
 
-// Register deploys a new function or updates an existing one.
+// Register deploys a function as a new version: the first deploy is version 1,
+// every later one inserts the next version and keeps the rows before it (up to
+// MaxRetainedFunctionVersions). It returns the version it superseded, or nil.
 func (r *Registry) Register(ctx context.Context, fn *FunctionDefinition, wasmBytes []byte) (*Function, error) {
 	if fn == nil {
 		return nil, &ValidationError{Field: "definition", Message: "cannot be nil"}
@@ -159,6 +159,12 @@ func (r *Registry) Register(ctx context.Context, fn *FunctionDefinition, wasmByt
 	}
 	if len(wasmBytes) == 0 {
 		return nil, &ValidationError{Field: "wasmBytes", Message: "cannot be empty"}
+	}
+	if err := ValidateWSAuth(fn.WSAuth); err != nil {
+		return nil, err
+	}
+	if fn.WSAuth == WSAuthCapability && fn.IsInternal {
+		return nil, &ValidationError{Field: "ws_auth", Message: "an internal function is never opened on a capability"}
 	}
 
 	// Check if function already exists (regardless of status) to get old metadata for invalidation
@@ -188,34 +194,31 @@ func (r *Registry) Register(ctx context.Context, fn *FunctionDefinition, wasmByt
 	}
 
 	now := time.Now()
+	// Every deploy is a new row with its own id: the previous versions stay
+	// (migration 068), so `name@N` keeps resolving after `name@N+1` ships.
 	id := uuid.New().String()
 	version := 1
-
 	if oldFn != nil {
-		// Use existing ID and increment version
-		id = oldFn.ID
 		version = oldFn.Version + 1
 	}
 
-	// Use INSERT OR REPLACE to ensure we never hit UNIQUE constraint failures on (namespace, name).
-	// This handles both new registrations and overwriting existing (even inactive) functions.
 	query := `
-		INSERT OR REPLACE INTO functions (
+		INSERT INTO functions (
 			id, name, namespace, version, wasm_cid,
-			memory_limit_mb, timeout_seconds, is_public,
+			memory_limit_mb, timeout_seconds, is_public, is_internal,
 			retry_count, retry_delay_seconds, dlq_topic,
 			status, created_at, updated_at, created_by,
 			ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn,
-			raw_http_response
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			raw_http_response, ws_auth
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	_, err = r.db.Exec(ctx, query,
 		id, fn.Name, fn.Namespace, version, wasmCID,
-		memoryLimit, timeout, fn.IsPublic,
+		memoryLimit, timeout, fn.IsPublic, fn.IsInternal,
 		fn.RetryCount, retryDelay, fn.DLQTopic,
 		string(FunctionStatusActive), now, now, fn.Namespace,
 		fn.WSPersistent, fn.WSIdleTimeoutSec, fn.WSMaxFrameBytes, fn.WSMaxInflightPerConn,
-		fn.RawHTTPResponse,
+		fn.RawHTTPResponse, fn.WSAuth,
 	)
 	if err != nil {
 		return nil, &DeployError{FunctionName: fn.Name, Cause: fmt.Errorf("failed to register function: %w", err)}
@@ -223,6 +226,10 @@ func (r *Registry) Register(ctx context.Context, fn *FunctionDefinition, wasmByt
 
 	// Save environment variables
 	if err := r.saveEnvVars(ctx, id, fn.EnvVars); err != nil {
+		return nil, &DeployError{FunctionName: fn.Name, Cause: err}
+	}
+
+	if err := r.adoptVersionState(ctx, fn.Namespace, fn.Name, id); err != nil {
 		return nil, &DeployError{FunctionName: fn.Name, Cause: err}
 	}
 
@@ -260,11 +267,11 @@ func (r *Registry) Get(ctx context.Context, namespace, name string, version int)
 		// Get latest version
 		query = `
 			SELECT id, name, namespace, version, wasm_cid, source_cid,
-				memory_limit_mb, timeout_seconds, is_public,
+				memory_limit_mb, timeout_seconds, is_public, is_internal,
 				retry_count, retry_delay_seconds, dlq_topic,
 				status, created_at, updated_at, created_by,
 				ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn,
-			raw_http_response
+			raw_http_response, ws_auth
 			FROM functions
 			WHERE namespace = ? AND name = ? AND status = ?
 			ORDER BY version DESC
@@ -274,15 +281,15 @@ func (r *Registry) Get(ctx context.Context, namespace, name string, version int)
 	} else {
 		query = `
 			SELECT id, name, namespace, version, wasm_cid, source_cid,
-				memory_limit_mb, timeout_seconds, is_public,
+				memory_limit_mb, timeout_seconds, is_public, is_internal,
 				retry_count, retry_delay_seconds, dlq_topic,
 				status, created_at, updated_at, created_by,
 				ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn,
-			raw_http_response
+			raw_http_response, ws_auth
 			FROM functions
-			WHERE namespace = ? AND name = ? AND version = ?
+			WHERE namespace = ? AND name = ? AND version = ? AND status = ?
 		`
-		args = []interface{}{namespace, name, version}
+		args = []interface{}{namespace, name, version, string(FunctionStatusActive)}
 	}
 
 	var functions []functionRow
@@ -309,11 +316,11 @@ func (r *Registry) List(ctx context.Context, namespace string) ([]*Function, err
 	// Get latest version of each function in the namespace
 	query := `
 		SELECT f.id, f.name, f.namespace, f.version, f.wasm_cid, f.source_cid,
-			f.memory_limit_mb, f.timeout_seconds, f.is_public,
+			f.memory_limit_mb, f.timeout_seconds, f.is_public, f.is_internal,
 			f.retry_count, f.retry_delay_seconds, f.dlq_topic,
 			f.status, f.created_at, f.updated_at, f.created_by,
 			f.ws_persistent, f.ws_idle_timeout_sec, f.ws_max_frame_bytes, f.ws_max_inflight_per_conn,
-			f.raw_http_response
+			f.raw_http_response, f.ws_auth
 		FROM functions f
 		INNER JOIN (
 			SELECT namespace, name, MAX(version) as max_version
@@ -354,8 +361,8 @@ func (r *Registry) SetEnabled(ctx context.Context, namespace, name string, enabl
 	if enabled {
 		status = FunctionStatusActive
 	}
-	query := `UPDATE functions SET status = ?, updated_at = ? WHERE namespace = ? AND name = ?`
-	result, err := r.db.Exec(ctx, query, string(status), time.Now(), namespace, name)
+	query := `UPDATE functions SET status = ?, updated_at = ? WHERE namespace = ? AND name = ? AND status != ?`
+	result, err := r.db.Exec(ctx, query, string(status), time.Now(), namespace, name, string(FunctionStatusDeleted))
 	if err != nil {
 		return fmt.Errorf("failed to set function enabled state: %w", err)
 	}
@@ -381,12 +388,12 @@ func (r *Registry) Delete(ctx context.Context, namespace, name string, version i
 	var args []interface{}
 
 	if version == 0 {
-		// Mark all versions as inactive (soft delete)
+		// Mark all versions as deleted (soft delete)
 		query = `UPDATE functions SET status = ?, updated_at = ? WHERE namespace = ? AND name = ?`
-		args = []interface{}{string(FunctionStatusInactive), time.Now(), namespace, name}
+		args = []interface{}{string(FunctionStatusDeleted), time.Now(), namespace, name}
 	} else {
 		query = `UPDATE functions SET status = ?, updated_at = ? WHERE namespace = ? AND name = ? AND version = ?`
-		args = []interface{}{string(FunctionStatusInactive), time.Now(), namespace, name, version}
+		args = []interface{}{string(FunctionStatusDeleted), time.Now(), namespace, name, version}
 	}
 
 	result, err := r.db.Exec(ctx, query, args...)
@@ -424,6 +431,24 @@ const (
 	wasmFetchRetryBase   = 250 * time.Millisecond
 )
 
+// Pin-verification tuning. IPFS-Cluster's POST /pins returns 200/202 IMMEDIATELY
+// and pins ASYNC per-peer, so a deploy that only fires-and-forgets the pin can
+// report success while the block is still "pinning" (or never converges) on the
+// peers — exactly the bugboard #137 failure (a node cold-fetches a block no peer
+// actually holds and times out on invoke). After pinning we poll PinStatus until
+// every peer reports "pinned" (or we time out and hard-fail the deploy).
+// These are vars (not consts) only so tests can shorten them to keep the
+// pin-verification timeout path fast; production never mutates them.
+var (
+	wasmPinVerifyTimeout  = 30 * time.Second
+	wasmPinVerifyInterval = 2 * time.Second
+	// wasmRecoveryWait bounds the re-pin-and-wait recovery on a cold read miss:
+	// re-issuing the pin makes the local cluster peer re-fetch the block from a
+	// peer that has it, then we poll (capped by this) for local availability
+	// before one final fetch attempt.
+	wasmRecoveryWait = 10 * time.Second
+)
+
 // GetWASMBytes retrieves the compiled WASM bytecode for a function. On a cold
 // block it retries with a bounded per-attempt deadline and returns the typed
 // ErrWASMFetchTimeout (retryable infra failure) so callers don't misreport a
@@ -455,7 +480,61 @@ func (r *Registry) GetWASMBytes(ctx context.Context, wasmCID string) ([]byte, er
 		}
 	}
 
+	// Every local attempt timed out: the block isn't on this node's daemon. The
+	// local cluster peer may simply never have fetched it — re-pinning triggers
+	// it to pull the block from a peer that has it, after which one more fetch
+	// can succeed (bugboard #137). If the block is gone everywhere, this can't
+	// recover it and we still fail (correct). Skip recovery if the caller's
+	// context is already dead — a cancelled request must not trigger a re-pin it
+	// cannot await.
+	if ctx.Err() == nil {
+		if data, err := r.recoverWASMByRepin(ctx, wasmCID); err == nil {
+			return data, nil
+		}
+	}
+
 	return nil, fmt.Errorf("%w: cid=%s after %d attempts: %v", ErrWASMFetchTimeout, wasmCID, wasmFetchMaxAttempts, lastErr)
+}
+
+// recoverWASMByRepin performs one bounded recovery for a cold read miss: re-pin
+// the CID everywhere (so the local cluster peer re-fetches it from a peer that
+// holds it), poll PinStatus until it is locally available (capped by
+// wasmRecoveryWait), then attempt a single final fetch. Returns the bytes on
+// success or an error the caller treats as "recovery failed".
+func (r *Registry) recoverWASMByRepin(ctx context.Context, wasmCID string) ([]byte, error) {
+	if _, err := r.ipfs.Pin(ctx, wasmCID, wasmCID+".wasm", wasmReplicationEverywhere); err != nil {
+		return nil, fmt.Errorf("re-pin recovery for cid=%s failed: %w", wasmCID, err)
+	}
+
+	r.waitForLocalWASMBlock(ctx, wasmCID)
+
+	data, err := r.fetchWASMOnce(ctx, wasmCID)
+	if err != nil {
+		return nil, fmt.Errorf("post-repin fetch for cid=%s failed: %w", wasmCID, err)
+	}
+	return data, nil
+}
+
+// waitForLocalWASMBlock polls PinStatus (capped by wasmRecoveryWait) until at
+// least one peer reports the block pinned, giving the local cluster peer time to
+// re-fetch it after a recovery re-pin. It returns when the block appears, the
+// wait budget is spent, or ctx is cancelled — the caller still attempts a final
+// fetch regardless, since the block may be local before the status converges.
+func (r *Registry) waitForLocalWASMBlock(ctx context.Context, wasmCID string) {
+	waitCtx, cancel := context.WithTimeout(ctx, wasmRecoveryWait)
+	defer cancel()
+	ticker := time.NewTicker(wasmFetchRetryBase)
+	defer ticker.Stop()
+	for {
+		if status, err := r.ipfs.PinStatus(waitCtx, wasmCID); err == nil && status.PinnedPeers > 0 {
+			return
+		}
+		select {
+		case <-waitCtx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 // fetchWASMOnce does a single IPFS fetch bounded by an independent deadline that
@@ -522,6 +601,13 @@ func (r *Registry) repinWASMCIDs(ctx context.Context, cids []string) int {
 				zap.String("cid", cid), zap.Error(err))
 			continue
 		}
+		// Only count a CID as pinned once the async per-peer pin actually
+		// converges — an unverified pin is what the #137 bug relied on.
+		if err := r.verifyPinnedEverywhere(ctx, cid); err != nil {
+			r.logger.Warn("repin function WASM not confirmed on all peers (block may be gone / not converged)",
+				zap.String("cid", cid), zap.Error(err))
+			continue
+		}
 		pinned++
 	}
 	return pinned
@@ -553,10 +639,11 @@ func (r *Registry) GetEnvVars(ctx context.Context, functionID string) (map[strin
 func (r *Registry) GetByID(ctx context.Context, id string) (*Function, error) {
 	query := `
 		SELECT id, name, namespace, version, wasm_cid, source_cid,
-			memory_limit_mb, timeout_seconds, is_public,
+			memory_limit_mb, timeout_seconds, is_public, is_internal,
 			retry_count, retry_delay_seconds, dlq_topic,
 			status, created_at, updated_at, created_by,
-			ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn
+			ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn,
+			raw_http_response, ws_auth
 		FROM functions
 		WHERE id = ?
 	`
@@ -577,10 +664,11 @@ func (r *Registry) GetByID(ctx context.Context, id string) (*Function, error) {
 func (r *Registry) ListVersions(ctx context.Context, namespace, name string) ([]*Function, error) {
 	query := `
 		SELECT id, name, namespace, version, wasm_cid, source_cid,
-			memory_limit_mb, timeout_seconds, is_public,
+			memory_limit_mb, timeout_seconds, is_public, is_internal,
 			retry_count, retry_delay_seconds, dlq_topic,
 			status, created_at, updated_at, created_by,
-			ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn
+			ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn,
+			raw_http_response, ws_auth
 		FROM functions
 		WHERE namespace = ? AND name = ?
 		ORDER BY version DESC
@@ -830,8 +918,11 @@ const wasmReplicationEverywhere = -1
 // failure is fatal here — we must not leave a "deployed but unfetchable" row
 // that intermittently 15s-times-out on whichever node happens to be cold.
 func (r *Registry) uploadWASM(ctx context.Context, wasmBytes []byte, name string) (string, error) {
+	// Imported locally and pinned once: Add would pin everywhere too, and a
+	// second pin of a CID the cluster is still pinning cancels and restarts it
+	// on every peer.
 	reader := bytes.NewReader(wasmBytes)
-	resp, err := r.ipfs.Add(ctx, reader, name+".wasm")
+	resp, err := r.ipfs.AddLocal(ctx, reader, name+".wasm")
 	if err != nil {
 		return "", fmt.Errorf("failed to upload WASM to IPFS: %w", err)
 	}
@@ -840,7 +931,58 @@ func (r *Registry) uploadWASM(ctx context.Context, wasmBytes []byte, name string
 		return "", fmt.Errorf("failed to pin WASM cid=%s on cluster: %w", resp.Cid, err)
 	}
 
+	// The pin is async per-peer, so confirm it actually converged to "pinned"
+	// on every peer before declaring the function deployed. A "deployed but not
+	// actually pinned" function is the bugboard #137 bug — hard-fail instead.
+	if err := r.verifyPinnedEverywhere(ctx, resp.Cid); err != nil {
+		return "", err
+	}
+
 	return resp.Cid, nil
+}
+
+// verifyPinnedEverywhere polls PinStatus until the CID reports "pinned" on every
+// cluster peer or wasmPinVerifyTimeout elapses. On timeout it returns a wrapped
+// error naming the cid, the last observed status, and the pinned/total peer
+// counts so the caller can surface an actionable failure.
+//
+// Caveat: "every peer" is every peer IPFS-Cluster currently reports in the CID's
+// peer_map. A peer that is down/unreachable at verify time may be omitted from
+// the peer_map entirely (rather than reported as cluster_error), so the
+// pinned==total check can pass while an absent peer holds nothing. The guarantee
+// is therefore "pinned on every peer the cluster currently reports," not "every
+// peer that will ever exist" — a down peer during a rolling upgrade is exactly
+// when this gap matters. The startup RepinAllWASM backfill re-covers such peers
+// once they rejoin.
+func (r *Registry) verifyPinnedEverywhere(ctx context.Context, cid string) error {
+	deadline := time.Now().Add(wasmPinVerifyTimeout)
+	ticker := time.NewTicker(wasmPinVerifyInterval)
+	defer ticker.Stop()
+
+	var lastStatus string
+	var lastPinned, lastTotal int
+	for {
+		status, err := r.ipfs.PinStatus(ctx, cid)
+		if err == nil {
+			lastStatus, lastPinned, lastTotal = status.Status, status.PinnedPeers, status.TotalPeers
+			if status.Status == ipfs.PinStatusPinned {
+				return nil
+			}
+		} else {
+			lastStatus = "query-failed: " + err.Error()
+		}
+
+		if time.Now().After(deadline) {
+			return fmt.Errorf("WASM pin not confirmed on all cluster peers: cid=%s last_status=%q pinned=%d/%d after %s",
+				cid, lastStatus, lastPinned, lastTotal, wasmPinVerifyTimeout)
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("WASM pin verification cancelled: cid=%s last_status=%q pinned=%d/%d: %w",
+				cid, lastStatus, lastPinned, lastTotal, ctx.Err())
+		case <-ticker.C:
+		}
+	}
 }
 
 // getByNameInternal retrieves a function by name regardless of status.
@@ -850,10 +992,11 @@ func (r *Registry) getByNameInternal(ctx context.Context, namespace, name string
 
 	query := `
 		SELECT id, name, namespace, version, wasm_cid, source_cid,
-			memory_limit_mb, timeout_seconds, is_public,
+			memory_limit_mb, timeout_seconds, is_public, is_internal,
 			retry_count, retry_delay_seconds, dlq_topic,
 			status, created_at, updated_at, created_by,
-			ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn
+			ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn,
+			raw_http_response, ws_auth
 		FROM functions
 		WHERE namespace = ? AND name = ?
 		ORDER BY version DESC
@@ -907,6 +1050,7 @@ func (r *Registry) rowToFunction(row *functionRow) *Function {
 		MemoryLimitMB:     row.MemoryLimitMB,
 		TimeoutSeconds:    row.TimeoutSeconds,
 		IsPublic:          row.IsPublic,
+		IsInternal:        row.IsInternal,
 		RetryCount:        row.RetryCount,
 		RetryDelaySeconds: row.RetryDelaySeconds,
 		DLQTopic:          row.DLQTopic.String,
@@ -928,6 +1072,11 @@ func (r *Registry) rowToFunction(row *functionRow) *Function {
 		// the invoke handler's `if fn.RawHTTPResponse` engine branch never
 		// fires and set_http_response is a no-op for every function.
 		RawHTTPResponse: row.RawHTTPResponse,
+
+		// How the function's WebSocket may be opened (feat-264). Without
+		// reading it back a function declaring `ws_auth: capability`
+		// would refuse every capability.
+		WSAuth: row.WSAuth,
 	}
 }
 
@@ -945,6 +1094,7 @@ type functionRow struct {
 	MemoryLimitMB     int            `db:"memory_limit_mb"`
 	TimeoutSeconds    int            `db:"timeout_seconds"`
 	IsPublic          bool           `db:"is_public"`
+	IsInternal        bool           `db:"is_internal"`
 	RetryCount        int            `db:"retry_count"`
 	RetryDelaySeconds int            `db:"retry_delay_seconds"`
 	DLQTopic          sql.NullString `db:"dlq_topic"`
@@ -981,6 +1131,10 @@ type functionRow struct {
 	// 029_raw_http_response.sql; defaults to false so existing functions
 	// keep the JSON/Ack-wrapped behavior.
 	RawHTTPResponse bool `db:"raw_http_response"`
+
+	// WSAuth is how the function's WebSocket may be opened (feat-264).
+	// Backed by migration 061; '' is a credential, as before.
+	WSAuth string `db:"ws_auth"`
 }
 
 type envVarRow struct {

@@ -1,0 +1,32 @@
+direction: right
+
+gw: "Index gateway\n(user orama)" 
+helper: "orama-privhelper (root)"
+
+root: "Root-only files" {
+  env: "/var/lib/orama-deploy/\norama-deploy-INSTANCE.env\n.token  (0700 dir, 0600 files)" {shape: cylinder}
+  drop: "/etc/systemd/system/\norama-deploy-RT@INSTANCE.service.d/\norama-bind.conf\nUser=, SocketBindAllow=tcp:PORT" {shape: cylinder}
+}
+
+pid1: "systemd PID 1\nEnvironmentFile=, LoadCredential=,\nExecStartPre=+ verify-deploy-dir"
+
+ns: "Unit mount + network namespace" {
+  tmp: "/opt/orama = empty tmpfs (ro)"
+  code: "data/deployments/INSTANCE\nbind, read-only" {shape: cylinder}
+  deps: "deployments/node_modules\nbind from orama-build cache\n(node, npm runtimes)" {shape: cylinder}
+  state: "StateDirectory / CacheDirectory\norama-deploy-INSTANCE (0700)" {shape: cylinder}
+  net: "IPAddressAllow=localhost\nDeny 10/8 172.16/12 192.168/16 ...\nSocketBindDeny=any + one port"
+  app: "app process\nuser orama-deploy-HASH16\nMemoryMax 512M, CPUQuota 50%,\nTasksMax 512, no swap" {shape: hexagon}
+  tmp -> code
+  code -> deps
+  app -> state
+  app -> net
+}
+
+gw -> helper: "contents, never paths"
+helper -> root.env
+helper -> root.drop
+pid1 -> root.env: "read as root"
+pid1 -> root.drop
+pid1 -> ns.app: "start"
+ns.app -> ns.code: "exec"

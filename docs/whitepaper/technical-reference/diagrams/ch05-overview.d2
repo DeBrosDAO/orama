@@ -1,0 +1,50 @@
+direction: right
+
+root: "root" {
+  pid1: "systemd (PID 1)\nreads EnvironmentFile and LoadCredential, follows symlinks"
+  helper: "orama-privhelper@.service\none instance per connection"
+  installer: "orama node install/upgrade (root)\nall writes through pkg/rootfs"
+}
+
+sock: "/run/orama-privhelper.sock\nroot:orama 0660, Accept=yes, MaxConnections=32" {
+  shape: queue
+}
+
+orama: "orama user (shared uid)" {
+  node: "orama-node.service\nfull allow-list"
+  idxgw: "orama-namespace-gateway@index\nnarrow grant"
+  tenantgw: "tenant gateways, caddy, rqlite, olric ...\nno grant"
+}
+
+iso: "own accounts" {
+  coredns: "orama-coredns"
+  sfu: "orama-sfu"
+  dep: "deployments\nDynamicUser, one per instance"
+}
+
+otree: "/opt/orama/.orama\nowned by the orama user, untrusted by root" {shape: cylinder}
+
+trees: "root-owned trees" {
+  unitenv: "/var/lib/orama-unit-env\nroot:orama 0750/0640" {shape: cylinder}
+  secrets: "/var/lib/orama-deploy\nroot 0700" {shape: cylinder}
+  keys: "/var/lib/orama-gateway-keys\nroot 0700/0400" {shape: cylinder}
+  wg: "/etc/wireguard/wg0.conf\nroot" {shape: cylinder}
+  dropins: "/etc/systemd/system/orama-deploy-*.d\nroot" {shape: cylinder}
+}
+
+orama.node -> sock: "JSON request (argv, input)"
+orama.idxgw -> sock: "JSON request"
+orama.tenantgw -> sock: "connect allowed, Authorize refuses"
+sock -> root.helper: "socket activation"
+root.helper -> trees.unitenv: "unitenv set"
+root.helper -> trees.secrets: "deploy set-env, set-token"
+root.helper -> trees.keys: "gateway-key put"
+root.helper -> trees.wg: "wireguard [Peer] sections only"
+root.helper -> trees.dropins: "bind-port, build-user"
+root.helper -> root.pid1: "systemctl on allow-listed units"
+root.pid1 -> trees.unitenv: "reads"
+root.pid1 -> trees.secrets: "reads"
+root.pid1 -> iso.dep: "starts"
+root.pid1 -> iso.coredns: "starts"
+root.pid1 -> iso.sfu: "starts"
+root.installer -> otree: "anchor /opt/orama, O_NOFOLLOW walk"

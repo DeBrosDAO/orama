@@ -3,6 +3,35 @@ import { QueryBuilder } from "./qb";
 import { QueryResponse, FindOptions } from "./types";
 import { SDKError } from "../errors";
 
+/** A plain SQL identifier: what SQLite accepts unquoted. */
+const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
+ * Reject anything that is not a plain identifier.
+ *
+ * Values in the statements below are parameterised, but the table name, the
+ * primary key and the column names are interpolated into the SQL text. Column
+ * names come from the keys of the entity passed to `save`, so an application
+ * that builds an entity from a request body — `save({ ...req.body })` — hands
+ * the attacker a place to write SQL. Parameters cannot help there: SQLite has
+ * no placeholder for an identifier.
+ *
+ * Quoting would also work, but validating says no to exactly the names that
+ * were never going to work anyway, and cannot be undone by a quote inside the
+ * name.
+ */
+function assertIdentifier(kind: string, name: string): string {
+  if (!IDENTIFIER.test(name)) {
+    throw new SDKError(
+      `invalid ${kind} name ${JSON.stringify(name)}: expected letters, digits and underscores, not starting with a digit`,
+      400,
+      "INVALID_IDENTIFIER",
+      { kind, name }
+    );
+  }
+  return name;
+}
+
 export class Repository<T extends Record<string, any>> {
   private httpClient: HttpClient;
   private tableName: string;
@@ -10,8 +39,8 @@ export class Repository<T extends Record<string, any>> {
 
   constructor(httpClient: HttpClient, tableName: string, primaryKey = "id") {
     this.httpClient = httpClient;
-    this.tableName = tableName;
-    this.primaryKey = primaryKey;
+    this.tableName = assertIdentifier("table", tableName);
+    this.primaryKey = assertIdentifier("primary key", primaryKey);
   }
 
   createQueryBuilder(): QueryBuilder {
@@ -96,7 +125,9 @@ export class Repository<T extends Record<string, any>> {
   }
 
   private buildInsertSql(entity: T): string {
-    const columns = Object.keys(entity).filter((k) => entity[k] !== undefined);
+    const columns = Object.keys(entity)
+      .filter((k) => entity[k] !== undefined)
+      .map((k) => assertIdentifier("column", k));
     const placeholders = columns.map(() => "?").join(", ");
     return `INSERT INTO ${this.tableName} (${columns.join(
       ", "
@@ -112,7 +143,7 @@ export class Repository<T extends Record<string, any>> {
   private buildUpdateSql(entity: T): string {
     const columns = Object.keys(entity)
       .filter((k) => entity[k] !== undefined && k !== this.primaryKey)
-      .map((k) => `${k} = ?`);
+      .map((k) => `${assertIdentifier("column", k)} = ?`);
     return `UPDATE ${this.tableName} SET ${columns.join(", ")} WHERE ${
       this.primaryKey
     } = ?`;

@@ -1,0 +1,60 @@
+# Stage 11, chaos on the chain (BM4; runs alone, after the stage's other
+# packages; every test restores the validator it disturbs at cleanup and ends
+# on a chain that moves on every validator, with the same blocks and app hash
+# on all of them):
+#   - a partition: one validator's p2p TCP is dropped in both directions while
+#     public transfers keep arriving at a survivor. The others commit if and
+#     only if they hold more than 2/3 of the voting power (three equal bootstrap
+#     seats halt, five commit); the isolated validator never gets ahead; after
+#     the heal it catches up and every transfer is delivered once.
+#   - kill -9 of the chain process on one validator under load: systemd restarts
+#     it, it replays to the head, no double-sign (its voting power is kept).
+#   - kill -9 of the shielded verifier child process: oramad keeps running
+#     and the node stays on the same blocks as its peers (a node must not
+#     commit a result its peers did not). Applicable only where the validators
+#     run the verifier (an installed node); a run chain built by chain-deploy.sh
+#     has neither the Orchard library nor the binary. The child is killed once
+#     (public transfers never ask it, and the next verification starts it
+#     again); a verification in flight needs a bundle with a valid proof, which
+#     only the Rust wallet builds, so it is not reached. By the code a child
+#     that dies during FinalizeBlock is no verdict and records no result: the
+#     node stops with a VerifierHalt (keeper checkInBlock) and executes the same
+#     block after the restart, so it never commits a result its peers did not.
+#     The halt itself is proven in chain/x/shielded/keeper and, through the real
+#     app and a verifier that dies, in chain/app (shielded_halt_test.go); the
+#     agreement check here is the assertion that holds the property on the fleet
+#     once a bundle in flight can be driven.
+#   - a full disk: where the chain home is a filesystem of its own (on the root
+#     filesystem the test is not applicable, so rqlite, ipfs, olric and the
+#     gateway are never starved), it is filled until no non-root user can write
+#     (root keeps 64 MiB); the validator stops committing with a "no space left
+#     on device" line in its journal and recovers when the space is freed.
+#   - clock skew: one validator's clock two minutes ahead, then two behind;
+#     BFT time keeps block times at real time and the validator's precommit
+#     times follow its clock (ahead) or the block's time (behind).
+#   - state sync: a validator the installer set up to restore a snapshot has
+#     its data wiped (sign state kept) and restores a snapshot. Applicable only
+#     where state sync is configured by the installer (a joiner of `orama global
+#     install --statesync-rpc`); chain-deploy.sh configures neither it nor
+#     snapshots, and the test never configures it.
+id: chain-chaos
+title: Chain chaos - partition, kill -9, full disk, clock skew, state sync
+area: chain
+subtasks: []
+stage: 11
+destructive: true
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: true
+covers:
+  config:
+    - "config.toml:statesync.enable"
+    - "app.toml:state-sync.snapshot-interval"
+  claims:
+    - "docs/whitepaper/technical-reference/vol2/39-chain-architecture.md#bootstrap-committee-failure: the others commit blocks if and only if they hold more than 2/3 of the voting power; a validator cut off from the rest never gets ahead of them, and catches up to the same blocks and app hash when the cut is healed"
+    - "docs/whitepaper/technical-reference/vol2/39-chain-architecture.md#lifecycle: a validator killed with SIGKILL is restarted by systemd, catches up from its peers without double-signing and keeps its voting power"
+    - "docs/whitepaper/technical-reference/vol2/39-chain-architecture.md#failure-modes: a full disk is not handled by the application, the node stops and says no space left on device in its journal, and it recovers when space is freed (tested only where the chain home is its own filesystem)"
+    - "docs/whitepaper/technical-reference/vol2/39-chain-architecture.md#failure-modes: BFT time is a median of validator timestamps and one skewed clock moves nothing: block times stay at real time, a validator ahead stamps its precommits with its own clock and one behind is held at the block's time"
+    - "docs/whitepaper/technical-reference/vol2/39-chain-architecture.md#lifecycle: state sync carries the nullifier database through a snapshot extension, so a validator that restored a snapshot holds the same blocks and app hash as the others"
+    - "docs/whitepaper/technical-reference/vol2/43-the-shielded-pool.md#failure-modes: Verifier process hangs for 30 s, crashes or answers out of protocol: killing the out-of-process verifier child leaves oramad running and the node on the same blocks and app hash as its peers; in a block a fault records no result and stops the node, which executes the block again after the restart, so no node reaches another verdict than its peers (the halt itself is proven in chain/x/shielded/keeper and chain/app; a verification in flight is not reached on the fleet: it needs a proven bundle)"

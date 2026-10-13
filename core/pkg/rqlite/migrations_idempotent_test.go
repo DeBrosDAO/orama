@@ -58,14 +58,14 @@ func TestApplySQL_idempotent_alter_add_column(t *testing.T) {
 
 	// First apply: adds column.
 	script := `ALTER TABLE t ADD COLUMN x INTEGER DEFAULT 0;`
-	if err := applySQL(context.Background(), db, script); err != nil {
+	if err := applySQL(context.Background(), db, script, nil); err != nil {
 		t.Fatalf("first apply failed: %v", err)
 	}
 
 	// Second apply: column already exists. Must NOT return an error —
 	// this is the critical idempotency property the AnChat-test bug
 	// hit: a re-run had to succeed without operator intervention.
-	if err := applySQL(context.Background(), db, script); err != nil {
+	if err := applySQL(context.Background(), db, script, nil); err != nil {
 		t.Fatalf("second apply (idempotent re-run) failed: %v", err)
 	}
 
@@ -78,10 +78,10 @@ func TestApplySQL_idempotent_alter_add_column(t *testing.T) {
 func TestApplySQL_idempotent_create_table(t *testing.T) {
 	db := openTestDB(t)
 	script := `CREATE TABLE foo (id INTEGER);`
-	if err := applySQL(context.Background(), db, script); err != nil {
+	if err := applySQL(context.Background(), db, script, nil); err != nil {
 		t.Fatalf("first: %v", err)
 	}
-	if err := applySQL(context.Background(), db, script); err != nil {
+	if err := applySQL(context.Background(), db, script, nil); err != nil {
 		t.Fatalf("re-apply CREATE TABLE without IF NOT EXISTS should be tolerated: %v", err)
 	}
 }
@@ -90,7 +90,7 @@ func TestApplySQL_real_errors_still_fail(t *testing.T) {
 	db := openTestDB(t)
 	// A genuine syntax error must still propagate — we don't want
 	// to swallow real bugs.
-	err := applySQL(context.Background(), db, "ALTER TABLE nonexistent_table ADD COLUMN x INT;")
+	err := applySQL(context.Background(), db, "ALTER TABLE nonexistent_table ADD COLUMN x INT;", nil)
 	if err == nil {
 		t.Fatal("expected error for ALTER on missing table")
 	}
@@ -188,5 +188,98 @@ func TestApplyEmbeddedMigrations_genuine_failure_aborts(t *testing.T) {
 		if v != 0 {
 			t.Errorf("expected no schema_migrations row, got version %d", v)
 		}
+	}
+}
+
+func tableCount(t *testing.T, db *sql.DB, name string) int {
+	t.Helper()
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, name).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func TestApplyStatementsAtomically_failureRollsBackEverythingIncludingTheRecord(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+	if err := ensureMigrationsTable(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	record := recordMigrationStmt(migrationsTracker, 7)
+
+	err := applyStatementsAtomically(ctx, db,
+		[]string{"CREATE TABLE a (id INTEGER)", "INSERT INTO missing VALUES (1)"}, &record)
+	if err == nil || !strings.Contains(err.Error(), "no such table: missing") {
+		t.Fatalf("err = %v, want the failing statement's error", err)
+	}
+	if tableCount(t, db, "a") != 0 {
+		t.Error("CREATE TABLE a survived a later statement's failure")
+	}
+	if got, _ := loadAppliedVersions(ctx, db); got[7] {
+		t.Error("the migration was recorded although it failed")
+	}
+}
+
+func TestApplyStatementsAtomically_recordsWithTheStatements(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+	if err := ensureMigrationsTable(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	record := recordMigrationStmt(migrationsTracker, 3)
+	if err := applyStatementsAtomically(ctx, db, []string{"CREATE TABLE a (id INTEGER)"}, &record); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := loadAppliedVersions(ctx, db); !got[3] || tableCount(t, db, "a") != 1 {
+		t.Errorf("want table a and version 3 recorded, got applied=%v", got)
+	}
+}
+
+func TestApplyStatementsAtomically_skipsAlreadyAppliedStatementsWithoutDroppingTheRest(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+	if err := ensureMigrationsTable(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []string{"CREATE TABLE a (id INTEGER)", "CREATE TABLE c (id INTEGER)"} {
+		if _, err := db.Exec(s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	record := recordMigrationStmt(migrationsTracker, 1)
+	err := applyStatementsAtomically(ctx, db, []string{
+		"CREATE TABLE a (id INTEGER)", "CREATE TABLE b (id INTEGER)", "CREATE TABLE c (id INTEGER)",
+	}, &record)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if tableCount(t, db, "b") != 1 {
+		t.Error("CREATE TABLE b was lost when its neighbours were skipped")
+	}
+	if got, _ := loadAppliedVersions(ctx, db); !got[1] {
+		t.Error("version 1 not recorded")
+	}
+}
+
+func TestApplyStatementsAtomically_emptyInput(t *testing.T) {
+	db := openTestDB(t)
+	if err := applyStatementsAtomically(context.Background(), db, nil, nil); err != nil {
+		t.Fatalf("nothing to apply must be a no-op, got %v", err)
+	}
+	if err := applySQL(context.Background(), db, "  -- only a comment\n", nil); err != nil {
+		t.Fatalf("a comment-only script must be a no-op, got %v", err)
+	}
+}
+
+func TestApplyStatementsAtomically_aFailingRecordRollsBackTheStatements(t *testing.T) {
+	db := openTestDB(t) // no schema_migrations table: the record itself fails
+	record := recordMigrationStmt(migrationsTracker, 1)
+	err := applyStatementsAtomically(context.Background(), db, []string{"CREATE TABLE a (id INTEGER)"}, &record)
+	if err == nil {
+		t.Fatal("want the record's failure")
+	}
+	if tableCount(t, db, "a") != 0 {
+		t.Error("the migration's statements were kept although its record failed")
 	}
 }

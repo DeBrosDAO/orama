@@ -1,26 +1,37 @@
 package ipfs
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/libp2p/go-libp2p/core/host"
+	"github.com/DeBrosOfficial/network/pkg/durablefile"
+
+	"github.com/DeBrosOfficial/network/pkg/auth"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/multiformats/go-multiaddr"
 	manet "github.com/multiformats/go-multiaddr/net"
 	"go.uber.org/zap"
 )
 
+// ipfsSwarmMultiaddrSuffix matches the swarm leg of a peer multiaddr, e.g.
+// "/ip4/10.0.0.2/tcp/4101/p2p/12D3Koo...".
+var ipfsSwarmMultiaddrSuffix = fmt.Sprintf("/tcp/%d", constants.IPFSSwarmPort)
+
+// clusterSwarmMultiaddrLeg matches the swarm leg of an IPFS Cluster peer
+// multiaddr, e.g. "/ip4/10.0.0.2/tcp/10114/p2p/12D3Koo...".
+var clusterSwarmMultiaddrLeg = fmt.Sprintf("/tcp/%d/", constants.IPFSClusterSwarmPort)
+
 // UpdatePeerAddresses updates the peer_addresses in service.json with given multiaddresses
 func (cm *ClusterConfigManager) UpdatePeerAddresses(addrs []string) error {
 	serviceJSONPath := filepath.Join(cm.clusterPath, "service.json")
-	cfg, err := cm.loadOrCreateConfig(serviceJSONPath)
+	cfg, err := cm.loadConfig(serviceJSONPath)
 	if err != nil {
 		return err
 	}
@@ -38,95 +49,56 @@ func (cm *ClusterConfigManager) UpdatePeerAddresses(addrs []string) error {
 	return cm.saveConfig(serviceJSONPath, cfg)
 }
 
-// UpdateAllClusterPeers discovers all cluster peers from the gateway and updates local config
-func (cm *ClusterConfigManager) UpdateAllClusterPeers() error {
-	peers, err := cm.DiscoverClusterPeersFromGateway()
-	if err != nil {
-		return fmt.Errorf("failed to discover cluster peers: %w", err)
-	}
-
-	if len(peers) == 0 {
-		return nil
-	}
-
-	peerAddrs := []string{}
-	for _, p := range peers {
-		peerAddrs = append(peerAddrs, p.Multiaddress)
-	}
-
-	return cm.UpdatePeerAddresses(peerAddrs)
+// PeerTarget is a registered cluster node: its overlay address and the node
+// peer id a request to it is signed for.
+type PeerTarget struct {
+	ID string
+	IP string
 }
 
-// RepairPeerConfiguration attempts to fix configuration issues and re-synchronize peers
-func (cm *ClusterConfigManager) RepairPeerConfiguration() error {
-	cm.logger.Info("Attempting to repair IPFS Cluster peer configuration")
+// ActivePeersFunc lists the active nodes in the cluster registry.
+type ActivePeersFunc func(ctx context.Context) ([]PeerTarget, error)
 
-	if err := cm.FixIPFSConfigAddresses(); err != nil {
-		cm.logger.Warn("Failed to fix IPFS config addresses during repair", zap.Error(err))
-	}
-
-	peers, err := cm.DiscoverClusterPeersFromGateway()
+// DiscoverClusterPeers discovers IPFS and IPFS Cluster peers by querying the
+// /v1/network/status endpoint of every other active node in the registry.
+// The registry, not the libp2p peerstore, names the targets: the peerstore can
+// hold several peer ids for one overlay address (a gateway client's own
+// identity, a node's id from before it was replaced at that address), and the
+// id a stamp is signed for must be the node's own or the node refuses it.
+// IPFS/Cluster peer IDs are different from libp2p peer IDs, hence the query.
+func (cm *ClusterConfigManager) DiscoverClusterPeers(ctx context.Context, selfID string, list ActivePeersFunc) error {
+	all, err := list(ctx)
 	if err != nil {
-		cm.logger.Warn("Could not discover peers from gateway during repair", zap.Error(err))
-	} else {
-		peerAddrs := []string{}
-		for _, p := range peers {
-			peerAddrs = append(peerAddrs, p.Multiaddress)
-		}
-		if len(peerAddrs) > 0 {
-			if err := cm.UpdatePeerAddresses(peerAddrs); err != nil {
-				cm.logger.Warn("Failed to update peer addresses during repair", zap.Error(err))
-			}
+		return fmt.Errorf("failed to list active cluster nodes for IPFS peer discovery: %w", err)
+	}
+	var targets []PeerTarget
+	for _, t := range all {
+		if t.ID != selfID {
+			targets = append(targets, t)
 		}
 	}
-
-	return nil
+	return cm.discoverFrom(targets, constants.GatewayURLFor)
 }
 
-// DiscoverClusterPeersFromGateway queries the central gateway for registered IPFS Cluster peers
-func (cm *ClusterConfigManager) DiscoverClusterPeersFromGateway() ([]ClusterPeerInfo, error) {
-	// Not implemented - would require a central gateway URL in config
-	return nil, nil
-}
-
-// DiscoverClusterPeersFromLibP2P discovers IPFS and IPFS Cluster peers by querying
-// the /v1/network/status endpoint of connected libp2p peers.
-// This is the correct approach since IPFS/Cluster peer IDs are different from libp2p peer IDs.
-func (cm *ClusterConfigManager) DiscoverClusterPeersFromLibP2P(h host.Host) error {
-	if h == nil {
+func (cm *ClusterConfigManager) discoverFrom(targets []PeerTarget, gatewayURLFor func(ip string) string) error {
+	if len(targets) == 0 {
 		return nil
 	}
 
 	var clusterPeers []string
 	var ipfsPeers []IPFSPeerEntry
 
-	// Get unique IPs from connected libp2p peers
-	peerIPs := make(map[string]bool)
-	for _, p := range h.Peerstore().Peers() {
-		if p == h.ID() {
-			continue
-		}
-
-		info := h.Peerstore().PeerInfo(p)
-		for _, addr := range info.Addrs {
-			// Extract IP from multiaddr — only use WireGuard IPs (10.0.0.x)
-			// for inter-node queries since port 6001 is blocked on public interfaces by UFW
-			ip := extractIPFromMultiaddr(addr)
-			if ip != "" && strings.HasPrefix(ip, "10.0.0.") {
-				peerIPs[ip] = true
-			}
-		}
+	// Query each peer's /v1/network/status endpoint to get IPFS and Cluster
+	// info. The endpoint answers another node only when the request carries
+	// the coordination MAC (it used to answer anyone).
+	coordKey, err := auth.CoordinationKey(cm.secret)
+	if err != nil {
+		return err
 	}
-
-	if len(peerIPs) == 0 {
-		return nil
-	}
-
-	// Query each peer's /v1/network/status endpoint to get IPFS and Cluster info
 	client := &http.Client{Timeout: 5 * time.Second}
-	for ip := range peerIPs {
-		statusURL := fmt.Sprintf("http://%s:6001/v1/network/status", ip)
-		resp, err := client.Get(statusURL)
+	for _, t := range targets {
+		ip := t.IP
+		resp, err := fetchPeerNetworkStatus(client, coordKey, gatewayURLFor(ip), t.ID)
 		if err != nil {
 			cm.logger.Debug("Failed to query peer status", zap.String("ip", ip), zap.Error(err))
 			continue
@@ -142,18 +114,16 @@ func (cm *ClusterConfigManager) DiscoverClusterPeersFromLibP2P(h host.Host) erro
 
 		// Add IPFS Cluster peer if available
 		if status.IPFSCluster != nil && status.IPFSCluster.PeerID != "" {
-			for _, addr := range status.IPFSCluster.Addresses {
-				if strings.Contains(addr, "/tcp/9100") {
-					clusterPeers = append(clusterPeers, addr)
-					cm.logger.Info("Discovered IPFS Cluster peer", zap.String("peer", addr))
-				}
+			for _, addr := range clusterSwarmAddrs(status.IPFSCluster.Addresses) {
+				clusterPeers = append(clusterPeers, addr)
+				cm.logger.Info("Discovered IPFS Cluster peer", zap.String("peer", addr))
 			}
 		}
 
 		// Add IPFS peer if available
 		if status.IPFS != nil && status.IPFS.PeerID != "" {
 			for _, addr := range status.IPFS.SwarmAddresses {
-				if strings.Contains(addr, "/tcp/4101") && !strings.Contains(addr, "127.0.0.1") {
+				if strings.Contains(addr, ipfsSwarmMultiaddrSuffix) && !strings.Contains(addr, "127.0.0.1") {
 					ipfsPeers = append(ipfsPeers, IPFSPeerEntry{
 						ID:    status.IPFS.PeerID,
 						Addrs: []string{addr},
@@ -186,12 +156,26 @@ func (cm *ClusterConfigManager) DiscoverClusterPeersFromLibP2P(h host.Host) erro
 	return nil
 }
 
+// clusterSwarmAddrs are the addresses among addrs a cluster peer can be
+// dialled at: its swarm listener. It used to match /tcp/9100, the port install
+// wrote, while orama-node rewrote the listener to 10114 on every start — so
+// every real address was discarded and no peer was ever learned this way.
+func clusterSwarmAddrs(addrs []string) []string {
+	var out []string
+	for _, addr := range addrs {
+		if strings.Contains(addr, clusterSwarmMultiaddrLeg) {
+			out = append(out, addr)
+		}
+	}
+	return out
+}
+
 // NetworkStatusResponse represents the response from /v1/network/status
 type NetworkStatusResponse struct {
-	PeerID      string                     `json:"peer_id"`
-	PeerCount   int                        `json:"peer_count"`
-	IPFS        *NetworkStatusIPFS         `json:"ipfs,omitempty"`
-	IPFSCluster *NetworkStatusIPFSCluster  `json:"ipfs_cluster,omitempty"`
+	PeerID      string                    `json:"peer_id"`
+	PeerCount   int                       `json:"peer_count"`
+	IPFS        *NetworkStatusIPFS        `json:"ipfs,omitempty"`
+	IPFSCluster *NetworkStatusIPFSCluster `json:"ipfs_cluster,omitempty"`
 }
 
 type NetworkStatusIPFS struct {
@@ -321,22 +305,23 @@ func (cm *ClusterConfigManager) UpdateIPFSPeeringConfig(peers []IPFSPeerEntry) e
 		return fmt.Errorf("failed to marshal IPFS config: %w", err)
 	}
 
-	if err := os.WriteFile(configPath, updatedData, 0600); err != nil {
+	if err := durablefile.Write(configPath, updatedData, 0600); err != nil {
 		return fmt.Errorf("failed to write IPFS config: %w", err)
 	}
 
 	// Also add peers via the live IPFS API so the running daemon picks them up
 	// immediately without requiring a restart. The config file write above
 	// ensures persistence across restarts.
-	client := &http.Client{Timeout: 5 * time.Second}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	for _, p := range peers {
 		for _, addr := range p.Addrs {
 			peeringMA := addr
 			if !strings.Contains(addr, "/p2p/") {
 				peeringMA = fmt.Sprintf("%s/p2p/%s", addr, p.ID)
 			}
-			addURL := fmt.Sprintf("http://localhost:4501/api/v0/swarm/peering/add?arg=%s", url.QueryEscape(peeringMA))
-			if resp, err := client.Post(addURL, "", nil); err == nil {
+			addURL := fmt.Sprintf("%s/api/v0/swarm/peering/add?arg=%s", constants.LocalIPFSAPIURL(), url.QueryEscape(peeringMA))
+			if resp, err := LocalPostAPI(ctx, addURL); err == nil {
 				resp.Body.Close()
 				cm.logger.Debug("Added IPFS peering via live API", zap.String("multiaddr", peeringMA))
 			} else {
@@ -372,48 +357,24 @@ func (cm *ClusterConfigManager) findIPFSRepoPath() string {
 	return ""
 }
 
-func (cm *ClusterConfigManager) getPeerID() (string, error) {
-	dataDir := cm.cfg.Node.DataDir
-	if strings.HasPrefix(dataDir, "~") {
-		home, _ := os.UserHomeDir()
-		dataDir = filepath.Join(home, dataDir[1:])
-	}
-
-	possiblePaths := []string{
-		filepath.Join(dataDir, "ipfs", "repo"),
-		filepath.Join(dataDir, "node-1", "ipfs", "repo"),
-		filepath.Join(dataDir, "node-2", "ipfs", "repo"),
-		filepath.Join(filepath.Dir(dataDir), "node-1", "ipfs", "repo"),
-		filepath.Join(filepath.Dir(dataDir), "node-2", "ipfs", "repo"),
-	}
-
-	var ipfsRepoPath string
-	for _, path := range possiblePaths {
-		if _, err := os.Stat(filepath.Join(path, "config")); err == nil {
-			ipfsRepoPath = path
-			break
-		}
-	}
-
-	if ipfsRepoPath == "" {
-		return "", fmt.Errorf("could not find IPFS repo path")
-	}
-
-	idCmd := exec.Command("ipfs", "id", "-f", "<id>")
-	idCmd.Env = append(os.Environ(), "IPFS_PATH="+ipfsRepoPath)
-	out, err := idCmd.Output()
+// fetchPeerNetworkStatus asks the gateway at gatewayURL for its node's network
+// status, stamped with the coordination MAC for the node whose peer id is
+// audience.
+func fetchPeerNetworkStatus(client *http.Client, coordKey []byte, gatewayURL, audience string) (*http.Response, error) {
+	req, err := http.NewRequest(http.MethodGet, gatewayURL+"/v1/network/status", nil)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-
-	return strings.TrimSpace(string(out)), nil
+	if err := auth.SignCoordination(coordKey, req, time.Now(), audience); err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		return nil, fmt.Errorf("network status from %s: HTTP %d", gatewayURL, resp.StatusCode)
+	}
+	return resp, nil
 }
-
-// ClusterPeerInfo represents information about an IPFS Cluster peer
-type ClusterPeerInfo struct {
-	ID           string    `json:"id"`
-	Multiaddress string    `json:"multiaddress"`
-	NodeName     string    `json:"node_name"`
-	LastSeen     time.Time `json:"last_seen"`
-}
-

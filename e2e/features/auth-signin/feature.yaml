@@ -1,0 +1,56 @@
+# Wallet sign-in end to end: SIWE and SIWS challenges and verification with
+# every refusal code, nonce single use, token lifetimes, refresh rotation and
+# replay, logout and the revocation list's reach across gateways, the lobby,
+# namespace-name rules, JWKS and forged tokens, and the CLI's session handling
+# (storage, renewal semantics under injected faults, flock single flight).
+# Cluster-wide switches and rate-limit floods live in auth-cluster-admin,
+# which runs alone.
+id: auth-signin
+title: Wallet sign-in, sessions and the CLI's session handling
+area: auth
+subtasks: [2826]
+stage: 3
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  cli:
+    - orama auth
+    - orama auth list
+    - orama auth login
+    - orama auth logout
+    - orama auth status
+    - orama auth switch
+    - orama auth whoami
+    - orama namespace session-policy
+  routes:
+    - /.well-known/jwks.json
+    - /v1/auth/api-key
+    - /v1/auth/challenge
+    - /v1/auth/jwks
+    - /v1/auth/logout
+    - /v1/auth/refresh
+    - /v1/auth/verify
+    - /v1/auth/whoami
+    - /v1/namespace/session-policy
+    - /v1/namespaces
+  claims:
+    - "docs/whitepaper/technical-reference/vol1/13-identity.md#the-signed-message: the message goes back verbatim; a message naming another domain is refused (AUTH_DOMAIN_MISMATCH)"
+    - "docs/whitepaper/technical-reference/vol1/13-identity.md#access-tokens: the access token lasts 15 minutes, the refresh token 30 days"
+    - "docs/whitepaper/technical-reference/vol1/13-identity.md#refresh-tokens-and-sessions: the refresh token rotates on every use; presenting one twice is a replay, refused and recorded"
+    - "docs/whitepaper/technical-reference/vol1/13-identity.md#the-command-line-client: only a 401/403 on refresh ends the CLI session; 5xx, 429, 400 and an unreachable gateway keep it"
+    - "docs/whitepaper/technical-reference/vol1/13-identity.md#the-command-line-client: renewal is single-flight across CLI processes under the credentials.json.lock flock"
+    - "docs/whitepaper/technical-reference/vol1/13-identity.md#vocabulary: a challenge with no namespace signs in to default; the lobby session reaches only POST /v1/namespaces"
+    - "docs/whitepaper/technical-reference/vol1/14-authorization.md#refusals-and-the-error-code-table: AUTH_CHALLENGE_INVALID is identical for an unknown, used or expired nonce"
+    - "docs/whitepaper/technical-reference/vol1/14-authorization.md#refusals-and-the-error-code-table: every 401 and 403 carries {error, code, hint}"
+    - "docs/whitepaper/technical-reference/vol1/13-identity.md#listing-ending-and-logging-out: logout with all ends every session of the wallet"
+    - "docs/whitepaper/technical-reference/vol1/13-identity.md#listing-ending-and-logging-out: logging out revokes the refresh token and the access token"
+    - "docs/whitepaper/technical-reference/vol1/13-identity.md#revocation: a revocation takes effect on every gateway within the 10-second reload"
+    - "docs/whitepaper/technical-reference/vol1/13-identity.md#the-sign-in-gate: JWKS serves every live key with the namespace it is bound to; a namespace gateway's key is bound to its namespace"
+    - "docs/whitepaper/technical-reference/vol1/13-identity.md#sign-in-policy: a wallet with no grant is refused a members namespace (NAMESPACE_NOT_OWNED); open sign-in admits it as a grantless end user with no API key (ROLE_HAS_NO_KEY on /v1/auth/api-key)"
+    - "docs/whitepaper/technical-reference/vol1/13-identity.md#sign-in-policy: closing sign-in refuses a grantless wallet's refresh (SIGN_IN_CLOSED) and any new sign-in"
+    - "docs/whitepaper/technical-reference/vol1/13-identity.md#sign-in-policy: orama namespace session-policy shows and sets the policy, a field left out keeps its value"
+    - "docs/whitepaper/technical-reference/appendices/i-api-surface.md#namespace-management: namespace names are validated and the platform's names are reserved"
+    - "docs/whitepaper/technical-reference/vol1/06-the-wireguard-mesh.md: removed auth endpoints (simple-key, register, phantom) are gone"

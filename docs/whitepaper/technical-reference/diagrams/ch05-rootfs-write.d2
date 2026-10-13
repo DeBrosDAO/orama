@@ -1,0 +1,21 @@
+direction: down
+
+anchor: "open anchor /opt/orama\nroot only: owner uid 0, no g/o write" {shape: oval}
+walk: "for each component:\nopenat(fd, name, O_DIRECTORY|O_NOFOLLOW)"
+sym: "symlink found?" {shape: diamond}
+err: "error naming the path\nnothing followed or replaced" {shape: oval}
+owner: "fstatat(leaf, NOFOLLOW)\nregular file: remember uid/gid\nother type: refuse"
+tmp: "openat .leaf.tmp-random\nO_EXCL|O_NOFOLLOW, 0600"
+fillnode: "write, chown to old owner, chmod perm, fsync"
+ren: "renameat(dirfd, tmp, dirfd, leaf)"
+syncdir: "fsync(dirfd)" {shape: oval}
+
+anchor -> walk
+walk -> sym
+sym -> err: "yes"
+sym -> owner: "no, directory reached"
+owner -> tmp
+tmp -> fillnode
+fillnode -> ren
+ren -> syncdir
+ren -> err: "rename fails: temp unlinked, old file intact"

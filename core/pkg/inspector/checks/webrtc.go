@@ -33,7 +33,7 @@ func checkWebRTCPerNode(nd *inspector.NodeData) []inspector.CheckResult {
 	for _, ns := range nd.Namespaces {
 		// Only check SFU/TURN if they are provisioned on this node.
 		// A false value when not provisioned is not an error.
-		hasSFU := ns.SFUUp  // true = service active
+		hasSFU := ns.SFUUp   // true = service active
 		hasTURN := ns.TURNUp // true = service active
 
 		// If neither is provisioned, skip WebRTC checks for this namespace

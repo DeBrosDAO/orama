@@ -1,0 +1,25 @@
+direction: down
+
+claim: "1. BeginDeprovision\nguarded UPDATE: status=deprovisioning,\ndeprovisioning_at=now (registry clock)\n409 NAMESPACE_DELETE_IN_PROGRESS if owned"
+nodes: "2. read active members\n(dns_nodes.status = active;\nif the query fails: local node only)"
+fan: "3. teardown-namespace on every member at once\nunits stopped AND disabled, data dir and env files removed,\npurge_data removes SQLite and deployment dirs"
+ok: "node confirms"
+bad: "node does not confirm\nnamespace_pending_cleanup row\n(cluster_id, purge_data), ports stay reserved"
+free: "4. release port blocks (core + WebRTC)\nof confirmed nodes"
+dns: "5. delete membership rows, then DNS\n(gateway, wildcard, TURN, stealth TURN)"
+rows: "6. delete events, rooms, WebRTC config\n7. delete namespace_clusters row"
+after: "handler: deployments, IPFS refs,\nglobal tables, FK children, namespaces row"
+lease: "refresh lease between steps" {
+  shape: queue
+}
+
+claim -> nodes
+nodes -> fan
+fan -> ok
+fan -> bad
+ok -> free
+bad -> free: "unconfirmed nodes skipped"
+free -> dns
+dns -> rows
+rows -> after: "ErrTeardownIncomplete if any node owed:\ndelete still completes, cleanup_pending=true"
+lease -> free

@@ -1,0 +1,40 @@
+direction: right
+
+users: "Users and contracts" {
+  creator: "Creator" {shape: person}
+  owner: "Owner or delegate" {shape: person}
+  buyer: "Buyer / bidder" {shape: person}
+}
+
+cnft: "x/cnft" {
+  col: "collections\n(creator, royalty_bps)" {shape: cylinder}
+  tree: "trees\nroot, changelog ring, rightmost path, canopy" {shape: cylinder}
+  dec: "decompressed assets" {shape: cylinder}
+  snap: "snapshot records\n(tree, CID, sequence)" {shape: cylinder}
+}
+
+market: "x/market" {
+  list: "listings + asset index" {shape: cylinder}
+  bids: "bids, escrowed in\nmodule account 'market'" {shape: cylinder}
+  settle: "Settle\nProveOwned, split, TransferForSale"
+}
+
+fees: "x/fees" {
+  dep: "tree deposits\ncnft/tree/N" {shape: cylinder}
+  earn: "earnings accounts" {shape: cylinder}
+}
+
+idx: "chain/indexer\n(rebuilds leaves from txs)"
+
+users.creator -> cnft.col: "MsgCreateCollection"
+users.creator -> cnft.tree: "MsgCreateTree, MsgMint"
+cnft.tree -> fees.dep: "lock 1 norama per byte of state"
+users.owner -> cnft.tree: "MsgTransfer, MsgBurn,\nMsgUpdateMetadata (leaf + proof)"
+users.owner -> cnft.dec: "MsgDecompress / MsgCompress"
+users.owner -> market.list: "MsgList (leaf + proof)"
+users.buyer -> market.bids: "MsgBid"
+users.buyer -> market.settle: "MsgSettle (buy now)"
+market.settle -> cnft.tree: "TransferForSale"
+market.settle -> fees.earn: "royalty to creator,\nrest to seller"
+cnft.tree -> idx: "tx messages"
+market.list -> idx

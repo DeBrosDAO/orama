@@ -1,0 +1,30 @@
+direction: down
+
+start: "FeeDecorator.AnteHandle (not simulate)"
+min: "CheckTx only: fee >= minimum-gas-prices x gas?\nsets mempool priority (lowest gas price over coins)"
+base: "fee in norama >= base_fee x gas?\ntip = fee - base_fee x gas"
+payer: "payer = fee granter if set and it authorizes,\nelse first signer; account must exist\nearnings fallback allowed only for the signer"
+prop: "proposer resolved from header\n(cons address to operator account)?"
+all: "no proposer: base = base + tip, tip = 0\n(whole fee burned)"
+tip: "tip: payer spendable bank balance >= tip?\nelse tx fails"
+bankbase: "base fee from bank balance left after the tip"
+short: "shortfall: fee-only balance, then earnings\n(only when payer is the signer)"
+fail: "tx refused: insufficient funds"
+burn: "BurnCoins(base fee) from x/fees account"
+credit: "tip credited to proposer earnings ledger\n(coins already in x/fees account)"
+count: "collected += base + tip\nburned += base, distributed += tip"
+
+start -> min
+min -> base
+base -> payer
+payer -> prop
+prop -> tip: "yes"
+prop -> all: "no"
+all -> tip
+tip -> bankbase
+bankbase -> short: "bank short"
+bankbase -> burn: "covered"
+short -> fail: "still short"
+short -> burn: "covered"
+burn -> credit
+credit -> count

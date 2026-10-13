@@ -86,8 +86,14 @@ func (mc *middlewareCache) GetAPIKeyEntry(apiKey string) (namespace, scopes stri
 	return entry.value, entry.scopes, true
 }
 
-// SetAPIKeyEntry caches an API key → (namespace, scopes) mapping. The TTL
-// (60s) bounds how long a revoked key can still resolve after revocation.
+// SetAPIKeyEntry caches an API key → (namespace, permissions) mapping.
+//
+// The TTL is CredentialStaleness, and it is the one number that describes how
+// long a change to what a key may do takes to bite. **Revoking** a key is not
+// bounded by it: lookupAPIKeyEntry consults the replicated revocation list
+// before the cache, so a revoked key stops at once, everywhere. **Narrowing**
+// one — editing its scopes, or revoking a grant it holds — is, because the
+// permissions come off the cached row.
 func (mc *middlewareCache) SetAPIKeyEntry(apiKey, namespace, scopes string) {
 	mc.apiKeyNSMu.Lock()
 	defer mc.apiKeyNSMu.Unlock()
@@ -152,3 +158,17 @@ func (mc *middlewareCache) cleanup() {
 		}
 	}
 }
+
+// CredentialStaleness is how long a change to what a credential may do takes to
+// take effect.
+//
+// It is the middleware cache's TTL, and it is named because it is a promise
+// rather than a tuning knob: an operator who narrows a key, or revokes a grant,
+// is entitled to know when that lands. One minute, on every gateway that had
+// seen the credential.
+//
+// Two things are deliberately not bounded by it. **Revocation** is checked
+// against the replicated revocation list before the cache is consulted, so a
+// revoked key or token stops at once. And a **wallet's** grant is resolved per
+// request by the authorization middleware, so narrowing one is immediate.
+const CredentialStaleness = 60 * time.Second

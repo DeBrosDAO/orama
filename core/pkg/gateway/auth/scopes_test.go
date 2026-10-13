@@ -24,15 +24,24 @@ func TestScopeSetHas(t *testing.T) {
 	}
 }
 
-func TestScopesFromStoredGrandfather(t *testing.T) {
-	// NULL/empty stored scopes => admin (legacy key grandfather).
-	for _, raw := range []string{"", "   "} {
+// An empty scopes column used to be read as admin, on the theory that such a
+// key predated scoping. GetOrCreateAPIKey then wrote no scopes column at all,
+// so every key minted by a wallet login was an admin key and the legacy-key
+// cutover was undone on every login. Migration 043 writes the grant those rows
+// were relying on, so the inference has nothing left to do.
+func TestScopesFromStoredEmptyGrantsNothing(t *testing.T) {
+	for _, raw := range []string{"", "   ", ","} {
 		set := ScopesFromStored(raw)
-		if !set.IsAdmin() {
-			t.Errorf("ScopesFromStored(%q) should grandfather to admin, got %v", raw, set)
+		if set.IsAdmin() {
+			t.Errorf("ScopesFromStored(%q) is admin — an unscoped key must not be a master key", raw)
+		}
+		if len(set) != 0 {
+			t.Errorf("ScopesFromStored(%q) = %v, want an empty set", raw, set)
 		}
 	}
-	// A real scope list must NOT grandfather to admin.
+}
+
+func TestScopesFromStoredReadsAnExplicitList(t *testing.T) {
 	set := ScopesFromStored("invoke,storage")
 	if set.IsAdmin() {
 		t.Errorf("ScopesFromStored(\"invoke,storage\") must not be admin")
@@ -43,8 +52,8 @@ func TestScopesFromStoredGrandfather(t *testing.T) {
 }
 
 func TestParseScopesEmptyIsNotAdmin(t *testing.T) {
-	// ParseScopes is literal — empty yields an empty set (NOT admin). Only
-	// ScopesFromStored applies the grandfather.
+	// ParseScopes is literal — empty yields an empty set (NOT admin), and so
+	// does ScopesFromStored now that nothing is grandfathered.
 	if ParseScopes("").IsAdmin() {
 		t.Error("ParseScopes(\"\") must be empty, not admin")
 	}

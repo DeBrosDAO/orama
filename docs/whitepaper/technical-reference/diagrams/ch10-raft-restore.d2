@@ -1,0 +1,34 @@
+direction: down
+
+start: "restore of a stopped namespace rqlite\n(unit not running)"
+state: "namespaceHasRaftState(dataDir)" {shape: diamond}
+locked: "raft.db held by a running rqlited:\nerror, spawn nothing"
+rec: "read cluster-membership.json\nbeside the rqlite directory"
+
+has: "node holds raft state"
+need: "recorded members differ from\nthe authoritative membership?" {shape: diamond}
+peers: "write raft/peers.json\n(rqlite force recovery);\nstart without -join"
+own: "start on its own raft configuration,\nwait for peers"
+
+no: "no raft state"
+former: "membership record exists?" {shape: diamond}
+join: "-join every other member;\nnever bootstrap"
+refuse: "no other member to join:\nrefuse to start, name the record path"
+lowest: "lowest node id among members?" {shape: diamond}
+boot: "bootstrap (IsLeader)"
+joinlow: "join the lowest-id member"
+
+start -> state
+state -> locked: "ErrRaftStateLocked"
+state -> has: "true"
+state -> no: "false"
+has -> rec
+rec -> need
+need -> peers: "yes"
+need -> own: "no, or no record, or no authoritative members"
+no -> former
+former -> join: "yes, others exist"
+former -> refuse: "yes, alone"
+former -> lowest: "no"
+lowest -> boot: "yes"
+lowest -> joinlow: "no"

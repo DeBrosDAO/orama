@@ -1,0 +1,29 @@
+direction: down
+
+write: "revocation recorded\nlogout, session end, device revoke, key revoke" 
+row: "INSERT revoked_tokens\njti or subject + issued_before, expires_at" {shape: cylinder}
+local: "recorded gateway applies it at once\n(kept in local list over any older reload)"
+reload: "every gateway reloads the table\nevery 5 s (RevocationRefreshInterval),\n3 s read timeout, 1 retry per second"
+req: "request presents a token"
+age: "copy younger than 10 s?" {shape: diamond}
+wait: "wait for the one reload in flight\n(at most 3 s)"
+ok2: "reload succeeded and copy now\nunder 10 s?" {shape: diamond}
+unavail: "503 AUTH_UNAVAILABLE\nRetry-After" {shape: oval}
+match: "jti listed?\ndevice: or session: key listed?\nsubject listed and iat at or before issued_before?" {shape: diamond}
+revoked: "401 AUTH_REVOKED" {shape: oval}
+pass: "continue: nbf, exp, iat, aud checks" {shape: oval}
+sweep: "wssession sweeper asks the same\nquestion for every open socket\nevery 5 s"
+
+write -> row
+write -> local
+row -> reload
+req -> age
+age -> match: "yes"
+age -> wait: "no"
+wait -> ok2
+ok2 -> match: "yes"
+ok2 -> unavail: "no"
+match -> revoked: "yes"
+match -> pass: "no"
+reload -> age: {label: "keeps the copy fresh"}
+reload -> sweep

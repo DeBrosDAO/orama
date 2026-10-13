@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -32,6 +32,27 @@ type InstanceConfig struct {
 	DataDir        string   // Data directory for this instance
 	IsLeader       bool     // Whether this is the first node (creates cluster)
 	AuthFile       string   // Path to RQLite auth JSON file. Empty = no auth enforcement.
+	ExtraArgs      string   // Extra rqlited flags, set by the index from node config; tenants leave it empty. Any platform Raft timing flag not set here is added (WithDefaultRaftTimeouts), so every instance runs with the platform timing.
+	// FreshStart marks this as the first start of a BRAND-NEW cluster, as
+	// opposed to a restart/restore of an existing one. Bugboard #281: a
+	// namespace delete that failed to remove the data directory left raft state
+	// behind, and re-creating a namespace of the same name then booted on top of
+	// it — the nodes disagreed on membership (one inherited a peer set including
+	// a long-removed node and a different namespace's members) and never elected
+	// a leader. On a fresh cluster any pre-existing raft state is garbage by
+	// definition, so it is cleared rather than silently adopted. A restart must
+	// NOT set this: reusing the raft directory is exactly what makes a restart a
+	// restart.
+	FreshStart bool
+	// JoinVerifyURL is the HTTP base URL of the node this instance is about to
+	// join (e.g. "http://10.0.0.1:10000"). Bugboard #275: rqlited joins whatever
+	// answers at the -join address, with no check that the cluster belongs to
+	// this namespace. When a port collision put another namespace's rqlited on
+	// the expected port, a namespace node joined the FOREIGN raft group as a
+	// Voter and served that namespace's database — identical row counts on a
+	// namespace minutes old. Verifying the target's identity before starting
+	// makes that impossible. Empty skips the check (the leader joins nothing).
+	JoinVerifyURL string
 }
 
 // Instance represents a running RQLite instance
@@ -46,7 +67,14 @@ type InstanceSpawner struct {
 	baseDataDir string // Base directory for namespace data (e.g., ~/.orama/data/namespaces)
 	rqlitePath  string // Path to rqlited binary
 	logger      *zap.Logger
+
+	// authFile is the rqlite auth JSON whose user probes spawned instances.
+	// rqlited always runs with -auth, so it is required.
+	authFile string
 }
+
+// SetAuthFile supplies the rqlite auth file used when probing instances.
+func (is *InstanceSpawner) SetAuthFile(path string) { is.authFile = path }
 
 // NewInstanceSpawner creates a new RQLite instance spawner
 func NewInstanceSpawner(baseDataDir string, logger *zap.Logger) *InstanceSpawner {
@@ -77,20 +105,23 @@ func (is *InstanceSpawner) SpawnInstance(ctx context.Context, cfg InstanceConfig
 
 	// Build command arguments
 	// Note: All flags must come BEFORE the data directory argument
+	httpAddr, err := BindAddr(cfg.HTTPAdvAddress, cfg.HTTPPort)
+	if err != nil {
+		return nil, fmt.Errorf("rqlite HTTP bind: %w", err)
+	}
+	raftAddr, err := BindAddr(cfg.RaftAdvAddress, cfg.RaftPort)
+	if err != nil {
+		return nil, fmt.Errorf("rqlite Raft bind: %w", err)
+	}
 	args := []string{
-		"-http-addr", fmt.Sprintf("0.0.0.0:%d", cfg.HTTPPort),
-		"-raft-addr", fmt.Sprintf("0.0.0.0:%d", cfg.RaftPort),
+		"-http-addr", httpAddr,
+		"-raft-addr", raftAddr,
 		"-http-adv-addr", cfg.HTTPAdvAddress,
 		"-raft-adv-addr", cfg.RaftAdvAddress,
 	}
 
 	// Raft tuning — match the global node's tuning for consistency
-	args = append(args,
-		"-raft-election-timeout", "5s",
-		"-raft-timeout", "2s",
-		"-raft-apply-timeout", "30s",
-		"-raft-leader-lease-timeout", "2s",
-	)
+	args = append(args, strings.Fields(DefaultRaftTimeouts().Args())...)
 
 	// RQLite HTTP Basic Auth
 	if cfg.AuthFile != "" {
@@ -145,7 +176,7 @@ func (is *InstanceSpawner) SpawnInstance(ctx context.Context, cfg InstanceConfig
 	}
 
 	// Wait for the instance to be ready
-	if err := is.waitForReady(ctx, cfg.HTTPPort); err != nil {
+	if err := is.waitForReady(ctx, cfg); err != nil {
 		// Kill the process if it didn't start properly
 		cmd.Process.Kill()
 		return nil, fmt.Errorf("instance failed to become ready: %w", err)
@@ -159,33 +190,27 @@ func (is *InstanceSpawner) SpawnInstance(ctx context.Context, cfg InstanceConfig
 	return instance, nil
 }
 
-// waitForReady waits for the RQLite instance to be ready to accept connections
-func (is *InstanceSpawner) waitForReady(ctx context.Context, httpPort int) error {
-	url := fmt.Sprintf("http://localhost:%d/status", httpPort)
-	client := &http.Client{Timeout: 2 * time.Second}
+// waitForReady waits for the RQLite instance to join raft, not merely to open
+// its port.
+//
+// The budget must exceed the join retry window (30 attempts * 10s) so a
+// follower still waiting for its leader is not killed mid-join.
+const instanceReadyTimeout = 6 * time.Minute
 
-	// 6 minutes: must exceed the join retry window (30 attempts * 10s = 5min)
-	// so we don't kill followers that are still waiting for the leader
-	deadline := time.Now().Add(6 * time.Minute)
-	for time.Now().Before(deadline) {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		resp, err := client.Get(url)
-		if err == nil {
-			resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				return nil
-			}
-		}
-
-		time.Sleep(500 * time.Millisecond)
+func (is *InstanceSpawner) waitForReady(ctx context.Context, cfg InstanceConfig) error {
+	user, pass, err := readRQLiteAuthFile(is.authFile)
+	if err != nil {
+		return fmt.Errorf("rqlite instance credentials: %w", err)
 	}
-
-	return fmt.Errorf("timeout waiting for RQLite to be ready on port %d", httpPort)
+	addr, err := BindAddr(cfg.HTTPAdvAddress, cfg.HTTPPort)
+	if err != nil {
+		return err
+	}
+	ep, err := NewEndpoint(addr, user, pass)
+	if err != nil {
+		return err
+	}
+	return WaitForRaftReady(ctx, ep, instanceReadyTimeout)
 }
 
 // StopInstance stops a running RQLite instance
@@ -251,19 +276,6 @@ func (is *InstanceSpawner) StopInstanceByPID(pid int) error {
 	return nil
 }
 
-// IsInstanceRunning checks if a RQLite instance is running
-func (is *InstanceSpawner) IsInstanceRunning(httpPort int) bool {
-	url := fmt.Sprintf("http://localhost:%d/status", httpPort)
-	client := &http.Client{Timeout: 2 * time.Second}
-
-	resp, err := client.Get(url)
-	if err != nil {
-		return false
-	}
-	resp.Body.Close()
-	return resp.StatusCode == http.StatusOK
-}
-
 // HasExistingData checks if a RQLite instance has existing data (raft.db indicates prior startup)
 func (is *InstanceSpawner) HasExistingData(namespace, nodeID string) bool {
 	dataDir := is.GetDataDir(namespace, nodeID)
@@ -286,6 +298,13 @@ func (is *InstanceSpawner) WritePeersJSON(dataDir string, peers []RaftPeer) erro
 	data, err := json.MarshalIndent(peers, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal peers.json: %w", err)
+	}
+
+	if removed, err := RemoveRecoveryLeftovers(dataDir); err != nil {
+		return err
+	} else if len(removed) > 0 {
+		is.logger.Warn("Removed leftovers of an earlier rqlite recovery before writing peers.json",
+			zap.String("data_dir", dataDir), zap.Strings("removed", removed))
 	}
 
 	peersPath := filepath.Join(raftDir, "peers.json")

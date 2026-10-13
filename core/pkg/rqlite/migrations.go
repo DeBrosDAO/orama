@@ -10,8 +10,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
+	"github.com/rqlite/gorqlite"
 	_ "github.com/rqlite/gorqlite/stdlib"
 	"go.uber.org/zap"
 )
@@ -36,6 +38,18 @@ func ApplyMigrations(ctx context.Context, db *sql.DB, dir string, logger *zap.Lo
 		return nil
 	}
 
+	lock, err := acquireMigrationLock(ctx, db, logger)
+	if err != nil {
+		return err
+	}
+	defer releaseMigrationLock(ctx, lock, logger)
+
+	// Re-read INSIDE the lock. The snapshot was taken before, so N gateways
+	// starting together each saw the same "nothing applied" set and each ran
+	// the whole pending list. DDL is guarded by IF NOT EXISTS and survives
+	// that; DML is not — migration 019 revokes every refresh token that has no
+	// revoked_at, so a second node reaching it a minute later logs out
+	// everyone who signed in during that minute, silently.
 	applied, err := loadAppliedVersions(ctx, db)
 	if err != nil {
 		return fmt.Errorf("load applied versions: %w", err)
@@ -53,12 +67,9 @@ func ApplyMigrations(ctx context.Context, db *sql.DB, dir string, logger *zap.Lo
 		}
 
 		logger.Info("Applying migration", zap.Int("version", mf.Version), zap.String("name", mf.Name))
-		if err := applySQL(ctx, db, string(sqlBytes)); err != nil {
+		record := recordMigrationStmt(migrationsTracker, mf.Version)
+		if err := applySQL(ctx, db, string(sqlBytes), &record); err != nil {
 			return fmt.Errorf("apply migration %d (%s): %w", mf.Version, mf.Name, err)
-		}
-
-		if _, err := db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version) VALUES (?)`, mf.Version); err != nil {
-			return fmt.Errorf("record migration %d: %w", mf.Version, err)
 		}
 		logger.Info("Migration applied", zap.Int("version", mf.Version), zap.String("name", mf.Name))
 	}
@@ -88,6 +99,18 @@ func ApplyMigrationsDirs(ctx context.Context, db *sql.DB, dirs []string, logger 
 		return nil
 	}
 
+	lock, err := acquireMigrationLock(ctx, db, logger)
+	if err != nil {
+		return err
+	}
+	defer releaseMigrationLock(ctx, lock, logger)
+
+	// Re-read INSIDE the lock. The snapshot was taken before, so N gateways
+	// starting together each saw the same "nothing applied" set and each ran
+	// the whole pending list. DDL is guarded by IF NOT EXISTS and survives
+	// that; DML is not — migration 019 revokes every refresh token that has no
+	// revoked_at, so a second node reaching it a minute later logs out
+	// everyone who signed in during that minute, silently.
 	applied, err := loadAppliedVersions(ctx, db)
 	if err != nil {
 		return fmt.Errorf("load applied versions: %w", err)
@@ -104,12 +127,9 @@ func ApplyMigrationsDirs(ctx context.Context, db *sql.DB, dirs []string, logger 
 		}
 
 		logger.Info("Applying migration", zap.Int("version", mf.Version), zap.String("name", mf.Name), zap.String("path", mf.Path))
-		if err := applySQL(ctx, db, string(sqlBytes)); err != nil {
+		record := recordMigrationStmt(migrationsTracker, mf.Version)
+		if err := applySQL(ctx, db, string(sqlBytes), &record); err != nil {
 			return fmt.Errorf("apply migration %d (%s): %w", mf.Version, mf.Name, err)
-		}
-
-		if _, err := db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version) VALUES (?)`, mf.Version); err != nil {
-			return fmt.Errorf("record migration %d: %w", mf.Version, err)
 		}
 		logger.Info("Migration applied", zap.Int("version", mf.Version), zap.String("name", mf.Name))
 	}
@@ -117,11 +137,26 @@ func ApplyMigrationsDirs(ctx context.Context, db *sql.DB, dirs []string, logger 
 	return nil
 }
 
+// openLocalSQL opens a short-lived database/sql handle on this node's own
+// rqlited for a migration run. The caller closes it.
+func (r *RQLiteManager) openLocalSQL() (*sql.DB, error) {
+	ep, err := r.LocalEndpoint()
+	if err != nil {
+		return nil, err
+	}
+	dsn := ep.SQLDSN(adapterReadConsistencyLevel)
+	db, err := sql.Open("rqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open rqlite db at %s: %s", ep, RedactError(err, dsn))
+	}
+	return db, nil
+}
+
 // ApplyMigrationsFromManager is a convenience helper bound to RQLiteManager.
 func (r *RQLiteManager) ApplyMigrations(ctx context.Context, dir string) error {
-	db, err := sql.Open("rqlite", fmt.Sprintf("http://localhost:%d?disableClusterDiscovery=true", r.config.RQLitePort))
+	db, err := r.openLocalSQL()
 	if err != nil {
-		return fmt.Errorf("open rqlite db: %w", err)
+		return err
 	}
 	defer db.Close()
 
@@ -130,9 +165,9 @@ func (r *RQLiteManager) ApplyMigrations(ctx context.Context, dir string) error {
 
 // ApplyMigrationsDirs is the multi-dir variant on RQLiteManager.
 func (r *RQLiteManager) ApplyMigrationsDirs(ctx context.Context, dirs []string) error {
-	db, err := sql.Open("rqlite", fmt.Sprintf("http://localhost:%d?disableClusterDiscovery=true", r.config.RQLitePort))
+	db, err := r.openLocalSQL()
 	if err != nil {
-		return fmt.Errorf("open rqlite db: %w", err)
+		return err
 	}
 	defer db.Close()
 
@@ -255,43 +290,29 @@ func isNoSuchTable(err error) bool {
 }
 
 // applySQL splits the script into individual statements, strips explicit
-// transaction control (BEGIN/COMMIT/ROLLBACK/END), and executes statements
-// sequentially to avoid nested transaction issues with rqlite.
+// transaction control (BEGIN/COMMIT/ROLLBACK/END) and applies the rest, plus
+// the optional tracker record, as one transaction (applyStatementsAtomically).
 //
 // Idempotency: certain SQLite errors are treated as "already applied" so that
-// a partially-applied migration can be safely re-run. Specifically:
+// a migration a pre-atomic engine left half-applied can be safely re-run:
 //   - "duplicate column name" — ALTER TABLE ADD COLUMN that already happened
 //   - "table ... already exists" — CREATE TABLE that already exists (when
 //     the migration didn't use IF NOT EXISTS)
 //   - "index ... already exists" — same for indexes
-//
-// This makes ALTER TABLE ADD COLUMN safe to retry, which is the common
-// case where partial application leaves schema_migrations un-recorded
-// but some columns added.
-func applySQL(ctx context.Context, db *sql.DB, script string) error {
-	s := strings.TrimSpace(script)
-	if s == "" {
-		return nil
-	}
-	stmts := splitSQLStatements(s)
-	stmts = filterOutTxnControls(stmts)
+func applySQL(ctx context.Context, db *sql.DB, script string, record *gorqlite.ParameterizedStatement) error {
+	stmts := filterOutTxnControls(splitSQLStatements(strings.TrimSpace(script)))
+	return applyStatementsAtomically(ctx, db, nonEmptyStatements(stmts), record)
+}
 
-	for _, stmt := range stmts {
-		if strings.TrimSpace(stmt) == "" {
-			continue
-		}
-		if _, err := db.ExecContext(ctx, stmt); err != nil {
-			if isAlreadyAppliedError(err) {
-				// Treat as no-op so the migration can be marked complete.
-				// We log via fmt.Sprintf into the returned error message —
-				// the caller of applySQL has the migration version + name
-				// and can decide how loud to be about it.
-				continue
-			}
-			return fmt.Errorf("exec stmt failed: %w (stmt: %s)", err, snippet(stmt))
+// nonEmptyStatements drops blank statements.
+func nonEmptyStatements(stmts []string) []string {
+	out := make([]string, 0, len(stmts))
+	for _, s := range stmts {
+		if strings.TrimSpace(s) != "" {
+			out = append(out, s)
 		}
 	}
-	return nil
+	return out
 }
 
 // isAlreadyAppliedError returns true when an SQL error indicates the
@@ -309,15 +330,6 @@ func isAlreadyAppliedError(err error) bool {
 		// Covers: "table X already exists", "index X already exists",
 		// "trigger X already exists", "view X already exists".
 		return true
-	}
-	return false
-}
-
-func containsToken(stmts []string, token string) bool {
-	for _, s := range stmts {
-		if strings.EqualFold(strings.TrimSpace(s), token) {
-			return true
-		}
 	}
 	return false
 }
@@ -479,6 +491,18 @@ func ApplyEmbeddedMigrations(ctx context.Context, db *sql.DB, fsys fs.FS, logger
 		return nil
 	}
 
+	lock, err := acquireMigrationLock(ctx, db, logger)
+	if err != nil {
+		return err
+	}
+	defer releaseMigrationLock(ctx, lock, logger)
+
+	// Re-read INSIDE the lock. The snapshot was taken before, so N gateways
+	// starting together each saw the same "nothing applied" set and each ran
+	// the whole pending list. DDL is guarded by IF NOT EXISTS and survives
+	// that; DML is not — migration 019 revokes every refresh token that has no
+	// revoked_at, so a second node reaching it a minute later logs out
+	// everyone who signed in during that minute, silently.
 	applied, err := loadAppliedVersions(ctx, db)
 	if err != nil {
 		return fmt.Errorf("load applied versions: %w", err)
@@ -496,12 +520,9 @@ func ApplyEmbeddedMigrations(ctx context.Context, db *sql.DB, fsys fs.FS, logger
 		}
 
 		logger.Info("Applying migration", zap.Int("version", mf.Version), zap.String("name", mf.Name))
-		if err := applySQL(ctx, db, string(sqlBytes)); err != nil {
+		record := recordMigrationStmt(migrationsTracker, mf.Version)
+		if err := applySQL(ctx, db, string(sqlBytes), &record); err != nil {
 			return fmt.Errorf("apply migration %d (%s): %w", mf.Version, mf.Name, err)
-		}
-
-		if _, err := db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version) VALUES (?)`, mf.Version); err != nil {
-			return fmt.Errorf("record migration %d: %w", mf.Version, err)
 		}
 		logger.Info("Migration applied", zap.Int("version", mf.Version), zap.String("name", mf.Name))
 	}
@@ -511,9 +532,9 @@ func ApplyEmbeddedMigrations(ctx context.Context, db *sql.DB, fsys fs.FS, logger
 
 // ApplyEmbeddedMigrations is a convenience helper bound to RQLiteManager.
 func (r *RQLiteManager) ApplyEmbeddedMigrations(ctx context.Context, fsys fs.FS) error {
-	db, err := sql.Open("rqlite", fmt.Sprintf("http://localhost:%d?disableClusterDiscovery=true", r.config.RQLitePort))
+	db, err := r.openLocalSQL()
 	if err != nil {
-		return fmt.Errorf("open rqlite db: %w", err)
+		return err
 	}
 	defer db.Close()
 
@@ -548,4 +569,49 @@ func readMigrationFilesFromFS(fsys fs.FS) ([]migrationFile, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Version < out[j].Version })
 	return out, nil
+}
+
+// Migration lock bounds.
+const (
+	// migrationLockName is the single lock every migration runner contends for.
+	migrationLockName = "schema-migrations"
+
+	// migrationLockTTL is how long a runner may hold it. Long enough for the
+	// slowest migration over a raft round trip per statement, short enough that
+	// a node that died mid-apply does not block the fleet for an hour.
+	migrationLockTTL = 10 * time.Minute
+
+	// migrationLockWait is how long to wait for another node to finish. A
+	// fleet-wide restart has every node arriving at once, so this has to cover
+	// one full apply plus the wait.
+	migrationLockWait = 12 * time.Minute
+)
+
+// acquireMigrationLock takes the cluster-wide migration lock.
+//
+// Failing to take it is fatal to the apply, deliberately: proceeding without it
+// is exactly the concurrent replay the lock exists to prevent, and a caller
+// that tolerates the error would reintroduce it.
+func acquireMigrationLock(ctx context.Context, db *sql.DB, logger *zap.Logger) (*ClusterLock, error) {
+	holder, err := os.Hostname()
+	if err != nil || holder == "" {
+		holder = "unknown-host"
+	}
+
+	logger.Info("Waiting for the cluster-wide migration lock", zap.String("holder", holder))
+	lock, err := AcquireClusterLock(ctx, db, migrationLockName, holder, migrationLockTTL, migrationLockWait)
+	if err != nil {
+		return nil, fmt.Errorf("could not take the migration lock, so migrations were not applied "+
+			"(running them concurrently replays non-idempotent statements): %w", err)
+	}
+	logger.Info("Holding the cluster-wide migration lock", zap.String("holder", holder))
+	return lock, nil
+}
+
+// releaseMigrationLock frees the lock, logging rather than failing: the work is
+// already done and recorded, and the TTL frees it regardless.
+func releaseMigrationLock(ctx context.Context, lock *ClusterLock, logger *zap.Logger) {
+	if err := lock.Release(ctx); err != nil {
+		logger.Warn("Could not release the migration lock; it will expire on its own", zap.Error(err))
+	}
 }

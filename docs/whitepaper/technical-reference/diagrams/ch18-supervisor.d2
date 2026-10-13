@@ -1,0 +1,10 @@
+direction: right
+
+conn: "connected\nclient set, cache handlers built"
+disc: "disconnected\nclient nil, cache routes answer 503"
+
+conn -> conn: "probe ok every 10 s\nfailures = 0"
+conn -> conn: "probe fails\nfailures + 1"
+conn -> disc: "3 consecutive failures\nsetOlricClient(nil)"
+disc -> disc: "NewClient fails\nwait 5 s, doubling to 30 s"
+disc -> conn: "NewClient succeeds\nsetOlricClient(client)"

@@ -20,7 +20,7 @@ import (
 // reused by every push entrypoint so operators see consistent guidance.
 const pushNotConfiguredMessage = "push notifications are not configured on this namespace gateway. " +
 	"Set `ntfy_base_url` or `expo_access_token` in the gateway config and restart, " +
-	"then call this endpoint again. See core/docs/SERVERLESS.md for details."
+	"then call this endpoint again. See orama.network/docs/developer/push-notifications for details."
 
 // pushDevicesHandler dispatches GET (list) / POST (register) on
 // /v1/push/devices. Returns 503 when push isn't configured.
@@ -61,6 +61,36 @@ func (g *Gateway) pushSendHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	g.pushHandlers.SendHandler(w, r)
+}
+
+// pushTopicsHandler dispatches POST (register/refresh) and DELETE (remove) on
+// /v1/push/topics (FEAT-265). Returns 503 when push isn't configured.
+func (g *Gateway) pushTopicsHandler(w http.ResponseWriter, r *http.Request) {
+	if g.pushHandlers == nil {
+		httputil.WriteRPCError(w, http.StatusServiceUnavailable,
+			httputil.ErrCodeServiceUnavailable, pushNotConfiguredMessage)
+		return
+	}
+	switch r.Method {
+	case http.MethodPost:
+		g.pushHandlers.RegisterTopicHandler(w, r)
+	case http.MethodDelete:
+		g.pushHandlers.UnregisterTopicHandler(w, r)
+	default:
+		httputil.WriteRPCError(w, http.StatusMethodNotAllowed,
+			httputil.ErrCodeValidationFailed, "method not allowed: use POST to register or DELETE to remove")
+	}
+}
+
+// pushTopicsSendHandler handles POST /v1/push/topics/send. Returns 503 when
+// push isn't configured.
+func (g *Gateway) pushTopicsSendHandler(w http.ResponseWriter, r *http.Request) {
+	if g.pushHandlers == nil {
+		httputil.WriteRPCError(w, http.StatusServiceUnavailable,
+			httputil.ErrCodeServiceUnavailable, pushNotConfiguredMessage)
+		return
+	}
+	g.pushHandlers.SendTopicHandler(w, r)
 }
 
 // pushConfigHandler dispatches GET / PUT / DELETE on /v1/push/config — the

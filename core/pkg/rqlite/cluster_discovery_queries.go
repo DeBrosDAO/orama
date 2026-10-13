@@ -18,7 +18,7 @@ func (c *ClusterDiscoveryService) GetActivePeers() []*discovery.RQLiteNodeMetada
 
 	peers := make([]*discovery.RQLiteNodeMetadata, 0, len(c.knownPeers))
 	for _, peer := range c.knownPeers {
-		if peer.NodeID == c.raftAddress {
+		if isSelfPeer(peer, c.raftAddress) {
 			continue
 		}
 		peers = append(peers, peer)
@@ -40,6 +40,22 @@ func (c *ClusterDiscoveryService) GetAllPeers() []*discovery.RQLiteNodeMetadata 
 	return peers
 }
 
+// knowsRaftAddress reports whether discovery currently has a peer advertising
+// raftAddr. Used as one of the independent signals before a member is evicted
+// from the raft configuration: a node libp2p can still exchange metadata with
+// is not gone, whatever raft's reachability column says.
+func (c *ClusterDiscoveryService) knowsRaftAddress(raftAddr string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	for _, peer := range c.knownPeers {
+		if peer != nil && peer.RaftAddress == raftAddr {
+			return true
+		}
+	}
+	return false
+}
+
 // GetNodeWithHighestLogIndex returns the node with the highest Raft log index
 func (c *ClusterDiscoveryService) GetNodeWithHighestLogIndex() *discovery.RQLiteNodeMetadata {
 	c.mu.RLock()
@@ -49,7 +65,7 @@ func (c *ClusterDiscoveryService) GetNodeWithHighestLogIndex() *discovery.RQLite
 	var maxIndex uint64 = 0
 
 	for _, peer := range c.knownPeers {
-		if peer.NodeID == c.raftAddress {
+		if isSelfPeer(peer, c.raftAddress) {
 			continue
 		}
 
@@ -140,7 +156,7 @@ func (c *ClusterDiscoveryService) ForceWritePeersJSON() error {
 	c.mu.Lock()
 	for _, meta := range metadata {
 		c.knownPeers[meta.NodeID] = meta
-		if meta.NodeID != c.raftAddress {
+		if !isSelfPeer(meta, c.raftAddress) {
 			if _, ok := c.peerHealth[meta.NodeID]; !ok {
 				c.peerHealth[meta.NodeID] = &PeerHealth{
 					LastSeen:       time.Now(),
@@ -197,7 +213,7 @@ func (c *ClusterDiscoveryService) UpdateOwnMetadata() {
 		RaftAddress:    currentRaftAddr,
 		HTTPAddress:    currentHTTPAddr,
 		NodeType:       c.nodeType,
-		RaftLogIndex:   c.rqliteManager.getRaftLogIndex(),
+		RaftLogIndex:   c.rqliteManagerLogIndex(),
 		LastSeen:       time.Now(),
 		ClusterVersion: "1.0",
 		PeerID:         c.host.ID().String(),
@@ -250,7 +266,7 @@ func (c *ClusterDiscoveryService) ProvideMetadata() *discovery.RQLiteNodeMetadat
 		RaftAddress:    currentRaftAddr,
 		HTTPAddress:    currentHTTPAddr,
 		NodeType:       c.nodeType,
-		RaftLogIndex:   c.rqliteManager.getRaftLogIndex(),
+		RaftLogIndex:   c.rqliteManagerLogIndex(),
 		LastSeen:       time.Now(),
 		ClusterVersion: "1.0",
 		PeerID:         c.host.ID().String(),
@@ -299,4 +315,3 @@ func (c *ClusterDiscoveryService) StoreRemotePeerMetadata(peerID peer.ID, metada
 
 	return nil
 }
-

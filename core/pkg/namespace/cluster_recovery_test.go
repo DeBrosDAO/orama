@@ -28,9 +28,7 @@ type recoveryMockDB struct {
 func (m *recoveryMockDB) Query(_ context.Context, dest any, query string, args ...any) error {
 	m.mu.Lock()
 	ifaceArgs := make([]interface{}, len(args))
-	for i, a := range args {
-		ifaceArgs[i] = a
-	}
+	copy(ifaceArgs, args)
 	m.queryCalls = append(m.queryCalls, mockQueryCall{Query: query, Args: ifaceArgs})
 	fn := m.queryFunc
 	m.mu.Unlock()
@@ -44,9 +42,7 @@ func (m *recoveryMockDB) Query(_ context.Context, dest any, query string, args .
 func (m *recoveryMockDB) Exec(_ context.Context, query string, args ...any) (sql.Result, error) {
 	m.mu.Lock()
 	ifaceArgs := make([]interface{}, len(args))
-	for i, a := range args {
-		ifaceArgs[i] = a
-	}
+	copy(ifaceArgs, args)
 	m.execCalls = append(m.execCalls, mockExecCall{Query: query, Args: ifaceArgs})
 	fn := m.execFunc
 	m.mu.Unlock()

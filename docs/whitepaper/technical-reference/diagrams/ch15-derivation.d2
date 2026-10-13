@@ -1,0 +1,47 @@
+direction: down
+
+cs: "cluster secret\n32 random bytes, hex, trimmed before use" {shape: cylinder}
+hkdf: "HKDF-SHA256, nil salt, 32-byte output\ninfo = purpose label" 
+
+cs -> hkdf
+
+l1: "internal-coordination\nauth.CoordinationKey"
+l2: "internal-auth-hop\ngateway.internalAuthKey"
+l3: "acme-challenge\nauth.ACMEChallengeKey"
+l4: "caddy-tls-store\ntlsstore.MasterKey"
+l5: "ipfs-cluster-rest-api\nipfs.ClusterRESTPassword"
+l6: "ipfs-kubo-api\nipfs.KuboAPIToken"
+l7: "ipfs-wrap-v1\nipfs.WrapPurpose"
+l8: "orama-ws-capability-v1:ns and\norama-storage-fetch-cap-v1:ns\ncapability.Authority"
+
+hkdf -> l1
+hkdf -> l2
+hkdf -> l3
+hkdf -> l4
+hkdf -> l5
+hkdf -> l6
+hkdf -> l7
+hkdf -> l8
+
+m1: "MAC of a node-to-node call"
+m2: "MAC of a gateway hop"
+m3: "MAC of Caddy's DNS-01 call"
+m4: "master key"
+m5: "IPFS Cluster REST basic-auth password"
+m6: "Kubo RPC bearer"
+m7: "AES-256-GCM key sealing private blobs"
+m8: "HMAC keys of capabilities"
+
+l1 -> m1
+l2 -> m2
+l3 -> m3
+l4 -> m4
+l5 -> m5
+l6 -> m6
+l7 -> m7
+l8 -> m8
+
+m4 -> mac: "HKDF-Expand orama-tls-store-mac-v1"
+m4 -> seal: "HKDF-Expand orama-tls-store-seal-v1"
+mac: "MAC of a call to /v1/internal/tls-store"
+seal: "AES-256-GCM key sealing stored values"

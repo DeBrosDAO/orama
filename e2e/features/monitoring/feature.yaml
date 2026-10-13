@@ -1,0 +1,55 @@
+# Operating the cluster through the observability tools, as an operator
+# does: every `orama status` view as a table (verdict first) and as JSON,
+# with the facts each one shows checked against the fleet (every node ok,
+# nameservers with CoreDNS, Caddy and fresh certificates, a full mesh of /32
+# overlay peers only, services, alerts, a new namespace, traffic attributed
+# per namespace with bad names folded into "(invalid)"), the report envelope,
+# --node by public or overlay address, the exit codes (2 usage, 3 no
+# session, 4 unknown node), the operator telemetry API over HTTP (401, 403
+# NOT_AN_OPERATOR, 200 for an operator, the 5s cache, the SSE stream and its
+# interval bounds), reports refreshed every 10s, `orama maint inspect` over SSH
+# (summary consistent with the checks and the exit code, subsystem filter,
+# refusals, JSON on stdout), `orama status` and `orama nodes`, and the public
+# status JSON's uptime history. Alert injection is in monitoring-chaos.
+# The live view (`orama status`, `orama status`) is a full-screen
+# terminal program with no line output to read, so it is not claimed here:
+# its usage errors are exercised (exit 2) and its help by
+# cli-node-ops-readonly; the SSE stream it reads is asserted over HTTP.
+id: monitoring
+title: Monitor, inspector, status and telemetry
+area: operations
+subtasks: [2842]
+stage: 9
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  cli:
+    - orama status alerts
+    - orama status chain
+    - orama status cluster
+    - orama status dns
+    - orama status mesh
+    - orama status namespaces
+    - orama status node
+    - orama status report
+    - orama status service
+    - orama status traffic
+    - orama maint inspect
+    - orama status
+    - orama nodes
+  routes:
+    - /v1/operator/telemetry
+    - /v1/operator/telemetry/stream
+    - /v1/status
+  claims:
+    - "website/src/docs/operator/monitoring.mdx#the-telemetry-api: only the cluster's operators read telemetry; 401 and 403 map to exit 3, a bad interval to 400"
+    - "website/src/docs/operator/monitoring.mdx#cluster-telemetry-on-the-gateway: each node's report is refreshed every 10s and the assembled snapshot is reused for 5s"
+    - "website/src/docs/operator/monitoring.mdx#subcommands: every view starts with the verdict line and takes --json"
+    - "website/src/docs/operator/monitoring.mdx#report-format: the report envelope carries meta, summary with verdict, components, alerts and nodes"
+    - "website/src/docs/operator/monitoring.mdx#request-metrics: requests are attributed to their namespace; invalid names count as (invalid); the window is at most 60s"
+    - "website/src/docs/operator/monitoring.mdx#public-status-page: /v1/status carries node counts, component states and 90-day daily uptime, no node named"
+    - "website/src/docs/operator/inspector.mdx#exit-codes: exit 1 exactly when a check failed"
+    - "website/src/docs/operator/inspector.mdx#output-formats: --format json is one JSON document"

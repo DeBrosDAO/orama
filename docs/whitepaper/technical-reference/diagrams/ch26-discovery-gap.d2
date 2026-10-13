@@ -1,0 +1,21 @@
+direction: down
+
+writer: "Who writes per-namespace TURN files today"
+none: "Nobody. No code path writes\nnamespaces/ns/configs/turn-nodeID.yaml"
+sweep: "ReconcileHostTURN sweep (about every minute)\nremoveLegacyTURNConfig deletes\nconfigs/turn-localNodeID.yaml" 
+shared: "applyHostTURN writes the only live TURN config:\ndata/turn/turn.yaml\n(tenants: list, one turns_listen_addr)"
+scan: "DiscoverTURNRoutes\nglob namespaces/*/configs/turn-*.yaml"
+empty: "no match in any namespace"
+routes: "routes = empty\nonly the fallback to Caddy :8443 remains"
+result: "SNI cdn-hash.base reaches Caddy,\nwhich speaks HTTP: TURN allocate fails"
+unread: "turn.yaml is never read by the router.\nIts shape has no top-level namespace:\nparseTURNConfig would reject it anyway"
+
+writer -> none
+writer -> sweep
+writer -> shared
+scan -> empty
+none -> empty
+sweep -> empty
+empty -> routes
+routes -> result
+shared -> unread

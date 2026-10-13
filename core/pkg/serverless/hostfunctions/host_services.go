@@ -2,17 +2,16 @@ package hostfunctions
 
 import (
 	"context"
-	"net/http"
+	"strings"
 	"time"
 
-	"github.com/DeBrosOfficial/network/pkg/anyoneproxy"
+	"github.com/DeBrosOfficial/network/pkg/anonproxy"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/pubsub"
 	"github.com/DeBrosOfficial/network/pkg/push"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"github.com/DeBrosOfficial/network/pkg/serverless/wsbridge"
-	"github.com/DeBrosOfficial/network/pkg/tlsutil"
 	olriclib "github.com/olric-data/olric"
 	"go.uber.org/zap"
 )
@@ -29,9 +28,9 @@ import (
 // absence of a requested bridge should be visible (callers asked for it).
 func NewHostFunctions(
 	db rqlite.Client,
-	cacheClient olriclib.Client,
+	cacheClient func() olriclib.Client,
 	storage ipfs.IPFSClient,
-	pubsubAdapter *pubsub.ClientAdapter,
+	pubsubAdapter pubsub.Bus,
 	wsManager serverless.WebSocketManager,
 	secrets serverless.SecretsManager,
 	pushDispatcher *push.PushDispatcher,
@@ -45,21 +44,14 @@ func NewHostFunctions(
 		httpTimeout = 30 * time.Second
 	}
 
-	// Build the Anyone-routed HTTP client only when Anyone routing is
-	// enabled on this gateway (feat-11). When disabled, leave it nil so
-	// AnyoneFetch returns a typed error instead of silently using the
-	// direct path. anyoneproxy.NewHTTPClient() returns a fresh client
-	// with a SOCKS transport when enabled — safe to set Timeout on it
-	// (when disabled it returns the shared http.DefaultClient, which we
-	// must NOT mutate; the Enabled() guard ensures we never reach that).
-	var anyoneHTTPClient *http.Client
-	if anyoneproxy.Enabled() {
-		anyoneHTTPClient = anyoneproxy.NewHTTPClient()
-		anyoneHTTPClient.Timeout = httpTimeout
-	}
+	// Tor-routed client for anon_fetch (feat-11). Every connection it makes
+	// goes to the node's Tor SOCKS port; there is no direct path.
+	anonHTTPClient := anonproxy.NewHTTPClient()
+	anonHTTPClient.Timeout = httpTimeout
 
 	hf := &HostFunctions{
 		db:               db,
+		dbNamespace:      strings.TrimSpace(cfg.DatabaseNamespace),
 		cacheClient:      cacheClient,
 		storage:          storage,
 		ipfsAPIURL:       cfg.IPFSAPIURL,
@@ -69,14 +61,15 @@ func NewHostFunctions(
 		pushDispatcher:   pushDispatcher,
 		pushManager:      pushManager,
 		wsBridge:         wsBridge,
-		anyoneHTTPClient: anyoneHTTPClient,
+		anonHTTPClient:   anonHTTPClient,
 		turnDomain:       cfg.TURNDomain,
 		turnSecret:       cfg.TURNSecret,
 		stealthCDNDomain: cfg.StealthCDNDomain,
-		httpClient:       tlsutil.NewHTTPClient(httpTimeout),
-		logger:           logger,
-		logs:             make([]serverless.LogEntry, 0),
-		asyncInvokeSem:   make(chan struct{}, asyncInvokeMaxInFlight),
+		// Every dial this client makes is checked against the internal
+		// networks; see egress.go.
+		httpClient:     newGuardedHTTPClient(httpTimeout),
+		logger:         logger,
+		asyncInvokeSem: make(chan struct{}, asyncInvokeMaxInFlight),
 	}
 
 	// Ephemeral-state store (bugboard #710). Publishes synthetic set/clear

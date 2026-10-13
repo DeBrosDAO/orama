@@ -209,43 +209,6 @@ func TestExtractNamespaceHeader(t *testing.T) {
 	}
 }
 
-func TestExtractWalletHeader(t *testing.T) {
-	tests := []struct {
-		name   string
-		header string
-		want   string
-	}{
-		{
-			name:   "valid wallet",
-			header: "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEbC",
-			want:   "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEbC",
-		},
-		{
-			name:   "with whitespace",
-			header: "  0x742d35Cc  ",
-			want:   "0x742d35Cc",
-		},
-		{
-			name:   "empty header",
-			header: "",
-			want:   "",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, "/", nil)
-			if tt.header != "" {
-				req.Header.Set("X-Wallet", tt.header)
-			}
-
-			if got := ExtractWalletHeader(req); got != tt.want {
-				t.Errorf("ExtractWalletHeader() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestHasAuthHeader(t *testing.T) {
 	tests := []struct {
 		name   string

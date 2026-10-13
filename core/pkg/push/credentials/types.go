@@ -7,9 +7,9 @@
 // Validator registry. Adding a new push provider — APNs, FCM, SMS,
 // whatever — requires only:
 //
-//	1. A provider package that implements credentials.Validator.
-//	2. A call to credentials.Register(<provider-name>, validator) from
-//	   the gateway dependency wiring.
+//  1. A provider package that implements credentials.Validator.
+//  2. A call to credentials.Register(<provider-name>, validator) from
+//     the gateway dependency wiring.
 //
 // No changes here; no schema migration; no new HTTP endpoint.
 //

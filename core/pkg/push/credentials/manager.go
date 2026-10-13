@@ -46,9 +46,9 @@ type cacheKey struct {
 
 // cacheEntry is the LRU node payload.
 type cacheEntry struct {
-	key       cacheKey
-	cred      *Credential // nil means "no row" (negative cache)
-	builtAt   time.Time
+	key     cacheKey
+	cred    *Credential // nil means "no row" (negative cache)
+	builtAt time.Time
 }
 
 // NewManager constructs a Manager backed by the given store.

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"go.uber.org/zap"
 )
@@ -25,9 +26,8 @@ func (h *ServerlessHandlers) HandleSetSecret(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	namespace := h.getNamespaceFromRequest(r)
-	if namespace == "" {
-		writeError(w, http.StatusBadRequest, "namespace required")
+	namespace, ok := managedNamespace(w, r)
+	if !ok {
 		return
 	}
 
@@ -55,7 +55,7 @@ func (h *ServerlessHandlers) HandleSetSecret(w http.ResponseWriter, r *http.Requ
 			zap.String("name", req.Name),
 			zap.Error(err),
 		)
-		writeError(w, http.StatusInternalServerError, "Failed to set secret: "+err.Error())
+		writeStoreError(w, "Failed to set secret", err)
 		return
 	}
 
@@ -63,6 +63,10 @@ func (h *ServerlessHandlers) HandleSetSecret(w http.ResponseWriter, r *http.Requ
 		zap.String("namespace", namespace),
 		zap.String("name", req.Name),
 	)
+
+	// The name only. A secret's value is the one thing that must never reach a
+	// replicated table.
+	h.recordAudit(r, namespace, auth.AuditSecretSet, req.Name)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"message":   "Secret set",
@@ -79,9 +83,8 @@ func (h *ServerlessHandlers) HandleListSecrets(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	namespace := h.getNamespaceFromRequest(r)
-	if namespace == "" {
-		writeError(w, http.StatusBadRequest, "namespace required")
+	namespace, ok := managedNamespace(w, r)
+	if !ok {
 		return
 	}
 
@@ -94,7 +97,7 @@ func (h *ServerlessHandlers) HandleListSecrets(w http.ResponseWriter, r *http.Re
 			zap.String("namespace", namespace),
 			zap.Error(err),
 		)
-		writeError(w, http.StatusInternalServerError, "Failed to list secrets")
+		writeStoreError(w, "Failed to list secrets", err)
 		return
 	}
 
@@ -112,9 +115,8 @@ func (h *ServerlessHandlers) HandleDeleteSecret(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	namespace := h.getNamespaceFromRequest(r)
-	if namespace == "" {
-		writeError(w, http.StatusBadRequest, "namespace required")
+	namespace, ok := managedNamespace(w, r)
+	if !ok {
 		return
 	}
 
@@ -131,7 +133,7 @@ func (h *ServerlessHandlers) HandleDeleteSecret(w http.ResponseWriter, r *http.R
 			zap.String("name", secretName),
 			zap.Error(err),
 		)
-		writeError(w, http.StatusInternalServerError, "Failed to delete secret: "+err.Error())
+		writeStoreError(w, "Failed to delete secret", err)
 		return
 	}
 
@@ -139,6 +141,8 @@ func (h *ServerlessHandlers) HandleDeleteSecret(w http.ResponseWriter, r *http.R
 		zap.String("namespace", namespace),
 		zap.String("name", secretName),
 	)
+
+	h.recordAudit(r, namespace, auth.AuditSecretDeleted, secretName)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"message": "Secret deleted",

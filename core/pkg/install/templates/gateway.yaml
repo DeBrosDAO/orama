@@ -1,0 +1,16 @@
+listen_addr: ":{{.ListenPort}}"
+client_namespace: "default"
+rqlite_dsn: "{{.RQLiteDSN}}"
+bootstrap_peers:
+{{range .BootstrapPeers}}  - "{{.}}"
+{{end}}
+{{if .DomainName}}domain_name: "{{.DomainName}}"
+{{end}}olric_servers:
+{{range .OlricServers}}  - "{{.}}"
+{{end}}
+olric_timeout: "10s"
+ipfs_cluster_api_url: "http://localhost:{{.ClusterAPIPort}}"
+ipfs_api_url: "http://localhost:{{.IPFSAPIPort}}"
+ipfs_timeout: "60s"
+ipfs_replication_factor: 3
+

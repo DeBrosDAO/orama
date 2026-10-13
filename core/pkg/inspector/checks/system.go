@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/inspector"
+	"github.com/DeBrosOfficial/network/pkg/oramaunit"
+	"github.com/DeBrosOfficial/network/pkg/telemetry/report"
 )
 
 func init() {
@@ -13,6 +15,21 @@ func init() {
 }
 
 const systemSub = "system"
+
+func serviceStatus(services map[string]string, names ...string) string {
+	last := "unknown"
+	for _, n := range names {
+		s, ok := services[n]
+		if !ok {
+			continue
+		}
+		if s == "active" {
+			return s
+		}
+		last = s
+	}
+	return last
+}
 
 // CheckSystem runs all system-level health checks.
 func CheckSystem(data *inspector.ClusterData) []inspector.CheckResult {
@@ -33,15 +50,21 @@ func checkSystemPerNode(nd *inspector.NodeData) []inspector.CheckResult {
 	sys := nd.System
 	node := nd.Node.Name()
 
-	// 6.1 Core services active
-	coreServices := []string{"orama-node", "orama-olric", "orama-ipfs", "orama-ipfs-cluster"}
-	for _, svc := range coreServices {
-		status, ok := sys.Services[svc]
-		if !ok {
-			status = "unknown"
-		}
-		id := fmt.Sprintf("system.svc_%s", strings.ReplaceAll(svc, "-", "_"))
-		name := fmt.Sprintf("%s service active", svc)
+	// 6.1 Core services active. Accept leftover host unit names during rolling upgrade.
+	type coreSvc struct {
+		id   string
+		keys []string
+	}
+	for _, svc := range []coreSvc{
+		{"orama-node", []string{"orama-node"}},
+		{"orama-olric", []string{"orama-namespace-olric@index", "orama-olric"}},
+		{"orama-ipfs", []string{"orama-namespace-ipfs@index", "orama-ipfs"}},
+		{"orama-ipfs-cluster", []string{"orama-namespace-ipfs-cluster@index", "orama-ipfs-cluster"}},
+		{"caddy", []string{"orama-namespace-caddy@index", "caddy"}},
+	} {
+		status := serviceStatus(sys.Services, svc.keys...)
+		id := fmt.Sprintf("system.svc_%s", strings.ReplaceAll(svc.id, "-", "_"))
+		name := fmt.Sprintf("%s service active", svc.id)
 		if status == "active" {
 			r = append(r, inspector.Pass(id, name, systemSub, node, "active", inspector.Critical))
 		} else {
@@ -50,54 +73,31 @@ func checkSystemPerNode(nd *inspector.NodeData) []inspector.CheckResult {
 		}
 	}
 
-	// 6.2 Anyone relay/client services (only check if installed, don't fail if absent)
-	for _, svc := range []string{"orama-anyone-relay", "orama-anyone-client"} {
-		status, ok := sys.Services[svc]
-		if !ok || status == "inactive" {
-			continue // not installed or intentionally stopped
-		}
-		id := fmt.Sprintf("system.svc_%s", strings.ReplaceAll(svc, "-", "_"))
-		name := fmt.Sprintf("%s service active", svc)
-		if status == "active" {
-			r = append(r, inspector.Pass(id, name, systemSub, node, "active", inspector.High))
-		} else {
-			r = append(r, inspector.Fail(id, name, systemSub, node,
-				fmt.Sprintf("status=%s (should be active or uninstalled)", status), inspector.High))
-		}
-	}
-
 	// 6.5 WireGuard service
-	if status, ok := sys.Services["wg-quick@wg0"]; ok {
+	if status := serviceStatus(sys.Services, "orama-namespace-wireguard@index", "wg-quick@wg0"); status != "unknown" {
 		if status == "active" {
-			r = append(r, inspector.Pass("system.svc_wg", "wg-quick@wg0 active", systemSub, node, "active", inspector.Critical))
+			r = append(r, inspector.Pass("system.svc_wg", "wireguard @index active", systemSub, node, "active", inspector.Critical))
 		} else {
-			r = append(r, inspector.Fail("system.svc_wg", "wg-quick@wg0 active", systemSub, node,
+			r = append(r, inspector.Fail("system.svc_wg", "wireguard @index active", systemSub, node,
 				fmt.Sprintf("status=%s", status), inspector.Critical))
 		}
 	}
 
-	// 6.3 Nameserver services (if applicable)
+	// 6.3 CoreDNS (nameserver nodes only). Caddy is index, checked above.
 	if nd.Node.IsNameserver() {
-		for _, svc := range []string{"coredns", "caddy"} {
-			status, ok := sys.Services[svc]
-			if !ok {
-				status = "unknown"
-			}
-			id := fmt.Sprintf("system.svc_%s", svc)
-			name := fmt.Sprintf("%s service active", svc)
-			if status == "active" {
-				r = append(r, inspector.Pass(id, name, systemSub, node, "active", inspector.Critical))
-			} else {
-				r = append(r, inspector.Fail(id, name, systemSub, node,
-					fmt.Sprintf("status=%s", status), inspector.Critical))
-			}
+		status := serviceStatus(sys.Services, "orama-namespace-coredns@nameserver", "coredns")
+		if status == "active" {
+			r = append(r, inspector.Pass("system.svc_coredns", "coredns service active", systemSub, node, "active", inspector.Critical))
+		} else {
+			r = append(r, inspector.Fail("system.svc_coredns", "coredns service active", systemSub, node,
+				fmt.Sprintf("status=%s", status), inspector.Critical))
 		}
 	}
 
 	// 6.6 Failed systemd units (only orama-related units count as failures)
 	var oramaUnits, externalUnits []string
 	for _, u := range sys.FailedUnits {
-		if strings.HasPrefix(u, "orama-") || u == "wg-quick@wg0.service" || u == "caddy.service" || u == "coredns.service" {
+		if oramaunit.Is(u) {
 			oramaUnits = append(oramaUnits, u)
 		} else {
 			externalUnits = append(externalUnits, u)
@@ -165,13 +165,25 @@ func checkSystemPerNode(nd *inspector.NodeData) []inspector.CheckResult {
 		}
 	}
 
-	// 6.18 OOM kills
-	if sys.OOMKills == 0 {
-		r = append(r, inspector.Pass("system.oom", "No OOM kills", systemSub, node,
-			"no OOM kills in dmesg", inspector.Critical))
-	} else {
-		r = append(r, inspector.Fail("system.oom", "No OOM kills", systemSub, node,
-			fmt.Sprintf("%d OOM kills in dmesg", sys.OOMKills), inspector.Critical))
+	// 6.18 OOM kills (within the report window, not since boot)
+	switch {
+	case sys.OOMKillsError != "":
+		r = append(r, inspector.Warn("system.oom", "No recent OOM kills", systemSub, node,
+			"OOM kill count unknown: "+sys.OOMKillsError, inspector.Critical))
+	case sys.OOMKills == 0:
+		r = append(r, inspector.Pass("system.oom", "No recent OOM kills", systemSub, node,
+			"no OOM kills in "+report.OOMKillWindowLabel, inspector.Critical))
+	default:
+		r = append(r, inspector.Fail("system.oom", "No recent OOM kills", systemSub, node,
+			fmt.Sprintf("%d OOM kills in %s", sys.OOMKills, report.OOMKillWindowLabel), inspector.Critical))
+	}
+
+	// 6.18b Tenant OOM kills: a tenant at its own MemoryMax is the tenant's
+	// limit working, never a node failure, so this never fails.
+	if sys.TenantOOMKills > 0 {
+		r = append(r, inspector.Pass("system.tenant_oom", "Tenant deployment OOM kills", systemSub, node,
+			fmt.Sprintf("%d tenant deployment OOM kills in %s (%s); not a node fault", sys.TenantOOMKills,
+				report.OOMKillWindowLabel, report.TenantOOMSummary(sys.TenantOOMKillsByUnit)), inspector.Low))
 	}
 
 	// 6.19 Swap usage
@@ -240,10 +252,10 @@ func checkSystemPerNode(nd *inspector.NodeData) []inspector.CheckResult {
 
 	// 6.25 Expected ports listening
 	expectedPorts := map[int]string{
-		5001: "RQLite HTTP",
-		3322: "Olric Memberlist",
-		6001: "Gateway",
-		4501: "IPFS API",
+		10100: "RQLite HTTP",
+		10103: "Olric Memberlist",
+		10104: "Gateway",
+		10107: "IPFS API",
 	}
 	for port, svcName := range expectedPorts {
 		found := false

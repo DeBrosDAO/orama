@@ -1,0 +1,23 @@
+direction: down
+
+boot: "orama-node boot component legacy-layout\n(orama user, before any namespace service)"
+plan: "Plan every path first" {
+  keys: "signing keys: secrets/ to namespaces/index/gateway"
+  trees: "sqlite/ to data/sqlite;\nconfigs/turn.yaml to data/turn/turn.yaml"
+  deps: "deployments/ns/name to data/deployments/instance"
+  envs: "namespaces/ns/svc.env to unit env tree"
+  denv: "deployment-env/*.env, *.token to deploy secrets"
+}
+check: "Per path: old only, new only/neither, or both?" {shape: diamond}
+both: "Fail naming both paths;\nnode starts nothing else; retried"
+apply: "Apply: rename or stage through privhelper,\nthen delete the old file"
+copy: "secrets/ not writable by orama?\ncopy key, record SHA-256 in marker"
+root: "Upgrade, as root:\nRemoveCopiedSigningKeys deletes an original\nonly if digest matches and the copy exists"
+ret: "After node is healthy:\nupgrade retires legacy deployment units"
+
+boot -> plan -> check
+check -> both: "both exist"
+check -> apply: "old only"
+apply -> copy
+copy -> root
+apply -> ret

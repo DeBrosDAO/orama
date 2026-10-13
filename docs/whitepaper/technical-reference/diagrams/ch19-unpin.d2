@@ -1,0 +1,21 @@
+shape: sequence_diagram
+
+client: "client"
+gw: "serving gateway"
+refs: "index RQLite\nipfs_cid_refs"
+cluster: "ipfs-cluster"
+node: "every active node\n(dns_nodes, internal_ip)"
+
+client -> gw: "DELETE /v1/storage/unpin/cid[?immediate=true]"
+gw -> gw: "ownership + selector check"
+gw -> refs: "CheckReady: every live namespace backfilled?"
+gw -> gw: "UPDATE is_pinned = 0"
+gw -> refs: "Release: DELETE row, then COUNT(holders > 0)"
+gw -> client: "remaining > 0: 200 evicted=shared"
+gw -> cluster: "remaining = 0: GET /pins/cid (name, RF)"
+gw -> cluster: "DELETE /pins/cid"
+gw -> refs: "recount; Pin again if a reference appeared"
+gw -> node: "immediate=true: POST /v1/internal/storage/evict?cid\ncoordination MAC, one call per node, 30 s"
+node -> node: "wait until local Kubo unpins (20 s max)\nrefs -r offline, block rm without force"
+node -> gw: "200 {status: ok or partial}"
+gw -> client: "200 evicted = true or partial"

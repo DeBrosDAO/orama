@@ -1,0 +1,22 @@
+shape: sequence_diagram
+
+owner: "owner's device session"
+gw: "namespace gateway"
+rev: "revocation list\n(in memory, reloaded every 5 s)"
+client: "client (no credential)"
+relay: "relay node\n/v1/proxy/relay"
+serve: "serving gateway\nns-name.base"
+
+owner -> gw: "POST /v1/storage/fetch-caps {cid, count 1..64, ttl_seconds 3600..604800}"
+gw -> gw: "ownership + selector + device id from JWT"
+gw -> owner: "caps: id, token, revoke_key, expires_at"
+owner -> client: "hands tokens over (out of band)"
+client -> relay: "WebSocket tunnel to host:443, TLS inside"
+relay -> serve: "Tor circuit, raw TCP"
+client -> serve: "GET /v1/storage/relayed/cid\nX-Orama-Fetch-Cap: token"
+serve -> serve: "no credential beside it; HMAC check; namespace and CID match"
+serve -> rev: "token id or issuing device revoked?"
+serve -> serve: "at most 4 open downloads per token; ownership check"
+serve -> client: "body as /v1/storage/get, Content-Length"
+owner -> gw: "DELETE /v1/storage/fetch-caps/id\nX-Orama-Revoke-Key"
+gw -> rev: "RevokeToken (kept 7 days)"

@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Orama Network Status</title>
+<meta name="description" content="Live status of the Orama Network: services, uptime, and the Orama L1 chain.">
+<link rel="stylesheet" href="/status/assets/app.css">
+<script src="/status/assets/app.js" defer></script>
+</head>
+<body>
+<main class="page">
+  <header class="top">
+    <div class="brand">
+      <span class="logo" aria-hidden="true"></span>
+      <span class="brand-name">Orama Network</span>
+      <span class="brand-sub">Status</span>
+    </div>
+    <a class="json-link" href="/v1/status">JSON</a>
+  </header>
+
+  <section id="banner" class="banner state-unknown" aria-live="polite">
+    <span class="banner-dot" aria-hidden="true"></span>
+    <div>
+      <h1 id="headline">Checking the network…</h1>
+      <p id="updated" class="muted">Loading</p>
+    </div>
+  </section>
+
+  <section class="stats" aria-label="Network at a glance">
+    <div class="stat"><span class="stat-label">Nodes healthy</span><span id="stat-nodes" class="stat-value">–</span></div>
+    <div class="stat"><span class="stat-label">Requests / s</span><span id="stat-rps" class="stat-value">–</span></div>
+    <div class="stat"><span class="stat-label">Error rate</span><span id="stat-errors" class="stat-value">–</span></div>
+    <div class="stat"><span class="stat-label">p95 latency</span><span id="stat-p95" class="stat-value">–</span></div>
+  </section>
+
+  <section class="card" aria-labelledby="services-title">
+    <div class="card-head">
+      <h2 id="services-title">Services</h2>
+      <span class="muted small">Uptime over the last 90 days</span>
+    </div>
+    <ul id="components" class="components"></ul>
+    <div class="legend small muted">
+      <span><i class="sw sw-up"></i>No issues</span>
+      <span><i class="sw sw-minor"></i>Minor</span>
+      <span><i class="sw sw-major"></i>Major</span>
+      <span><i class="sw sw-none"></i>No data</span>
+    </div>
+  </section>
+
+  <section id="chain-card" class="card" aria-labelledby="chain-title" hidden>
+    <div class="card-head">
+      <h2 id="chain-title">Orama L1</h2>
+      <span id="chain-id" class="pill"></span>
+    </div>
+    <div class="chain-grid">
+      <div class="stat"><span class="stat-label">Block height</span><span id="chain-height" class="stat-value mono">–</span></div>
+      <div class="stat"><span class="stat-label">Avg block time</span><span id="chain-blocktime" class="stat-value">–</span></div>
+      <div class="stat"><span class="stat-label">Last block</span><span id="chain-age" class="stat-value">–</span></div>
+      <div class="stat"><span class="stat-label">Mempool</span><span id="chain-mempool" class="stat-value">–</span></div>
+    </div>
+    <h3 class="sub-title">Validators <span id="chain-validator-count" class="muted small"></span></h3>
+    <ul id="validators" class="validators"></ul>
+  </section>
+
+  <footer class="foot muted small">
+    <span>Refreshes every 10 seconds.</span>
+    <span id="error" class="error" role="alert"></span>
+  </footer>
+</main>
+</body>
+</html>

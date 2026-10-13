@@ -1,0 +1,19 @@
+# Managed by Orama Network: rewritten on every `orama global install`.
+# Validator onion service of the Orama Tor network orama-teststage (orama.network/docs/operator/tor-network).
+DataDirectory /var/lib/orama-global/tor-onion
+Log notice stdout
+SafeLogging 1
+UseDefaultFallbackDirs 0
+DirAuthority OramaAuth1 orport=31020 v3ident=00000000000000000000000000000000000000A0 57.129.166.16:31021 00000000000000000000000000000000000000B0
+DirAuthority OramaAuth2 orport=31020 v3ident=00000000000000000000000000000000000000A1 57.129.166.17:31021 00000000000000000000000000000000000000B1
+DirAuthority OramaAuth3 orport=31020 v3ident=00000000000000000000000000000000000000A2 161.97.184.199:31021 00000000000000000000000000000000000000B2
+SocksPort 0
+ORPort 0
+DirPort 0
+ClientOnly 1
+HiddenServiceDir /var/lib/orama-global/tor-onion/onion
+HiddenServiceVersion 3
+HiddenServicePort 80 127.0.0.1:31022
+HiddenServiceEnableIntroDoSDefense 1
+HiddenServiceMaxStreams 20
+HiddenServiceMaxStreamsCloseCircuit 1

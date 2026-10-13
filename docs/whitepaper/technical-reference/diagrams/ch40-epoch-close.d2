@@ -1,0 +1,25 @@
+direction: down
+
+begin: "BeginBlock, x/emission runs first"
+count: "BlocksInEpoch + 1"
+both: "BFT time since epoch start >= epoch_duration\nAND BlocksInEpoch >= min_blocks_per_epoch?"
+save: "store EpochState\n(no close)"
+split: "pct = split in force (x/houses or 60/25/10/5)\nmaxMint = MaxMintableForEpoch(epoch)\nshares = SplitEpochMintAt(maxMint, pct)"
+mint: "MintCoins(validator share)\ninto emission module account"
+dist: "x/power DistributeEpochRewards\n(pay on capped power into earnings)"
+rec: "CeilingRecord: storage, relay,\ndevelopment ceilings; prune epoch - 30"
+adv: "CumulativeMinted += validator share\nCurrentEpoch + 1, start = now,\nBlocksInEpoch = 0, FaucetEpochMinted = 0"
+endb: "EndBlock (last module):\nReconcileBurns"
+burn: "supply below genesis + minted + dev + service\n+ faucet - burned? add the gap to CumulativeBurned"
+
+begin -> count
+count -> both
+both -> save: "no"
+both -> split: "yes: close exactly one epoch"
+split -> mint
+mint -> dist
+dist -> rec
+rec -> adv
+adv -> endb: "same block"
+save -> endb: "same block"
+endb -> burn

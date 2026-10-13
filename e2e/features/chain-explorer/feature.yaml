@@ -1,0 +1,97 @@
+# Stage 8: the gateway's /v1/chain/ account and validator reads that the website
+# explorer (website/src/explorer/data/chain) calls: the staking validator list
+# (the node's SDK REST API, fixed page size, no caller query), an address's bank
+# balances, delegations and unbonding through the cosmos-sdk Query methods of
+# /v1/chain/query/, and
+# the indexer routes added for it (the newest transactions, hourly statistics,
+# an account's summary), the home snapshot, the paged and filtered block and
+# transaction lists, the cache headers (scale_test.go), what each epoch paid each
+# validator and delegator, the head stream and the aggregates the indexer keeps for the explorer's
+# epoch, supply and validator pages (the epochs, the supply per epoch, each
+# validator's epochs, slashes and jail periods, and the hourly, daily and weekly
+# series), checked for their order, their bounds and their refusals. The list queries the
+# nodes, storage and Tor pages read (x/nodes Nodes, x/storage Deals, x/relay Relays) are
+# checked through the gateway for the node and the relay a test registers, the deal order
+# (newest first descends and oldest first ascends), each entry against the point query
+# of the same record, and the page cap of 100; the archive numbers the storage page shows are
+# checked for the invariant that the retain height is never above the last archived height.
+# The token, NFT, contract,
+# market, governance and shielded pages' reads (assets_test.go) are checked the same way: the bank's
+# denom list and a denom's holders, wasmd's codes, a code's contracts, a contract's state, the houses,
+# market, cnft and token queries, the shielded pool's parameters, tree and account, each with its page
+# cap and its 404, and the queries that run a contract or are withheld (the shielded Pools, wasmd's
+# SmartContractState and Code) are refused. The REST routes are checked against the run's own
+# validators (the bank balance equals `orama chain balance`'s answer, the
+# validator set holds the run's validators bonded) and every refusal (a
+# malformed address, a caller query, another method) is checked for its status.
+# The run chain deploy installs the indexer beside every node, so the index tests run in every
+# fleet run. The page is served from orama.network, not from the network, so its reads are
+# cross-origin: the gateway answers that one origin on a GET (and its preflight) under /v1/chain/
+# and no other route or origin (cors_test.go).
+id: chain-explorer
+title: Explorer reads through the gateway - balances, validators, index
+area: chain
+subtasks: [2776]
+stage: 8
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: true
+covers:
+  routes:
+    - /v1/chain/
+  queries:
+    - orama.nodes.v1.Nodes
+    - orama.storage.v1.Deals
+    - orama.relay.v1.Relays
+    - orama.token.v1.Params
+    - orama.token.v1.Token
+    - orama.token.v1.Frozen
+    - orama.cnft.v1.Collection
+    - orama.cnft.v1.Tree
+    - orama.market.v1.Listing
+    - orama.market.v1.Bid
+    - orama.houses.v1.Params
+    - orama.houses.v1.Proposal
+    - orama.houses.v1.Vote
+    - orama.houses.v1.HouseBond
+    - orama.houses.v1.Enacted
+    - orama.shielded.v1.Params
+    - orama.shielded.v1.TreeState
+    - orama.shielded.v1.TreeFrontier
+    - orama.shielded.v1.SubtreeRoots
+  claims:
+    - "website/src/docs/blockchain/reading-the-chain.mdx#the-chain-indexer: index/txs, index/accounts/{addr}/txs and index/blocks take page up to 10 and go deeper by cursor=<next_cursor>; a page with a cursor and a malformed cursor are refused"
+    - "website/src/docs/blockchain/reading-the-chain.mdx#the-chain-indexer: index/accounts/{addr}/rewards and index/cnft/owners/{addr}/assets also take page up to 10 and go deeper by cursor=<next_cursor>, each with a cursor of its own shape; a page with a cursor, another list's cursor and a malformed cursor are refused"
+    - "docs/whitepaper/technical-reference/vol2/39-chain-architecture.md#how-core-reads-and-writes-the-chain: the explorer list adds bank TotalSupply and DenomOwners and wasmd Codes, CodeInfo, ContractsByCode, ContractsByCreator, ContractHistory and AllContractState to the served queries, each paginated one capped at 100 entries a page"
+    - "docs/whitepaper/technical-reference/vol2/39-chain-architecture.md#how-core-reads-and-writes-the-chain: wasmd's SmartContractState and Code, and x/shielded's Pools, are not served"
+    - "website/src/docs/blockchain/reading-the-chain.mdx#explorer-queries: a code id that is not stored and an address that is no contract are a 404 on CodeInfo and AllContractState, as on ContractInfo"
+    - "website/src/docs/blockchain/chain-read-api.mdx#scanning-the-shielded-pool: shielded/actions pages whole blocks of the committed shielded actions in the order the chain appended them, each with its leaf position and each block with the tree size after it; the positions run on without a gap from the index's first block and the last block's tree size is the tree's size at the height the index has reached"
+    - "website/src/docs/blockchain/chain-read-api.mdx#scanning-the-shielded-pool: following next_height reads every action once whatever the limit, and a from_height past the index is an empty page that does not move backwards"
+    - "website/src/docs/blockchain/chain-read-api.mdx#scanning-the-shielded-pool: shielded/subtree-roots lists the roots of the filled 2^16-leaf subtrees in order from first_index, 32 bytes each, with the block that filled each"
+    - "website/src/docs/blockchain/chain-read-api.mdx#scanning-the-shielded-pool: SubtreeRoots answers a root for every filled 2^16-leaf subtree from index 0 (floor(tree_size / 65536) of them, 32 bytes each, in order, with the block that filled it and the total), pages by start_index and limit up to 1,000, and the roots the index serves are the chain's"
+    - "website/src/docs/blockchain/chain-read-api.mdx#scanning-the-shielded-pool: TreeFrontier answers the tree's right edge with the size and root TreeState reports at the same height, empty for an empty tree and otherwise the position, the last leaf and one ommer per set bit of the position"
+    - "docs/whitepaper/technical-reference/vol2/42-archive-and-indexer.md#the-indexer: a page of the shielded routes that has more behind it is Cache-Control public, max-age=600, the page at the head max-age=2, and every error no-store; the routes refuse an unknown or repeated parameter, a limit over 1000 and a method other than GET"
+    - "website/src/docs/blockchain/shielded.mdx#scanning-the-pool: ACTIONS OF AN ACCEPTED BUNDLE: the run chain is built without the Orchard library and the verifier, so no bundle is accepted and the list is empty; the check that every action of an accepted bundle is listed with its position runs unchanged on a chain that accepts bundles (trigger: chain-deploy.sh builds and installs them)"
+    - "website/src/docs/blockchain/shielded.mdx#what-the-chain-shows: the pool account's balance, the note tree's size and the transactions that name the pool's account are public through the gateway, and a private transfer shows only its fee"
+    - "docs/whitepaper/technical-reference/vol2/39-chain-architecture.md#how-core-reads-and-writes-the-chain: AllBalances, DelegatorDelegations and DelegatorUnbondingDelegations of /v1/chain/query/ answer an address's balances, delegations and unbonding, at most 100 entries"
+    - "docs/whitepaper/technical-reference/vol2/39-chain-architecture.md#how-core-reads-and-writes-the-chain: GET /v1/chain/staking/validators is the node's REST staking validators, at most 200"
+    - "docs/whitepaper/technical-reference/vol2/39-chain-architecture.md#how-core-reads-and-writes-the-chain: the validator list route takes no query and a page limit above 100 on a wallet query is a 400"
+    - "docs/whitepaper/technical-reference/vol2/39-chain-architecture.md#how-core-reads-and-writes-the-chain: every Orama module serves its queries over the node's REST API at the google.api.http paths of its query.proto"
+    - "docs/whitepaper/technical-reference/vol2/42-archive-and-indexer.md#the-indexer: GET /index/v1/txs, /index/v1/stats and /index/v1/accounts/{address} answer the newest transactions, 48 hourly buckets and an account's transaction count and dates"
+    - "docs/whitepaper/technical-reference/vol2/42-archive-and-indexer.md#the-indexer: /index/v1/stats/hourly, /stats/daily and /stats/weekly answer a page of buckets newest first, each interval apart, with no holes"
+    - "docs/whitepaper/technical-reference/vol2/42-archive-and-indexer.md#the-indexer: /index/v1/epochs, /epochs/{epoch}, /epochs/{epoch}/validators and /supply answer the closed emission epochs, an epoch's validators and one supply point per epoch, newest first, and an unknown epoch is a 404"
+    - "docs/whitepaper/technical-reference/vol2/42-archive-and-indexer.md#the-indexer: /index/v1/validators, /validators/{operator} and its /epochs, /slashes and /jails answer a validator's power, uptime, slashes and jail periods"
+    - "docs/whitepaper/technical-reference/vol2/42-archive-and-indexer.md#the-indexer: every aggregate list takes page 1 to 1000 and limit 1 to 100 and refuses a value outside them, an unknown parameter and a repeated one"
+    - "docs/whitepaper/technical-reference/vol2/42-archive-and-indexer.md#the-indexer: /index/v1/status carries aggregates_from, and stuck while the follower cannot advance; the fleet's indexers are not stuck"
+    - "website/src/docs/blockchain/reading-the-chain.mdx#epochs-the-index-could-not-read: an epoch row is either exact or unavailable with a reason and no figure"
+    - "docs/whitepaper/technical-reference/vol2/42-archive-and-indexer.md#the-indexer: GET /index/v1/home answers the explorer's home page in one read: the status with the lag, the newest blocks and transactions, 48 hourly buckets, the epoch in progress, the supply and the base fee at the tip"
+    - "docs/whitepaper/technical-reference/vol2/42-archive-and-indexer.md#the-indexer: /index/v1/blocks lists blocks newest first without their transaction hashes, and /index/v1/txs and /accounts/{address}/txs take page, limit and filter (all, failed, transfers, staking, storage), refusing any other value"
+    - "docs/whitepaper/technical-reference/vol2/42-archive-and-indexer.md#the-indexer: a successful index answer is Cache-Control public, max-age=2 when it depends on the head and max-age=600 for a block, a transaction by hash or a closed epoch, and every error is no-store"
+    - "docs/whitepaper/technical-reference/vol2/42-archive-and-indexer.md#the-indexer: /index/v1/epochs/{n}/rewards, /validators/{operator}/rewards and /accounts/{address}/rewards say what an epoch paid each validator and what an account was credited; the validators' amounts add up to what x/power credited and force-bonded, and an epoch from before the chain emitted the events is not recorded"
+    - "docs/whitepaper/technical-reference/vol2/42-archive-and-indexer.md#the-explorer: GET /v1/chain/head/stream is the chain's head as server-sent events, opening with the current head, needing no indexer, with no cache and no query"
+    - "website/src/docs/blockchain/reading-the-chain.mdx#the-explorer: each gateway answers the explorer's origin, https://orama.network, on a GET (and its preflight) under /v1/chain/ and refuses it on every other route"
+    - "website/src/docs/blockchain/reading-the-chain.mdx#list-queries: Nodes, Deals and Relays page by key, at most 100 entries a page, and a limit above 100 is a 400"
+    - "docs/whitepaper/technical-reference/vol2/41-storage-deals.md: Deals pages in id order, or newest first with pagination.reverse, and the highest id is the number of deals made"
+    - "docs/whitepaper/technical-reference/vol2/46-relay-rewards.md: Relays lists every relay in fingerprint order, at most 100 a page by the page key"

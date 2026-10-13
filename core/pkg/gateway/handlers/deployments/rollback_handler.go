@@ -3,12 +3,14 @@ package deployments
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/deployments"
+	"github.com/DeBrosOfficial/network/pkg/deployments/process"
 	"go.uber.org/zap"
 )
 
@@ -34,6 +36,10 @@ func (h *RollbackHandler) HandleRollback(w http.ResponseWriter, r *http.Request)
 	namespace := getNamespaceFromContext(ctx)
 	if namespace == "" {
 		http.Error(w, "Namespace not found in context", http.StatusUnauthorized)
+		return
+	}
+	if err := extendForChange(w); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -63,6 +69,18 @@ func (h *RollbackHandler) HandleRollback(w http.ResponseWriter, r *http.Request)
 		zap.String("name", req.Name),
 		zap.Int("target_version", req.Version),
 	)
+
+	// The lock wait and the work here share one budget; the replicas have
+	// their own after it.
+	ctx, cancel := localChangeContext(ctx)
+	defer cancel()
+
+	unlock, err := h.service.lockDeployment(ctx, namespace, req.Name)
+	if err != nil {
+		http.Error(w, err.Error()+"; run the command again", http.StatusServiceUnavailable)
+		return
+	}
+	defer unlock()
 
 	// Get current deployment
 	current, err := h.service.GetDeployment(ctx, namespace, req.Name)
@@ -109,14 +127,23 @@ func (h *RollbackHandler) HandleRollback(w http.ResponseWriter, r *http.Request)
 
 	if err != nil {
 		h.logger.Error("Rollback failed", zap.Error(err))
+		var taken *instanceTakenError
+		if errors.As(err, &taken) {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
 		http.Error(w, fmt.Sprintf("Rollback failed: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	// Fan out rollback to replica nodes
-	h.service.FanOutToReplicas(ctx, rolled, "/v1/internal/deployments/replica/rollback", map[string]interface{}{
-		"new_version": rolled.Version,
-	})
+	// The rollback is not done until every replica runs it.
+	if err := h.service.updateReplicas(ctx, rolled, replicaRollbackPath); err != nil {
+		h.logger.Error("Rollback not applied on every replica", zap.Error(err))
+		http.Error(w, fmt.Sprintf(
+			"rolled back to version %d on the home node, but %v. Those nodes still serve the old version; "+
+				"run the same rollback again to retry", req.Version, err), http.StatusBadGateway)
+		return
+	}
 
 	// Return response
 	resp := map[string]interface{}{
@@ -186,8 +213,13 @@ func (h *RollbackHandler) rollbackStatic(ctx context.Context, current *deploymen
 		WHERE namespace = ? AND name = ?
 	`
 
-	_, err := h.service.db.Exec(ctx, query, history.ContentCID, newVersion, now, current.Namespace, current.Name)
+	registered, err := h.service.registerCIDs(ctx, current.Namespace, history.ContentCID)
 	if err != nil {
+		return nil, err
+	}
+	_, err = h.service.db.Exec(ctx, query, history.ContentCID, newVersion, now, current.Namespace, current.Name)
+	if err != nil {
+		h.service.unregisterCIDs(ctx, current.Namespace, registered)
 		return nil, fmt.Errorf("failed to update deployment: %w", err)
 	}
 
@@ -239,7 +271,12 @@ func (h *RollbackHandler) rollbackDynamic(ctx context.Context, current *deployme
 		cid = history.ContentCID
 	}
 
-	deployPath := h.updateHandler.nextjsHandler.baseDeployPath + "/" + current.Namespace + "/" + current.Name
+	deployPath := process.DeployDir(h.updateHandler.nextjsHandler.baseDeployPath, current.Namespace, current.Name)
+	// The directory on this host must be this deployment's before anything
+	// replaces it (instance_claim.go).
+	if err := h.service.checkInstanceOwner(ctx, deployPath, current.Namespace, current.Name); err != nil {
+		return nil, err
+	}
 	stagingPath := deployPath + ".rollback"
 
 	// Extract historical version
@@ -248,6 +285,10 @@ func (h *RollbackHandler) rollbackDynamic(ctx context.Context, current *deployme
 	}
 	if err := h.updateHandler.nextjsHandler.extractFromIPFS(ctx, cid, stagingPath); err != nil {
 		return nil, fmt.Errorf("failed to extract historical version: %w", err)
+	}
+	// The staged directory replaces the claimed one, so it carries the marker.
+	if err := writeOwnerMarker(stagingPath, current.Namespace, current.Name, false); err != nil {
+		return nil, err
 	}
 
 	// Backup current
@@ -289,9 +330,14 @@ func (h *RollbackHandler) rollbackDynamic(ctx context.Context, current *deployme
 		WHERE namespace = ? AND name = ?
 	`
 
-	_, err := h.service.db.Exec(ctx, query, cid, newVersion, now, current.Namespace, current.Name)
+	registered, err := h.service.registerCIDs(ctx, current.Namespace, cid)
+	if err != nil {
+		return nil, err
+	}
+	_, err = h.service.db.Exec(ctx, query, cid, newVersion, now, current.Namespace, current.Name)
 	if err != nil {
 		h.logger.Error("Failed to update database", zap.Error(err))
+		h.service.unregisterCIDs(ctx, current.Namespace, registered)
 	}
 
 	// Record rollback in history
@@ -389,11 +435,11 @@ func (h *RollbackHandler) HandleListVersions(w http.ResponseWriter, r *http.Requ
 	}
 
 	resp := map[string]interface{}{
-		"deployment_id":  deployment.ID,
-		"name":           deployment.Name,
+		"deployment_id":   deployment.ID,
+		"name":            deployment.Name,
 		"current_version": deployment.Version,
-		"versions":       versions,
-		"total":          len(versions),
+		"versions":        versions,
+		"total":           len(versions),
 	}
 
 	w.Header().Set("Content-Type", "application/json")

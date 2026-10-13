@@ -2,7 +2,9 @@ package deployments
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
@@ -250,7 +252,10 @@ func (rm *ReplicaManager) RemoveReplicas(ctx context.Context, deploymentID strin
 	return nil
 }
 
-// GetNodeIP retrieves the IP address for a node from dns_nodes.
+// GetNodeIP retrieves the public address published in DNS.
+//
+// Node-to-node calls use GetNodeOverlayIP. The index gateway port is not
+// bound on the public address, so a proxy that dials this IP times out.
 func (rm *ReplicaManager) GetNodeIP(ctx context.Context, nodeID string) (string, error) {
 	internalCtx := client.WithInternalAuth(ctx)
 
@@ -259,7 +264,6 @@ func (rm *ReplicaManager) GetNodeIP(ctx context.Context, nodeID string) (string,
 	}
 
 	var rows []nodeRow
-	// Use public IP for DNS A records (internal/WG IPs are not reachable from the internet)
 	query := `SELECT ip_address FROM dns_nodes WHERE id = ? LIMIT 1`
 	err := rm.db.Query(internalCtx, &rows, query, nodeID)
 	if err != nil {
@@ -271,4 +275,86 @@ func (rm *ReplicaManager) GetNodeIP(ctx context.Context, nodeID string) (string,
 	}
 
 	return rows[0].IPAddress, nil
+}
+
+// GetNodeOverlayIP is the address another node dials: the WireGuard
+// internal_ip, or ip_address when a node was registered before internal_ip.
+func (rm *ReplicaManager) GetNodeOverlayIP(ctx context.Context, nodeID string) (string, error) {
+	internalCtx := client.WithInternalAuth(ctx)
+
+	type nodeRow struct {
+		InternalIP string `db:"internal_ip"`
+		IPAddress  string `db:"ip_address"`
+	}
+
+	var rows []nodeRow
+	query := `SELECT COALESCE(internal_ip, '') AS internal_ip, COALESCE(ip_address, '') AS ip_address FROM dns_nodes WHERE id = ? LIMIT 1`
+	if err := rm.db.Query(internalCtx, &rows, query, nodeID); err != nil {
+		return "", err
+	}
+	if len(rows) == 0 {
+		return "", fmt.Errorf("node not found: %s", nodeID)
+	}
+	ip := nodeOverlayIP(rows[0].InternalIP, rows[0].IPAddress)
+	if ip == "" {
+		return "", fmt.Errorf("node %s has no overlay address", nodeID)
+	}
+	return ip, nil
+}
+
+// nodeOverlayIP prefers the WireGuard address. The public address is what
+// DNS publishes; the gateway port is not listening there.
+func nodeOverlayIP(internal, public string) string {
+	if ip := strings.TrimSpace(internal); ip != "" {
+		return ip
+	}
+	return strings.TrimSpace(public)
+}
+
+// ReplicaBinding is a node's active replica of a deployment, with the facts a
+// replica must take from the registry and not from the caller.
+type ReplicaBinding struct {
+	Type            DeploymentType
+	Port            int
+	MemoryLimitMB   int
+	CPULimitPercent int
+}
+
+// ErrReplicaNotBound is returned when this node has no active replica of the
+// deployment that namespace and name identify under deploymentID.
+var ErrReplicaNotBound = errors.New("no active replica of that deployment on this node")
+
+// LookupReplicaBinding finds nodeID's active replica of the deployment. The id,
+// the namespace and the name must all name the same deployment row: a request
+// that pairs one deployment's id with another's name is refused, not trusted.
+func (rm *ReplicaManager) LookupReplicaBinding(ctx context.Context, deploymentID, namespace, name, nodeID string) (*ReplicaBinding, error) {
+	internalCtx := client.WithInternalAuth(ctx)
+
+	type bindingRow struct {
+		Type            string `db:"type"`
+		Port            int    `db:"port"`
+		MemoryLimitMB   int    `db:"memory_limit_mb"`
+		CPULimitPercent int    `db:"cpu_limit_percent"`
+	}
+
+	var rows []bindingRow
+	query := `SELECT d.type AS type, COALESCE(r.port, 0) AS port,
+	                 COALESCE(d.memory_limit_mb, 0) AS memory_limit_mb,
+	                 COALESCE(d.cpu_limit_percent, 0) AS cpu_limit_percent
+	            FROM deployment_replicas r
+	            JOIN deployments d ON d.id = r.deployment_id
+	           WHERE d.id = ? AND d.namespace = ? AND d.name = ? AND r.node_id = ? AND r.status = ?
+	           LIMIT 1`
+	if err := rm.db.Query(internalCtx, &rows, query, deploymentID, namespace, name, nodeID, ReplicaStatusActive); err != nil {
+		return nil, fmt.Errorf("failed to look up the replica: %w", err)
+	}
+	if len(rows) == 0 {
+		return nil, ErrReplicaNotBound
+	}
+	return &ReplicaBinding{
+		Type:            DeploymentType(rows[0].Type),
+		Port:            rows[0].Port,
+		MemoryLimitMB:   rows[0].MemoryLimitMB,
+		CPULimitPercent: rows[0].CPULimitPercent,
+	}, nil
 }

@@ -1,0 +1,40 @@
+# The chain soak (BM3): steady mixed load on the run's chain for E2E_CHAIN_SOAK
+# (a Go duration, 24h to 72h for the owner's run), sampled every five minutes.
+# It is opt-in: the runner plans, budgets and reports the package only when
+# E2E_CHAIN_SOAK is set in its environment (opt_in below), so a plain
+# `make e2e-fleet` is unchanged; with it set the package's budget is its stage's
+# plus the duration, and a failure is not re-run (a re-run takes as long as the
+# soak).
+#
+# The load is one public transfer every ten seconds from a funded payer (signed
+# an hour ahead, broadcast in slices), and every cycle checks that the earlier
+# transfers are in blocks as a second validator sees them, so the validators
+# are read as well as written. Every sample records, per validator: height,
+# whether it is catching up, the block and app hash at the height all of them
+# have committed, the mempool size, the anonymous memory, restarts and state
+# size on disk of the chain and of the indexer, and how far the indexer is
+# behind. It writes <artifacts>/chain-soak/timeline.json (the summary, the
+# findings, the limits and every sample).
+#
+# It fails at once when the validators store different hashes for one block
+# (divergence) or the head stops for 15 minutes (a stall), and at the end on
+# anonymous memory that only rises by more than 25% and 64 MiB after the
+# warm-up, a daemon that restarted, a validator or an indexer that fell behind
+# for three samples, or a mempool that held 500 transactions for six samples
+# (harness/chainsoak, DefaultLimits). The numbers of a run are the owner's;
+# the documentation holds none (website/src/docs/contributor/performance.mdx).
+id: chain-soak
+title: Chain soak - 24 to 72 hours of steady mixed load on the chain
+area: quality
+subtasks: []
+stage: 11
+destructive: true
+opt_in: E2E_CHAIN_SOAK
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: true
+covers:
+  claims:
+    - "website/src/docs/contributor/performance.mdx: the chain soak drives steady mixed load for E2E_CHAIN_SOAK, samples every five minutes, and fails on a divergence, a stall or memory that only grows"
+    - "docs/whitepaper/technical-reference/vol2/39-chain-architecture.md#block-interval-and-measured-performance: the soak records height progress, hash agreement, memory and disk per service, the mempool and the indexer lag every five minutes, and fails on a divergence, a stall or monotonic memory growth"

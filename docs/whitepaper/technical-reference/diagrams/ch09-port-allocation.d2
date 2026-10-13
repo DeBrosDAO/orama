@@ -1,0 +1,28 @@
+direction: down
+
+start: "AllocatePortBlock(node, cluster, blueprint)"
+exist: "block already recorded for (cluster, node)?"
+ret: "return it\n(withdraw an owed teardown for the pair)"
+ranges: "read allocated ranges on the node\n(all nodes sharing the node's public IP, if several)"
+find: "first gap of PortNeedCount ports\nin 10000-10099"
+none: "ErrNoPortsAvailable"
+insert: "INSERT namespace_port_allocations\nUNIQUE(node_id, port_start)\nUNIQUE(cluster, node)"
+won: "block taken\nwithdraw owed teardowns of the pair"
+conflict: "UNIQUE / constraint error"
+reread: "re-read (cluster, node)"
+backoff: "wait 100 ms, doubling\nup to 10 attempts"
+place: "placeCluster: ErrNoPortsAvailable\nreleases blocks taken, selects nodes again\n(up to 5 selections)"
+
+start -> exist
+exist -> ret: "yes"
+exist -> ranges: "no"
+ranges -> find
+find -> none: "no gap"
+find -> insert: "gap"
+insert -> won: "ok"
+insert -> conflict: "lost race"
+conflict -> reread
+reread -> ret: "found: lost reply, or same cluster"
+reread -> backoff: "absent: another cluster took the block"
+backoff -> ranges
+none -> place

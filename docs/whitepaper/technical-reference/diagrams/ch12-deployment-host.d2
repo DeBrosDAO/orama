@@ -1,0 +1,21 @@
+direction: down
+
+req: "Request, Host NAME.base (not ns-*, not /v1/, not apex platform page)"
+find: "getDeploymentByDomain\n1. deployments.subdomain\n2. deployments.name (legacy)\n3. verified deployment_domains\nstatus active or degraded"
+none: "no match: 404"
+static: "Port 0: static deployment\nserved from IPFS"
+dyn: "Port > 0: dynamic"
+home: "this node is home node, has a local replica,\nor request carries X-Orama-Proxy-Node?"
+local: "proxy to localhost:port (30 s)"
+cross: "proxyCrossNodeWithReplicas\nactive deployment_replicas rows (home node included,\nunordered), skipping this node; 5 s each over\nWireGuard :10104, X-Orama-Proxy-Node;\n502 / 503 / 504 tries the next row.\nNo active row: one home-node attempt, 120 s"
+fail: "503 Service unavailable"
+
+req -> find
+find -> none
+find -> static
+find -> dyn
+dyn -> home
+home -> local: "yes"
+home -> cross: "no"
+local -> cross: "connect failed"
+cross -> fail: "every row refused, failed or breaker open"

@@ -1,0 +1,26 @@
+# The fleet from outside its own network, from a probe VM in another
+# location: the base name resolved by following the real delegation from the
+# root (dig +trace) and through a public resolver; TLS to every node that
+# verifies against the pinned staging roots and no system store, over
+# HTTP/1.1; a WebSocket upgraded through Caddy; per-node latency baselines
+# recorded under a loose ceiling; a TCP scan finding only SSH, HTTP(S) and
+# DNS on nameservers; and each TURN relay answering a STUN Binding on UDP
+# 3478 with the probe's own address.
+id: external-vantage
+title: The fleet from an outside vantage point
+area: network-edge
+subtasks: [2863]
+stage: 7
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: true
+  chain: false
+covers:
+  units:
+    - orama-turn.service
+  claims:
+    - "website/src/docs/operator/nameserver.mdx#verification: the delegation is visible from the internet and matches the cluster's nameservers"
+    - "website/src/docs/contributor/architecture-reference.mdx#tlshttps: TLS verifies against the staging roots over HTTP/1.1 and WebSocket upgrades through Caddy"
+    - "website/src/docs/contributor/architecture-reference.mdx#network-security-wireguard-mesh: from outside only SSH, HTTP(S) and DNS on nameservers answer TCP"
+    - "website/src/docs/contributor/architecture-reference.mdx#webrtc-voicevideodata: a TURN relay answers STUN on UDP 3478 from the internet"

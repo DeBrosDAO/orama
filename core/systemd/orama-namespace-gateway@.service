@@ -1,24 +1,64 @@
 [Unit]
 Description=Orama Namespace Gateway (%i)
 Documentation=https://github.com/DeBrosOfficial/network
-After=network.target orama-namespace-rqlite@%i.service orama-namespace-olric@%i.service
-Requires=orama-namespace-rqlite@%i.service orama-namespace-olric@%i.service
+After=network.target orama-namespace-wireguard@index.service orama-namespace-rqlite@%i.service orama-namespace-olric@%i.service
+# Wants, not Requires. Requires propagates stop AND restart, so a
+# `systemctl restart orama-namespace-rqlite@<ns>` — which the split-brain
+# recovery path does on its own — bounced the gateway with it: the leader wait,
+# the health monitor, the cluster manager, its reconcilers and the tenant
+# restore all started over, for a database restart the gateway is built to ride
+# out. The gateway retries rqlite and reconnects to Olric on its own
+# (initializeOlricClientWithRetry, then startOlricReconnectLoop), so ordering is
+# all it needs from them.
+Wants=orama-namespace-wireguard@index.service orama-namespace-rqlite@%i.service orama-namespace-olric@%i.service
 PartOf=orama-node.service
+# No start limit. orama-node reconciles these units and retries with backoff,
+# and `systemctl start` on a rate-limited unit fails with "Start request
+# repeated too quickly" until someone runs `reset-failed` — so the default
+# limit would turn a transient failure into one that needs a human.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
+User=orama
+Group=orama
+ProtectSystem=strict
+ProtectHome=yes
+NoNewPrivileges=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+RestrictNamespaces=yes
+ProtectProc=invisible
+# What a gateway writes: its own namespace's directory (its state directory
+# and signing keys are in it), and the deployment and SQLite trees it serves
+# from. It used to be all of data/, so a gateway could overwrite another
+# namespace's files — the cluster gateway's signing key among them. The
+# deployment and SQLite trees are still shared by every namespace; they move
+# into each namespace's own directory with the per-namespace ownership work,
+# and these two entries go with them. The cluster gateway writes more
+# (orama-namespace-gateway@index.service.d, pkg/install/gateway_unit.go).
+ReadWritePaths=/opt/orama/.orama/data/namespaces/%i /opt/orama/.orama/data/deployments /opt/orama/.orama/data/sqlite
+# Of secrets/ a gateway reads the cluster secret and the encryption root
+# (the current seed, its id, and the previous seed while a rotation is in
+# progress), and sees nothing else there: the directory is an empty tmpfs
+# with those files bound over it. It used to see the whole directory — the swarm key,
+# the rqlite and API-key HMAC secrets, WireGuard material. The binds are
+# mounts, not reads by PID 1: a symlink planted in secrets/ is mounted with its
+# target's own permissions, which the orama user cannot read past.
+TemporaryFileSystem=/opt/orama/.orama/secrets:ro
+BindReadOnlyPaths=/opt/orama/.orama/secrets/cluster-secret -/opt/orama/.orama/secrets/encryption-root -/opt/orama/.orama/secrets/encryption-root.id -/opt/orama/.orama/secrets/encryption-root.prev -/opt/orama/.orama/secrets/encryption-root.prev.id
 WorkingDirectory=/opt/orama
 
-EnvironmentFile=/opt/orama/.orama/data/namespaces/%i/gateway.env
+EnvironmentFile=/var/lib/orama-unit-env/%i/gateway.env
 
-# Use shell to properly expand NODE_ID from env file
-ExecStart=/bin/sh -c 'exec /opt/orama/bin/gateway --config ${GATEWAY_CONFIG}'
+ExecStart=/opt/orama/bin/gateway --config ${GATEWAY_CONFIG}
 
 TimeoutStopSec=30s
 KillMode=mixed
 KillSignal=SIGTERM
 
-Restart=on-failure
+Restart=always
 RestartSec=5s
 
 StandardOutput=journal
@@ -28,6 +68,7 @@ SyslogIdentifier=orama-gateway-%i
 PrivateTmp=yes
 LimitNOFILE=65536
 MemoryMax=1G
+MemorySwapMax=0
 
 [Install]
 WantedBy=multi-user.target

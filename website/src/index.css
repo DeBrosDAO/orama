@@ -1,18 +1,36 @@
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Inter", system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", monospace;
-  --font-display: "Inter Tight", "Inter", system-ui, sans-serif;
+  --font-sans: "Inter Variable", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
+  --font-display: "Inter Tight Variable", "Inter Variable", system-ui, sans-serif;
 
   --color-bg: #000000;
   --color-fg: #e4e4e7;
-  --color-muted: #71717a;
+  /* 5.7:1 on black, 4.9:1 on surface-2: readable at label sizes (WCAG AA). */
+  --color-muted: #85858e;
   --color-border: #27272a;
   --color-surface: #09090b;
   --color-surface-2: #18181b;
   --color-accent: #a1a1aa;
   --color-accent-2: #d4d4d8;
+  /* The one non-grey: marks "not yet" states (alpha, roadmap, With Orama One). */
+  --color-signal: #fbbf24;
+  /* Explorer: money in, money out or failed, and a raised surface. */
+  --color-gain: #86efac;
+  --color-loss: #fca5a5;
+  --color-surface-3: #1c1c20;
+}
+
+/* Use-of-funds ramp (components/visuals/funding-donut.tsx), largest slice first. */
+:root {
+  --funding-shade-0: #e4e4e7;
+  --funding-shade-1: #b4b4bb;
+  --funding-shade-2: #8e8e96;
+  --funding-shade-3: #6b6b73;
+  --funding-shade-4: #52525b;
+  --funding-shade-5: #3f3f46;
+  --funding-shade-6: #2e2e33;
 }
 
 @layer base {
@@ -51,19 +69,25 @@
     background: #555;
   }
 
-  @keyframes fadeInUp {
-    from {
-      opacity: 0;
-      transform: translateY(16px);
-    }
+  @keyframes flow {
     to {
+      stroke-dashoffset: -24;
+    }
+  }
+
+  @keyframes breathe {
+    0%,
+    100% {
+      opacity: 0.35;
+    }
+    50% {
       opacity: 1;
-      transform: translateY(0);
     }
   }
 
   @keyframes pulse-dot {
-    0%, 100% {
+    0%,
+    100% {
       opacity: 1;
       box-shadow: 0 0 8px currentColor;
     }
@@ -73,219 +97,162 @@
     }
   }
 
-  @keyframes glow-pulse {
-    0%, 100% {
-      box-shadow: 0 0 8px rgba(161, 161, 170, 0.2);
+  @keyframes orbit {
+    to {
+      transform: rotate(360deg);
     }
-    50% {
-      box-shadow: 0 0 16px rgba(161, 161, 170, 0.35);
-    }
-  }
-
-  @keyframes draw-line {
-    from { stroke-dashoffset: 1000; }
-    to { stroke-dashoffset: 0; }
-  }
-
-  @keyframes crosshair-fade {
-    from { opacity: 0; }
-    to { opacity: 1; }
   }
 }
 
+/* Explorer: one visible keyboard focus ring for every link, button and tab. */
+.explorer :focus-visible {
+  outline: 2px solid var(--color-accent-2);
+  outline-offset: 2px;
+}
+
 @layer utilities {
-  .animate-fade-in-up {
-    animation: fadeInUp 0.5s ease-out both;
+  /* Dashed SVG strokes that travel: data moving along a link. */
+  .animate-flow {
+    stroke-dasharray: 4 8;
+    animation: flow 1.2s linear infinite;
   }
 
-  .animate-delay-100 {
-    animation-delay: 100ms;
+  .animate-flow-slow {
+    stroke-dasharray: 3 9;
+    animation: flow 2.4s linear infinite;
   }
 
-  .animate-delay-200 {
-    animation-delay: 200ms;
-  }
-
-  .animate-delay-300 {
-    animation-delay: 300ms;
+  .animate-breathe {
+    animation: breathe 3s ease-in-out infinite;
   }
 
   .animate-pulse-dot {
     animation: pulse-dot 2s ease-in-out infinite;
   }
 
-  .animate-glow-pulse {
-    animation: glow-pulse 3s ease-in-out infinite;
+  /* The blueprint dot grid behind every page (components/layout/shell.tsx). */
+  .blueprint-dots {
+    background-image: radial-gradient(circle, rgba(161, 161, 170, 0.08) 1px, transparent 1px);
+    background-size: 24px 24px;
   }
 
-  .animate-draw-line {
-    animation: draw-line 3s ease-out forwards;
-  }
-
-  .animate-crosshair-fade {
-    animation: crosshair-fade 1.5s ease-out forwards;
+  .animate-orbit {
+    animation: orbit 60s linear infinite;
+    transform-origin: center;
+    transform-box: fill-box;
   }
 }
 
-/* ── RootWallet slash animation ── */
-@keyframes rw-slash-appear {
-  0% { opacity: 0; transform: translateY(20px) scale(0.9); }
-  60% { opacity: 1; transform: translateY(-4px) scale(1.02); }
-  100% { opacity: 1; transform: translateY(0) scale(1); }
+/* Scroll-in reveal (components/ui/animate-in.tsx). Hidden only when scripts
+   run: html.js is set by index.html before first paint. */
+.animate-in {
+  transition:
+    opacity 700ms ease-out,
+    transform 700ms ease-out;
 }
 
-@keyframes rw-pulse {
-  0%, 100% { opacity: 0; }
-  50% { opacity: 0.12; }
+.js .animate-in[data-animate="out"] {
+  opacity: 0;
+  transform: translateY(1rem);
 }
 
-.rw-slash {
-  animation: rw-slash-appear 1s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-  filter: drop-shadow(0 0 40px rgba(255, 255, 255, 0.1));
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
-.rw-slash-glow {
-  background: radial-gradient(circle, rgba(255, 255, 255, 0.08) 0%, transparent 70%);
-  animation: rw-pulse 3s ease-in-out infinite;
-}
+/* Printing, and the investor PDF (scripts/build-pdf.mjs): the same page on
+   white paper. The colour tokens flip to a light palette, motion stops, and
+   cards and table rows stay whole across page breaks. */
+@media print {
+  :root {
+    --color-bg: #ffffff;
+    --color-fg: #18181b;
+    --color-muted: #52525b;
+    --color-border: #d4d4d8;
+    --color-surface: #ffffff;
+    --color-surface-2: #f4f4f5;
+    --color-accent: #3f3f46;
+    --color-accent-2: #27272a;
+    --color-signal: #b45309;
 
-/* ── Token page — silver/metallic theme ── */
-@keyframes token-symbol-appear {
-  0% { opacity: 0; transform: translateY(20px) scale(0.9); }
-  60% { opacity: 1; transform: translateY(-4px) scale(1.02); }
-  100% { opacity: 1; transform: translateY(0) scale(1); }
-}
+    --funding-shade-0: #18181b;
+    --funding-shade-1: #3f3f46;
+    --funding-shade-2: #52525b;
+    --funding-shade-3: #71717a;
+    --funding-shade-4: #a1a1aa;
+    --funding-shade-5: #b4b4bb;
+    --funding-shade-6: #d4d4d8;
+  }
 
-@keyframes token-shimmer {
-  0% { background-position: -200% center; }
-  100% { background-position: 200% center; }
-}
+  header,
+  footer,
+  .no-print {
+    display: none !important;
+  }
 
-@keyframes token-glow-pulse {
-  0%, 100% { opacity: 0; }
-  50% { opacity: 0.15; }
-}
+  body,
+  main {
+    background: #fff !important;
+    color: #000 !important;
+    padding: 0 !important;
+  }
 
-.token-symbol {
-  animation: token-symbol-appear 1s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-}
+  .blueprint-dots {
+    background-image: none;
+  }
 
-.token-symbol-glow {
-  background: radial-gradient(circle, rgba(200, 200, 210, 0.1) 0%, transparent 70%);
-  animation: token-glow-pulse 3s ease-in-out infinite;
-}
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
 
-.silver-button {
-  background: linear-gradient(180deg, #d4d4d8 0%, #a1a1aa 50%, #8a8a94 100%);
-  box-shadow:
-    0 1px 2px rgba(0, 0, 0, 0.4),
-    inset 0 1px 0 rgba(255, 255, 255, 0.3),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.15);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  position: relative;
-  overflow: hidden;
-}
+  /* Paper never scrolls: everything the scroll-in reveal would show, shown. */
+  .js .animate-in[data-animate="out"] {
+    opacity: 1;
+    transform: none;
+  }
 
-.silver-button::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    rgba(255, 255, 255, 0.2) 45%,
-    rgba(255, 255, 255, 0.4) 50%,
-    rgba(255, 255, 255, 0.2) 55%,
-    transparent 100%
-  );
-  background-size: 200% 100%;
-  animation: token-shimmer 4s ease-in-out infinite;
-  pointer-events: none;
-}
+  /* Paper needs less air than a scrolling page. */
+  main section {
+    padding-block: 1.75rem;
+  }
 
-.silver-button:hover {
-  background: linear-gradient(180deg, #e4e4e7 0%, #b4b4bc 50%, #9a9aa4 100%);
-  box-shadow:
-    0 0 20px rgba(200, 200, 210, 0.25),
-    0 1px 3px rgba(0, 0, 0, 0.4),
-    inset 0 1px 0 rgba(255, 255, 255, 0.35),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.1);
-}
+  /* Hairline grids draw their lines with the container's background showing
+     through a 1px gap: split across pages, that background fills the rest of
+     the page. They move to the next page whole; one taller than a page still
+     breaks, as it would anyway. */
+  .gap-px {
+    break-inside: avoid;
+  }
 
-.silver-button:active {
-  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.3);
-  transform: translateY(1px);
-}
+  li,
+  tr,
+  dl > div,
+  details,
+  figure {
+    break-inside: avoid;
+  }
 
-/* ── Redacted / Coming Soon ── */
-.redacted-inline {
-  color: var(--color-muted);
-  filter: blur(4px);
-  user-select: none;
-  cursor: default;
-  letter-spacing: 0.15em;
-}
+  h1,
+  h2,
+  h3 {
+    break-after: avoid;
+  }
 
-.redacted-block {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  padding: 2rem 1rem;
-  border: 1px dashed var(--color-border);
-  border-radius: 0.5rem;
-  text-align: center;
+  /* The whitepaper forces plain black on white. */
+  .print-light,
+  .print-light * {
+    color: #000 !important;
+    background: transparent !important;
+    border-color: #ccc !important;
+  }
 }
-
-.redacted-block .redacted-stars {
-  color: var(--color-muted);
-  filter: blur(6px);
-  font-size: 1.5rem;
-  user-select: none;
-  letter-spacing: 0.2em;
-}
-
-.redacted-block .redacted-label {
-  color: var(--color-accent);
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-}
-
-.coming-soon-overlay {
-  position: relative;
-  overflow: hidden;
-  border-radius: 0.5rem;
-}
-
-.coming-soon-content {
-  filter: blur(8px);
-  opacity: 0.3;
-  pointer-events: none;
-  user-select: none;
-}
-
-.coming-soon-badge {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  pointer-events: none;
-}
-
-.coming-soon-badge span {
-  color: var(--color-accent-2);
-  font-family: var(--font-mono);
-  font-size: 0.875rem;
-  text-transform: uppercase;
-  letter-spacing: 0.15em;
-  padding: 0.5rem 1.5rem;
-  border: 1px dashed var(--color-border);
-  border-radius: 0.25rem;
-  background: rgba(0, 0, 0, 0.6);
-  backdrop-filter: blur(4px);
-}
-

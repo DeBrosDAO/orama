@@ -1,0 +1,11 @@
+1791460800
+version=1.4.0
+software=sbws
+software_version=1.1.0
+file_created=2026-10-08T11:59:00
+latest_bandwidth=2026-10-08T11:58:12
+number_eligible_relays=3
+=====
+bw=5000 bw_mean=5000000 node_id=$00000000000000000000000000000000000000B0 nick=OramaAuth1 master_key_ed25519=MTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTE success=3
+bw=4000 bw_mean=4000000 node_id=$00000000000000000000000000000000000000B1 nick=OramaAuth2 master_key_ed25519=MjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjI success=3
+bw=900 bw_mean=900000 node_id=$00000000000000000000000000000000000000C0 nick=OramaRelayA master_key_ed25519=QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE success=3

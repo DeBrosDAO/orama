@@ -24,7 +24,15 @@ const purposeNamespacePushCredentials = "namespace-push-credentials"
 type rqliteStore struct {
 	db     rqlite.Client
 	encKey []byte
+	holder *secrets.Holder
 	logger *zap.Logger
+}
+
+// SetHolder lets a rotate take effect without restarting this process.
+func (s *rqliteStore) SetHolder(h *secrets.Holder) {
+	if s != nil {
+		s.holder = h
+	}
 }
 
 // NewRqliteStore wires the store to RQLite with a cluster-secret-
@@ -74,7 +82,7 @@ func (s *rqliteStore) Get(ctx context.Context, namespace, provider string) (*Cre
 		return nil, ErrNotFound
 	}
 	r := rows[0]
-	plain, err := secrets.Decrypt(r.CredentialsJSON, s.encKey)
+	plain, err := secrets.Open(s.holder, purposeNamespacePushCredentials, s.encKey, r.CredentialsJSON)
 	if err != nil {
 		return nil, fmt.Errorf("credentials Get: decrypt: %w", err)
 	}
@@ -101,7 +109,7 @@ func (s *rqliteStore) Upsert(ctx context.Context, cred Credential) error {
 	if len(cred.JSON) == 0 {
 		return fmt.Errorf("credentials Upsert: empty JSON payload")
 	}
-	enc, err := secrets.Encrypt(string(cred.JSON), s.encKey)
+	enc, err := secrets.Seal(s.holder, purposeNamespacePushCredentials, s.encKey, string(cred.JSON))
 	if err != nil {
 		return fmt.Errorf("credentials Upsert: encrypt: %w", err)
 	}

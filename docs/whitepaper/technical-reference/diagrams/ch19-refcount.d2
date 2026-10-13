@@ -1,0 +1,19 @@
+direction: down
+
+none: "no row for (cid, ns, kind)"
+held: "row, holders >= 1\ncounted"
+tomb: "tombstoned\nholders = 0\nnot counted"
+gone: "row deleted"
+pin: "cluster pin exists"
+unpinned: "cluster pin removed"
+
+none -> held: "Register\nINSERT, or holders + 1"
+held -> held: "Register again\nholders + 1"
+held -> held: "Unregister (pin failed)\nholders - 1, row stays while holders > 0"
+held -> gone: "Unregister, holders reaches 0"
+held -> gone: "Release (unpin, delete)\nDELETE row, then count the rest"
+held -> tomb: "ReleaseNamespace batch\nUPDATE holders = 0"
+tomb -> gone: "recount, then DELETE"
+gone -> pin: "count = 0: UnpinUnreferenced\nPinStatus (keep options), Unpin"
+pin -> unpinned: "Unpin accepted"
+unpinned -> pin: "recount > 0: Pin again\nwith the saved name and RF"

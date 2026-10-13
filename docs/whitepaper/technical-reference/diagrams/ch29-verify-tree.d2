@@ -1,0 +1,34 @@
+direction: down
+
+start: "archive file on the node"
+lock: "LockArchiveDir /opt/orama (flock)"
+tuf: "optional: TUF check of the file\nreleaseverify.CheckFile"
+ext: "Extract into 0700 staging dir\nregular files and dirs only,\nbin systemd packages manifest.*,\nmax 1024 entries, 512 MiB a file, 4 GiB total"
+sig: "RecoverSigner(manifest.json, manifest.sig)\nmust be in the anchor"
+rot: "manifest signers list\nmust include the signer"
+files: "every file in bin systemd packages\nlisted and equal to its SHA-256;\nno extra file, no link"
+arch: "manifest arch == node GOARCH"
+plan: "planRotation:\nbuild date vs rotation mark and node clock"
+lockbin: "bin/ and files root:orama 0750"
+swap: "swap manifest, bin, systemd, packages in;\nrestore the old ones on any failure"
+refuse: "refuse: /opt/orama unchanged" {
+  style.stroke-dash: 3
+}
+
+start -> lock
+lock -> tuf
+tuf -> ext
+ext -> sig
+sig -> rot
+rot -> files
+files -> arch
+arch -> plan
+plan -> lockbin
+lockbin -> swap
+tuf -> refuse: fail
+ext -> refuse: fail
+sig -> refuse: fail
+rot -> refuse: fail
+files -> refuse: fail
+arch -> refuse: fail
+plan -> refuse: fail

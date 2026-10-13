@@ -252,5 +252,8 @@ func (m *mutableStore) Get(_ context.Context, _ string) (*ratelimit.Config, erro
 	c := *m.cfg
 	return &c, nil
 }
-func (m *mutableStore) Upsert(_ context.Context, cfg ratelimit.Config) error { m.cfg = &cfg; return nil }
-func (m *mutableStore) Delete(_ context.Context, _ string) error             { m.cfg = nil; return nil }
+func (m *mutableStore) Upsert(_ context.Context, cfg ratelimit.Config) error {
+	m.cfg = &cfg
+	return nil
+}
+func (m *mutableStore) Delete(_ context.Context, _ string) error { m.cfg = nil; return nil }

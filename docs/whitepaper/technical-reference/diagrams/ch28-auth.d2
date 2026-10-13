@@ -1,0 +1,15 @@
+shape: sequence_diagram
+
+c: "Caller (gateway or sdk-vault)"
+g: "Guardian"
+
+c -> g: "POST auth/challenge {identity}"
+g -> g: "32 random bytes\ntag = HMAC(server_secret, identity, nonce, created_ns)"
+g -> c: "nonce, created_ns, tag"
+c -> g: "POST auth/session {identity, nonce, created_ns, tag}"
+g -> g: "age 0..60 s, tag matches (constant time)\ntag2 = HMAC(server_secret, identity padded to 64, expiry_ns)"
+g -> c: "identity, expiry_ns (now + 1 h), tag2"
+c -> c: "token = identity:expiry_ns:tag2"
+c -> g: "request + X-Session-Token\n+ Ed25519 proof (body fields V1, X-Vault-* headers V2)"
+g -> g: "token valid, then\nidentity = SHA-256(pubkey) and signature over the domain-separated message\nthen the handler's own work"
+g -> c: "200, or 401 (token, proof), 409/400 (version), 429"

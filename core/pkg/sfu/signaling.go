@@ -16,6 +16,8 @@ const (
 	MessageTypeOffer        MessageType = "offer"
 	MessageTypeAnswer       MessageType = "answer"
 	MessageTypeICECandidate MessageType = "ice-candidate"
+	MessageTypeAudioState   MessageType = "audio-state"
+	MessageTypeVideoState   MessageType = "video-state"
 
 	// Server → Client
 	MessageTypeWelcome            MessageType = "welcome"
@@ -26,6 +28,8 @@ const (
 	MessageTypeTURNCredentials    MessageType = "turn-credentials"
 	MessageTypeRefreshCredentials MessageType = "refresh-credentials"
 	MessageTypeServerDraining     MessageType = "server-draining"
+	MessageTypeParticipantState   MessageType = "participant-state"
+	MessageTypeKicked             MessageType = "kicked"
 	MessageTypeError              MessageType = "error"
 )
 
@@ -41,11 +45,46 @@ type ServerMessage struct {
 	Data interface{} `json:"data,omitempty"`
 }
 
-// JoinData is the payload for join messages
+// JoinData is the payload for join messages. UserID is accepted for older
+// clients and ignored: a peer's identity is the user the namespace gateway
+// authenticated (join.go), never what the client says it is.
 type JoinData struct {
 	RoomID string `json:"roomId"`
-	UserID string `json:"userId"`
+	UserID string `json:"userId,omitempty"`
 }
+
+// StateData is the payload of audio-state and video-state: whether the client
+// is sending that kind of media. Enabled is the one field; a frame without it
+// is refused rather than guessed at.
+type StateData struct {
+	Enabled *bool `json:"enabled"`
+}
+
+// ParticipantStateData is sent to the others in a room when a participant's
+// audio or video state changes. Forced is set when the namespace caused it
+// (a mute through the webrtc_mute host function) rather than the participant.
+type ParticipantStateData struct {
+	PeerID  string `json:"peerId"`
+	UserID  string `json:"userId"`
+	Kind    string `json:"kind"` // "audio" or "video"
+	Enabled bool   `json:"enabled"`
+	Forced  bool   `json:"forced,omitempty"`
+}
+
+// KickedData is sent to a participant the SFU removed from the room, just
+// before its socket is closed. Code says why, for a client to act on: removed by
+// the namespace, or the admission the join was made on ended. Reason is for a
+// person.
+type KickedData struct {
+	Code   string `json:"code"`
+	Reason string `json:"reason"`
+}
+
+// The Code of a KickedData.
+const (
+	KickedCodeRemoved = "removed"
+	KickedCodeExpired = "admission_expired"
+)
 
 // OfferData is the payload for SDP offer messages
 type OfferData struct {
@@ -85,7 +124,10 @@ type WelcomeData struct {
 // ParticipantInfo is public info about a room participant
 type ParticipantInfo struct {
 	PeerID string `json:"peerId"`
+	// UserID is the authenticated user, as the namespace gateway vouched for it.
 	UserID string `json:"userId"`
+	// DeviceID is the device the user's session is bound to, when it is bound to one.
+	DeviceID string `json:"deviceId,omitempty"`
 }
 
 // ParticipantJoinedData is sent when a new participant joins

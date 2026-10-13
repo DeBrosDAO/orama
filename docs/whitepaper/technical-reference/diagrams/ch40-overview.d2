@@ -1,0 +1,59 @@
+direction: right
+
+emission: "x/emission\nonly minter of norama" {
+  epoch: "BeginBlock: AdvanceBlock\nclose epoch when 24 h and 14,400 blocks hold"
+  ceil: "CeilingRecord per epoch\n(30-epoch window)" {shape: cylinder}
+  acct: "emission module account\n(Minter)"
+}
+
+power: "x/power\nDistributeEpochRewards" {
+  pay: "pay the validator share on power P_i\ncommission + delegators pro rata"
+  fb: "committee member:\n50% force-bonded"
+}
+
+fees: "x/fees" {
+  earn: "earnings ledger" {shape: cylinder}
+  fb: "fee-only balances" {shape: cylinder}
+  dep: "state-deposit ledger" {shape: cylinder}
+  facct: "module account fees\n(backs earnings + fee-only)"
+  dacct: "module account fees_deposits\n(backs deposits)"
+  settle: "SettleFee\n(ante FeeDecorator)"
+}
+
+svc: "service minters" {
+  storage: "x/storage\nMintStorageService"
+  relay: "x/relay\nMintRelayReward"
+  houses: "x/houses\nMintDevelopmentSpend"
+}
+
+token: "x/token\nfactory denoms in x/bank" {
+  create: "MsgCreateToken:\nburn creation fee,\nlock metadata deposit"
+}
+
+tx: "any signed tx"
+burn: "burned" {shape: circle}
+archive: "archive fund\nx/storage module account" {shape: cylinder}
+
+emission.epoch -> emission.acct: "mint the validator share\n(60% canonical)"
+emission.epoch -> emission.ceil: "storage, relay and development\nshares recorded, not minted"
+emission.acct -> power.pay: "pull totalMint"
+power.pay -> power.fb
+power.pay -> fees.earn: "CreditEarnings"
+svc.storage -> emission.ceil: "mint against ceiling"
+svc.relay -> emission.ceil: "mint against ceiling"
+svc.houses -> emission.ceil: "mint against ceiling"
+svc.storage -> fees.earn: "provider payout (90%)"
+svc.relay -> fees.earn: "operator payout (90%)"
+svc.storage -> burn: "5% of each payment"
+svc.relay -> burn: "5% of each payment"
+svc.storage -> archive: "5% of each payment"
+svc.relay -> archive: "5% of each payment"
+tx -> fees.settle: "fee = base_fee x gas + tip"
+fees.settle -> burn: "100% of base fee"
+fees.settle -> fees.earn: "tip to proposer"
+fees.earn -> fees.settle: "fallback for base fee"
+fees.fb -> fees.settle: "fallback for base fee"
+token.create -> burn: "creation fee"
+token.create -> fees.dep: "LockDeposit"
+fees.dep -> fees.earn: "99% on release"
+fees.dep -> burn: "1% on release"

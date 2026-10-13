@@ -1,0 +1,61 @@
+# WebRTC end to end in a three-member namespace enabled with the CLI: SFU on
+# every node bound to WireGuard only, the shared TURN on two nodes (0600
+# turn.yaml with a 32-byte secret, 3478 udp/tcp and 5349 open, DNS for both
+# TURN names), TURNS with the wildcard cert, REST credentials (24 h, the
+# ladder, access), TURN allocation only with the namespace's HMAC (unknown
+# namespace, tampered and re-dated credentials allocate nothing, relays come
+# from 49152-65535 on the TURN nodes), the signalling socket's access and
+# join rule, rooms, real RTP between headless pion peers relay-only through
+# TURN and the SFU (1:1 and a group call), the SFU's 600 s credential
+# refreshed at 80%, a call that outlasts the SFU's own relay credential,
+# offer glare answered by the polite SFU, a subscriber's keyframe request
+# reaching the publisher, and stealth enable/disable or its rollback. Node
+# death, SFU draining, the role reconciler and signalling-socket failover are
+# webrtc-chaos. Admission (bugboard #726): a peer's identity is the user the
+# gateway authenticated, a namespace that requires admission admits only users
+# its functions admitted (webrtc_admit) to that room, expired and revoked
+# admissions are refused with typed errors, joins and leaves are published on
+# _orama/webrtc/<room>, a kick closes the connection and blocks the rejoin, a
+# mute stops the user's audio on the server through a rejoin, and audio-state
+# and video-state are relayed to the room.
+id: webrtc
+title: WebRTC (SFU and TURN)
+area: webrtc
+subtasks: [2838, 726]
+stage: 6
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  routes:
+    - /v1/webrtc/turn/credentials
+    - /v1/webrtc/signal
+    - /v1/webrtc/rooms
+    - /v1/webrtc/config
+    - /v1/internal/webrtc/events
+    - /v1/namespace/webrtc/stealth/enable
+    - /v1/namespace/webrtc/stealth/disable
+  units:
+    - orama-namespace-sfu@.service
+    - orama-turn.service
+    - orama-namespace-turn@.service
+  claims:
+    - "website/src/docs/developer/webrtc.mdx#architecture: SFU on all 3 nodes bound to WireGuard only; TURN on 2 of 3; relay-only ICE"
+    - "website/src/docs/operator/webrtc-operations.mdx#room-placement: every peer of a room reaches the room's one SFU whichever node's gateway it connects through (1:1 and group calls across three gateways)"
+    - "website/src/docs/operator/webrtc-operations.mdx#turn-topology: one shared TURN per host; turn.yaml is 0600; isolation is the per-tenant secret; relays from 49152-65535"
+    - "website/src/docs/developer/webrtc.mdx#turn-credential-protocol: REST credentials last 24 h; SFU credentials 600 s refreshed at 80%"
+    - "website/src/docs/developer/webrtc.mdx#turn-credential-protocol: the SFU's own relay credential lasts 24 h and is swapped before it expires, so a call outlives the 600 s signalled credential and the allocation lifetime after it"
+    - "website/src/docs/developer/webrtc.mdx#negotiation-offer-glare-and-the-polite-sfu: a client offer that crosses the SFU's own is answered, not refused (no offer_failed), and both directions carry media"
+    - "website/src/docs/developer/webrtc.mdx#keyframes-plifir: a subscriber's PLI on a video track is relayed to the track's publisher"
+    - "website/src/docs/developer/webrtc.mdx#turns-tls-certificate: TURNS on 5349 presents the wildcard for turn-<ns>.<base>"
+    - "website/src/docs/developer/webrtc.mdx#security-model: every WebRTC endpoint needs a signed-in user; a key alone is refused"
+    - "website/src/docs/operator/webrtc-operations.mdx#what-happens-on-enable: a 32-byte TURN secret; DNS for turn.ns-<ns> and turn-<ns> names the TURN nodes"
+    - "website/src/docs/operator/stealth-turn.mdx#enabling-stealth-for-a-namespace: stealth adds turns:cdn-<hash>:443 or rolls back; disable keeps the baseline ladder; requires WebRTC"
+    - "website/src/docs/developer/webrtc.mdx#identity: a peer is the user the gateway authenticated (and its device); the userId in the join frame is ignored"
+    - "website/src/docs/developer/webrtc.mdx#admission: with require_admission on, only a user a function admitted to the room, from that device, whose admission has not expired or been revoked, joins; every other join is refused with WEBRTC_ADMISSION_REQUIRED, _EXPIRED or _REVOKED (an admission_* error frame without ?room=)"
+    - "website/src/docs/developer/webrtc.mdx#membership-events: every join and leave is published on _orama/webrtc/<room> with the authenticated user, device and peer, and a leave says why"
+    - "website/src/docs/developer/webrtc.mdx#kick-and-mute: webrtc_kick closes the user's connection and the revoked admission refuses the rejoin; webrtc_mute stops forwarding the user's audio on the SFU, through a rejoin, until unmuted"
+    - "website/src/docs/developer/webrtc.mdx#audio-and-video-state: audio-state and video-state are relayed to the room as participant-state; a frame without enabled is invalid_state, not unknown_message"
+    - "website/src/docs/developer/functions.mdx#host-functions-api: webrtc_admit, webrtc_kick and webrtc_mute act on the calling function's namespace"

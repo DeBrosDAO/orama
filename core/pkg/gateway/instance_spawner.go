@@ -11,38 +11,29 @@ import (
 	"sync"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/gatewayspec"
+	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/tlsutil"
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 )
 
-// InstanceNodeStatus represents the status of an instance (local type to avoid import cycle)
-type InstanceNodeStatus string
-
-const (
-	InstanceStatusPending  InstanceNodeStatus = "pending"
-	InstanceStatusStarting InstanceNodeStatus = "starting"
-	InstanceStatusRunning  InstanceNodeStatus = "running"
-	InstanceStatusStopped  InstanceNodeStatus = "stopped"
-	InstanceStatusFailed   InstanceNodeStatus = "failed"
+type (
+	InstanceConfig     = gatewayspec.InstanceConfig
+	GatewayInstance    = gatewayspec.GatewayInstance
+	GatewayYAMLConfig  = gatewayspec.GatewayYAMLConfig
+	GatewayYAMLWebRTC  = gatewayspec.GatewayYAMLWebRTC
+	InstanceNodeStatus = gatewayspec.InstanceNodeStatus
+	InstanceError      = gatewayspec.InstanceError
 )
 
-// InstanceError represents an error during instance operations (local type to avoid import cycle)
-type InstanceError struct {
-	Message string
-	Cause   error
-}
-
-func (e *InstanceError) Error() string {
-	if e.Cause != nil {
-		return e.Message + ": " + e.Cause.Error()
-	}
-	return e.Message
-}
-
-func (e *InstanceError) Unwrap() error {
-	return e.Cause
-}
+const (
+	InstanceStatusPending  = gatewayspec.InstanceStatusPending
+	InstanceStatusStarting = gatewayspec.InstanceStatusStarting
+	InstanceStatusRunning  = gatewayspec.InstanceStatusRunning
+	InstanceStatusStopped  = gatewayspec.InstanceStatusStopped
+	InstanceStatusFailed   = gatewayspec.InstanceStatusFailed
+)
 
 // InstanceSpawner manages multiple Gateway instances for namespace clusters.
 // Each namespace gets its own gateway instances that connect to its dedicated RQLite and Olric clusters.
@@ -51,110 +42,6 @@ type InstanceSpawner struct {
 	baseDir   string // Base directory for all namespace data (e.g., ~/.orama/data/namespaces)
 	instances map[string]*GatewayInstance
 	mu        sync.RWMutex
-}
-
-// GatewayInstance represents a running Gateway instance for a namespace
-type GatewayInstance struct {
-	Namespace    string
-	NodeID       string
-	HTTPPort     int
-	BaseDomain   string
-	RQLiteDSN    string   // Connection to namespace RQLite
-	OlricServers []string // Connection to namespace Olric
-	ConfigPath   string
-	PID          int
-	StartedAt    time.Time
-	cmd          *exec.Cmd
-	logger       *zap.Logger
-
-	// mu protects mutable state accessed concurrently by the monitor goroutine.
-	mu              sync.RWMutex
-	Status          InstanceNodeStatus
-	LastHealthCheck time.Time
-}
-
-// InstanceConfig holds configuration for spawning a Gateway instance
-type InstanceConfig struct {
-	Namespace       string        // Namespace name (e.g., "alice")
-	NodeID          string        // Physical node ID
-	HTTPPort        int           // HTTP API port
-	BaseDomain      string        // Base domain (e.g., "orama-devnet.network")
-	RQLiteDSN       string        // RQLite connection DSN (e.g., "http://localhost:10000")
-	GlobalRQLiteDSN string        // Global RQLite DSN for API key validation (empty = use RQLiteDSN)
-	OlricServers    []string      // Olric server addresses
-	OlricTimeout    time.Duration // Timeout for Olric operations
-	NodePeerID      string        // Physical node's peer ID for home node management
-	DataDir         string        // Data directory for deployments, SQLite, etc.
-	// IPFS configuration for storage endpoints
-	IPFSClusterAPIURL     string        // IPFS Cluster API URL (e.g., "http://localhost:9094")
-	IPFSAPIURL            string        // IPFS API URL (e.g., "http://localhost:5001")
-	IPFSTimeout           time.Duration // Timeout for IPFS operations
-	IPFSReplicationFactor int           // IPFS replication factor
-	// WebRTC configuration (populated when WebRTC is enabled for the namespace)
-	WebRTCEnabled bool   // Enable WebRTC (SFU/TURN) routes on this gateway
-	SFUPort       int    // SFU signaling port on this node
-	TURNDomain    string // TURN server domain (e.g., "turn.ns-alice.orama-devnet.network")
-	TURNSecret    string // TURN shared secret for credential generation
-	// TURNStealthDomain is the neutral stealth TURNS host (feat-124,
-	// cdn-<hash>.<base-domain>). Non-empty only when webrtc stealth is
-	// enabled for the namespace; turn.credentials then advertises
-	// `turns:<TURNStealthDomain>:443` as the final URI-ladder rung.
-	TURNStealthDomain string
-	// SecretsEncryptionKey is the host-wide AES-256 serverless secrets
-	// encryption key (hex-encoded). Bugboard #837 follow-up: the host gateway
-	// receives this via gateway.Config but spawned namespace gateways never
-	// did, so `function secrets list` returned 501 on namespaces. It is the
-	// SAME value on every node — read once from the host's
-	// secrets/secrets-encryption-key file — and must be identical across the
-	// namespace cluster so a secret encrypted by one gateway decrypts on
-	// another. Empty means secrets management stays disabled (fail-loud).
-	SecretsEncryptionKey string
-}
-
-// GatewayYAMLWebRTC represents the webrtc section of the gateway YAML config.
-// Must match yamlWebRTCCfg in cmd/gateway/config.go.
-type GatewayYAMLWebRTC struct {
-	Enabled           bool   `yaml:"enabled"`
-	SFUPort           int    `yaml:"sfu_port,omitempty"`
-	TURNDomain        string `yaml:"turn_domain,omitempty"`
-	TURNSecret        string `yaml:"turn_secret,omitempty"`
-	TURNStealthDomain string `yaml:"turn_stealth_domain,omitempty"`
-}
-
-// GatewayYAMLConfig represents the gateway YAML configuration structure
-// This must match the yamlCfg struct in cmd/gateway/config.go exactly
-// because the gateway uses strict YAML decoding that rejects unknown fields
-type GatewayYAMLConfig struct {
-	ListenAddr            string            `yaml:"listen_addr"`
-	ClientNamespace       string            `yaml:"client_namespace"`
-	RQLiteDSN             string            `yaml:"rqlite_dsn"`
-	GlobalRQLiteDSN       string            `yaml:"global_rqlite_dsn,omitempty"`
-	BootstrapPeers        []string          `yaml:"bootstrap_peers,omitempty"`
-	EnableHTTPS           bool              `yaml:"enable_https,omitempty"`
-	DomainName            string            `yaml:"domain_name,omitempty"`
-	TLSCacheDir           string            `yaml:"tls_cache_dir,omitempty"`
-	OlricServers          []string          `yaml:"olric_servers"`
-	OlricTimeout          string            `yaml:"olric_timeout,omitempty"`
-	IPFSClusterAPIURL     string            `yaml:"ipfs_cluster_api_url,omitempty"`
-	IPFSAPIURL            string            `yaml:"ipfs_api_url,omitempty"`
-	IPFSTimeout           string            `yaml:"ipfs_timeout,omitempty"`
-	IPFSReplicationFactor int               `yaml:"ipfs_replication_factor,omitempty"`
-	WebRTC                GatewayYAMLWebRTC `yaml:"webrtc,omitempty"`
-	// SecretsEncryptionKey carries the host's serverless secrets encryption
-	// key into the spawned namespace gateway so it can decrypt/encrypt
-	// function secrets (bugboard #837 follow-up). The standalone gateway
-	// binary loads this back into gateway.Config.SecretsEncryptionKey on
-	// startup. Because this is key material, generateConfig writes the file
-	// 0600. Empty omits the field (secrets management stays disabled).
-	SecretsEncryptionKey string `yaml:"secrets_encryption_key,omitempty"`
-	// ClusterSecretPath points to the host's cluster-secret file. Bug #215
-	// follow-up: namespace gateways spawned by systemd previously had no
-	// way to access the cluster secret, so they fell back to per-node
-	// random JWT signing keys and JWTs were unverifiable cross-node within
-	// the namespace cluster. Setting this path lets the standalone gateway
-	// binary read the secret on startup and derive the canonical Ed25519
-	// key shared with every other gateway in the cluster.
-	ClusterSecretPath string `yaml:"cluster_secret_path,omitempty"`
 }
 
 // NewInstanceSpawner creates a new Gateway instance spawner
@@ -178,9 +65,9 @@ func (is *InstanceSpawner) SpawnInstance(ctx context.Context, cfg InstanceConfig
 
 	is.mu.Lock()
 	if existing, ok := is.instances[key]; ok {
-		existing.mu.RLock()
+		existing.Mu.RLock()
 		status := existing.Status
-		existing.mu.RUnlock()
+		existing.Mu.RUnlock()
 		if status == InstanceStatusRunning {
 			is.mu.Unlock()
 			return existing, nil
@@ -219,12 +106,12 @@ func (is *InstanceSpawner) SpawnInstance(ctx context.Context, cfg InstanceConfig
 		OlricServers: cfg.OlricServers,
 		ConfigPath:   configPath,
 		Status:       InstanceStatusStarting,
-		logger:       is.logger.With(zap.String("namespace", cfg.Namespace), zap.String("node_id", cfg.NodeID)),
+		Logger:       is.logger.With(zap.String("namespace", cfg.Namespace), zap.String("node_id", cfg.NodeID)),
 	}
 
-	instance.logger.Info("Starting Gateway instance",
+	instance.Logger.Info("Starting Gateway instance",
 		zap.Int("http_port", cfg.HTTPPort),
-		zap.String("rqlite_dsn", cfg.RQLiteDSN),
+		zap.String("rqlite_dsn", rqlite.RedactDSN(cfg.RQLiteDSN)),
 		zap.Strings("olric_servers", cfg.OlricServers),
 	)
 
@@ -257,11 +144,11 @@ func (is *InstanceSpawner) SpawnInstance(ctx context.Context, cfg InstanceConfig
 		}
 	}
 
-	instance.logger.Info("Found gateway binary", zap.String("path", gatewayBinary))
+	instance.Logger.Info("Found gateway binary", zap.String("path", gatewayBinary))
 
 	// Create command
 	cmd := exec.CommandContext(ctx, gatewayBinary, "--config", configPath)
-	instance.cmd = cmd
+	instance.Cmd = cmd
 
 	// Setup logging
 	logPath := filepath.Join(logsDir, fmt.Sprintf("gateway-%s.log", cfg.NodeID))
@@ -310,12 +197,12 @@ func (is *InstanceSpawner) SpawnInstance(ctx context.Context, cfg InstanceConfig
 		}
 	}
 
-	instance.mu.Lock()
+	instance.Mu.Lock()
 	instance.Status = InstanceStatusRunning
 	instance.LastHealthCheck = time.Now()
-	instance.mu.Unlock()
+	instance.Mu.Unlock()
 
-	instance.logger.Info("Gateway instance started successfully",
+	instance.Logger.Info("Gateway instance started successfully",
 		zap.Int("pid", instance.PID),
 	)
 
@@ -347,6 +234,9 @@ func (is *InstanceSpawner) generateConfig(configPath string, cfg InstanceConfig,
 			TURNStealthDomain: cfg.TURNStealthDomain,
 		},
 		SecretsEncryptionKey: cfg.SecretsEncryptionKey,
+		NtfyBaseURL:          cfg.NtfyBaseURL,
+		RelayAllowedSuffixes: cfg.RelayAllowedSuffixes,
+		FaucetKeyFile:        cfg.FaucetKeyFile,
 	}
 	// Set Olric timeout if provided
 	if cfg.OlricTimeout > 0 {
@@ -400,36 +290,36 @@ func (is *InstanceSpawner) StopInstance(ctx context.Context, ns, nodeID string) 
 	delete(is.instances, key)
 	is.mu.Unlock()
 
-	if instance.cmd != nil && instance.cmd.Process != nil {
-		instance.logger.Info("Stopping Gateway instance", zap.Int("pid", instance.PID))
+	if instance.Cmd != nil && instance.Cmd.Process != nil {
+		instance.Logger.Info("Stopping Gateway instance", zap.Int("pid", instance.PID))
 
 		// Send SIGTERM for graceful shutdown
-		if err := instance.cmd.Process.Signal(os.Interrupt); err != nil {
+		if err := instance.Cmd.Process.Signal(os.Interrupt); err != nil {
 			// If SIGTERM fails, kill it
-			_ = instance.cmd.Process.Kill()
+			_ = instance.Cmd.Process.Kill()
 		}
 
 		// Wait for process to exit with timeout
 		done := make(chan error, 1)
 		go func() {
-			done <- instance.cmd.Wait()
+			done <- instance.Cmd.Wait()
 		}()
 
 		select {
 		case <-done:
-			instance.logger.Info("Gateway instance stopped gracefully")
+			instance.Logger.Info("Gateway instance stopped gracefully")
 		case <-time.After(10 * time.Second):
-			instance.logger.Warn("Gateway instance did not stop gracefully, killing")
-			_ = instance.cmd.Process.Kill()
+			instance.Logger.Warn("Gateway instance did not stop gracefully, killing")
+			_ = instance.Cmd.Process.Kill()
 		case <-ctx.Done():
-			_ = instance.cmd.Process.Kill()
+			_ = instance.Cmd.Process.Kill()
 			return ctx.Err()
 		}
 	}
 
-	instance.mu.Lock()
+	instance.Mu.Lock()
 	instance.Status = InstanceStatusStopped
-	instance.mu.Unlock()
+	instance.Mu.Unlock()
 	return nil
 }
 
@@ -488,9 +378,9 @@ func (is *InstanceSpawner) HealthCheck(ctx context.Context, ns, nodeID string) (
 
 	healthy, err := instance.IsHealthy(ctx)
 	if healthy {
-		instance.mu.Lock()
+		instance.Mu.Lock()
 		instance.LastHealthCheck = time.Now()
-		instance.mu.Unlock()
+		instance.Mu.Unlock()
 	}
 	return healthy, err
 }
@@ -517,7 +407,7 @@ func (is *InstanceSpawner) waitForInstanceReady(ctx context.Context, instance *G
 		resp.Body.Close()
 
 		if resp.StatusCode == http.StatusOK {
-			instance.logger.Debug("Gateway instance ready",
+			instance.Logger.Debug("Gateway instance ready",
 				zap.Int("attempts", i+1),
 			)
 			return nil
@@ -547,52 +437,23 @@ func (is *InstanceSpawner) monitorInstance(instance *GatewayInstance) {
 		healthy, _ := instance.IsHealthy(ctx)
 		cancel()
 
-		instance.mu.Lock()
+		instance.Mu.Lock()
 		if healthy {
 			instance.Status = InstanceStatusRunning
 			instance.LastHealthCheck = time.Now()
 		} else {
 			instance.Status = InstanceStatusFailed
-			instance.logger.Warn("Gateway instance health check failed")
+			instance.Logger.Warn("Gateway instance health check failed")
 		}
-		instance.mu.Unlock()
+		instance.Mu.Unlock()
 
 		// Check if process is still running
-		if instance.cmd != nil && instance.cmd.ProcessState != nil && instance.cmd.ProcessState.Exited() {
-			instance.mu.Lock()
+		if instance.Cmd != nil && instance.Cmd.ProcessState != nil && instance.Cmd.ProcessState.Exited() {
+			instance.Mu.Lock()
 			instance.Status = InstanceStatusStopped
-			instance.mu.Unlock()
-			instance.logger.Warn("Gateway instance process exited unexpectedly")
+			instance.Mu.Unlock()
+			instance.Logger.Warn("Gateway instance process exited unexpectedly")
 			return
 		}
 	}
-}
-
-// IsHealthy checks if the Gateway instance is healthy
-func (gi *GatewayInstance) IsHealthy(ctx context.Context) (bool, error) {
-	url := fmt.Sprintf("http://localhost:%d/v1/health", gi.HTTPPort)
-	client := tlsutil.NewHTTPClient(5 * time.Second)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return false, err
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return false, err
-	}
-	defer resp.Body.Close()
-
-	return resp.StatusCode == http.StatusOK, nil
-}
-
-// DSN returns the local connection address for this Gateway instance
-func (gi *GatewayInstance) DSN() string {
-	return fmt.Sprintf("http://localhost:%d", gi.HTTPPort)
-}
-
-// ExternalURL returns the external URL for accessing this namespace's gateway
-func (gi *GatewayInstance) ExternalURL() string {
-	return fmt.Sprintf("https://ns-%s.%s", gi.Namespace, gi.BaseDomain)
 }

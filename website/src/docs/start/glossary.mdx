@@ -1,0 +1,99 @@
+# Glossary
+
+Short definitions of the words these docs use. Each links to the page that explains it.
+
+## Platform
+
+**Node.** One Linux server running the Orama software. Every node runs the same binaries.
+
+**Cluster.** The set of nodes that share one registry database and one DNS zone. Sometimes called "the network" or an environment.
+
+**Network.** A name your CLI knows: a cluster reached through a gateway, for example `mycluster` pointing at `https://cluster.example.com` (stored in `~/.orama/environments.json`; a fresh CLI has none), or a network of the registry such as stagenet, whose manifest names its chain and the release root its software is verified against (built into the CLI, or added by its manifest URL). Called an environment in flags such as `--env`, and before `orama network` replaced `orama env`. See [`orama network`](/docs/developer/cli/network).
+
+**Base domain.** The domain the cluster owns, such as `cluster.example.com`. Deployments get names under it. See [Choosing the base domain](/docs/operator/nameserver#choosing-the-base-domain).
+
+**Nameserver node.** A node that also answers DNS (CoreDNS on port 53). A cluster needs at least one, and three is the normal setup.
+
+**Genesis node.** The first node. It creates the cluster. `orama node setup --genesis`.
+
+**Invite.** A single-use token that lets a new node join. It names one existing node and pins that node's certificate. See [Joining nodes](/docs/operator/joining-nodes).
+
+**WireGuard mesh.** The encrypted overlay (`10.0.0.0/24`) all inter-node traffic uses. See [WireGuard](/docs/operator/wireguard).
+
+**Index plane.** The services that run on every node and hold the cluster's own state: the registry database, IPFS, the vault guardian, the index gateway, Caddy, and on nameserver nodes CoreDNS. See [Architecture overview](/docs/architecture/overview).
+
+**Tenant plane.** The per-namespace services: a database, a cache and a gateway, plus WebRTC services if enabled.
+
+**Registry.** The cluster-wide RQLite database. It holds nodes, DNS, API keys, grants, sessions, the audit trail and deployment records.
+
+**Supervisor.** `orama-node`, the process that starts every other service as a component with declared dependencies and keeps them running. See [Node process model](/docs/architecture/node-process-model).
+
+**Archive.** The signed tarball `orama maint build` makes and `orama node setup` installs. Nodes install only archives signed by an address in `/etc/orama/archive-signers`, or a release that a TUF release root they adopted vouches for. See [Build and sign](/docs/operator/build-and-sign) and [Release and rollout](/docs/contributor/deployment#releases-tuf-and-auto-update).
+
+**OramaOS.** A locked-down operating system for nodes: no SSH, no shell, read-only root, encrypted data partition. See [OramaOS](/docs/operator/orama-os).
+
+**Global node.** A node role that runs the Orama chain and its helper services. See [Global nodes](/docs/operator/global-nodes).
+
+## Tenants and access
+
+**Namespace.** Your own small cluster: its own database, cache and gateways. The unit of ownership and isolation. See [Namespaces](/docs/developer/namespaces).
+
+**Gateway.** The HTTPS front door. The *index gateway* serves the control API. Each *namespace gateway* serves that namespace's data API at `ns-<name>.<base-domain>`. See [Request lifecycle](/docs/architecture/request-lifecycle).
+
+**Lobby.** The sign-in context for a wallet that is not yet inside a namespace. See [Sign-in](/docs/developer/sign-in#the-lobby).
+
+**Principal.** Something that can act: a wallet, an API key, or a deployed app.
+
+**Grant.** What a principal may do in one namespace. A grant has a role and can be narrowed to part of the namespace. See [Access control](/docs/developer/access-control).
+
+**Role.** `owner`, `admin`, `runtime` or `reader`.
+
+**Scoped API key.** A key with a profile (`runtime`, `app`, `admin`) and narrow grants. `orama_sk_…` or `orama_rk_…`.
+
+**Device-bound session.** A session whose every request is signed by a key that stays on the device. See [Devices](/docs/developer/devices).
+
+**Open sign-in.** A namespace policy that lets any wallet sign in to it as an ordinary user. See [Sign-in policy](/docs/developer/sign-in#sign-in-policy).
+
+**Operator.** A wallet listed as an operator of a cluster. It can run `orama status` and the other cluster-level commands. See [Cluster administration](/docs/operator/cluster-admin).
+
+## Storage and data
+
+**CID.** The content identifier of an object in IPFS. The same bytes always have the same CID.
+
+**Pin.** An instruction to keep an object. Unpinned objects are removed by garbage collection.
+
+**Fetch capability.** A token that lets someone download one specific object without any identity. Used by relayed fetch. See [Relayed fetch](/docs/privacy/relayed-fetch).
+
+**Sealed backup.** A namespace backup encrypted to a public key you hold. See [Backups](/docs/developer/backups).
+
+## Privacy
+
+**Anonymity proxy.** The gateway routes that send a request through the node's Tor client. See [Tor](/docs/privacy/tor).
+
+**Orama Tor network.** A separate, private Tor network run by Orama's own directory authorities, described by one `tor-network.json` file. The code and installer exist and it has not been run on a real network. See [Tor](/docs/privacy/tor#oramas-own-tor-network).
+
+**Stealth TURN.** TURN over TLS on port 443 so relayed calls look like HTTPS. See [Stealth TURN](/docs/privacy/stealth-turn).
+
+## Chain
+
+**`oramad`.** The chain binary (Cosmos SDK on CometBFT).
+
+**ORAMA / norama.** The token and its base unit. 1 ORAMA = 10⁹ norama.
+
+**Epoch.** A chain period of at least 24 hours of block time and 14,400 blocks. Emission happens once per epoch.
+
+**Bootstrap committee.** The initial validators, who have power without stake. Their share fades as real stake arrives (lambda). See [Validators](/docs/blockchain/validators).
+
+**Earnings account.** A restricted balance where protocol payouts land. It can pay fees, bonds and deals, but not be sent to another user. See [Fees](/docs/blockchain/fees).
+
+**Houses.** The two voting bodies of Orama governance: the token house and the operator house. See [Governance](/docs/blockchain/governance).
+
+**Storage deal.** An on-chain contract for storing a file with providers who prove they still hold it. See [Storage deals](/docs/blockchain/storage-deals).
+
+**Shielded pool.** The private pool where ORAMA can move without revealing sender, receiver or amount. See [Shielded pool](/docs/blockchain/shielded).
+
+## RootWallet
+
+**RootWallet.** The self-custody wallet and local agent that signs you in to Orama. Desktop, mobile and CLI (`rw`). See [RootWallet](/docs/rootwallet/overview).
+
+**Agent.** The local process (inside the desktop app, or the headless agent) that holds unlocked keys and signs on request over a Unix socket. See [The RootWallet agent](/docs/rootwallet/agent).

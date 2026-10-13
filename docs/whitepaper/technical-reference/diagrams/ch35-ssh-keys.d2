@@ -1,0 +1,22 @@
+shape: sequence_diagram
+
+cmd: "Command\n(push, rollout, ssh, ...)"
+rs: "remotessh.PrepareNodeKeys"
+rw: "rwagent.Client"
+ag: "RootWallet agent"
+fs: "tmp dir orama-ssh-*"
+ssh: "ssh / scp child"
+
+cmd -> rs: "nodes slice"
+rs -> rw: "KeepUnlocked(5 min)"
+rw -> ag: "POST /v1/touch every 5 min\n(goroutine until cleanup)"
+rs -> fs: "MkdirTemp"
+rs -> rw: "GetSSHKey(host, user, priv)\nonce per distinct host/user"
+rw -> ag: "GET /v1/vault/ssh/host/user?format=priv\n(approval and unlock waits up to 270 s)"
+ag -> rw: "OpenSSH private key"
+rs -> fs: "write id_N, mode 0600"
+rs -> cmd: "cleanup func; node.SSHKey = path"
+cmd -> ssh: "ssh -i id_N -o IdentitiesOnly=yes"
+cmd -> rs: "cleanup() on return,\nor SIGINT / SIGTERM watcher"
+rs -> fs: "overwrite with 512 zero bytes,\nremove files, remove dir"
+rs -> rw: "stop keepalive"

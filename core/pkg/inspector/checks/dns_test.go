@@ -230,3 +230,29 @@ func TestCheckDNS_NilData(t *testing.T) {
 		t.Errorf("expected 0 results for nil DNS data, got %d", len(results))
 	}
 }
+
+func TestCheckDNS_digMissingSkipsResolutionChecks(t *testing.T) {
+	nd := makeNodeData("5.5.5.5", "nameserver-ns1")
+	nd.DNS = &inspector.DNSData{
+		CoreDNSActive: true, CaddyActive: true, DigMissing: true, CorefileExists: true,
+		Port53Bound: true, Port80Bound: true, Port443Bound: true,
+		BaseTLSDaysLeft: -1, WildTLSDaysLeft: -1,
+	}
+	results := CheckDNS(makeCluster(map[string]*inspector.NodeData{"5.5.5.5": nd}))
+	for _, id := range []string{"dns.soa_resolves", "dns.ns_resolves", "dns.wildcard_resolves", "dns.base_a_resolves"} {
+		expectStatus(t, results, id, inspector.StatusSkip)
+	}
+	for _, c := range results {
+		if c.Status == inspector.StatusFail {
+			t.Errorf("a node without dig failed %s: %s", c.ID, c.Message)
+		}
+	}
+}
+
+func TestCheckDNS_resolutionFailsWhenDigIsPresent(t *testing.T) {
+	nd := makeNodeData("5.5.5.5", "nameserver-ns1")
+	nd.DNS = &inspector.DNSData{CoreDNSActive: true, BaseTLSDaysLeft: -1, WildTLSDaysLeft: -1}
+	results := CheckDNS(makeCluster(map[string]*inspector.NodeData{"5.5.5.5": nd}))
+	expectStatus(t, results, "dns.soa_resolves", inspector.StatusFail)
+	expectStatus(t, results, "dns.caddy_active", inspector.StatusFail)
+}

@@ -1,0 +1,66 @@
+# The vault
+
+The vault stores passwords, SSH keys, authenticator (TOTP) codes, secure notes and payment cards in one AES-256-GCM file, `~/.rootwallet/vault.json`, under a key derived from your recovery phrase. All surfaces share the file: an entry written on one is readable on the others, and a surface leaves entry types it does not show untouched.
+
+## What each surface manages
+
+| Entry type | Desktop | Mobile | CLI |
+|---|---|---|---|
+| Logins (passwords) | Yes | Yes | `rw vault add`, `get`, `list`, `rotate`, `rm` |
+| SSH keys | Yes | Yes | `rw vault ssh …` |
+| Authenticator (TOTP) | Yes | Yes (can scan a QR) | `rw vault totp …` |
+| Secure notes | No | No | `rw vault note …` |
+| Payment cards | No | No | `rw vault card …` |
+| Folders, favourites, trash | Yes | Yes | folders are shared |
+
+## Passwords
+
+Logins support several URLs, custom fields, password history, a built-in TOTP, notes, favourites, folders, search and a trash you can restore from. Passwords are generated at 20 characters by default.
+
+**Import** Bitwarden CSV (`name, login_uri, login_username, login_password, notes`), a generic CSV (`site, username, password, notes`) or Bitwarden unencrypted JSON. Desktop opens a file; mobile pastes the text; the CLI has `rw vault import-csv <file>`.
+
+**Export.** Desktop exports plaintext JSON behind a typed "EXPORT" confirmation. The CLI makes an *encrypted* export with `rw vault export [--output file]`, and `rw vault import <file>` restores it, which needs the same seed. Mobile has no export.
+
+## SSH keys
+
+New keys are random ed25519, not derived from your seed. You can import a PEM or OpenSSH key and copy the public or private half.
+
+```bash
+rw vault ssh add prod-server            # new key for host
+rw vault ssh get prod-server --pub
+rw vault ssh connect prod-server        # ssh in, agent stays unlocked
+rw vault ssh exec prod-server -- uptime
+rw vault ssh provision prod-server      # push the public key using password auth
+rw vault ssh agent-load --all           # load into ssh-agent (default 30 minutes)
+rw vault ssh rotate prod-server
+```
+
+This is how `orama node setup` works: it asks the agent to create an SSH key for the node's IP, installs it on the VPS, and from then on asks the agent for it. See [The agent](/docs/rootwallet/agent).
+
+## Notes and cards
+
+CLI only: `rw vault note add|get|list|rm` and `rw vault card add|get|list|rm`. The apps do not open these entry types yet.
+
+## Backup and recovery
+
+- **Funds:** your recovery phrase restores the keys.
+- **The vault:** comes back only if you still have the vault file, or an encrypted export made with `rw vault export`. The phone has no vault restore.
+- "Restore the whole vault from the 12 words" is a planned feature, not built.
+- The keystore keeps three copies: the primary, a rolling `.bak`, and the secondary backup.
+
+## Vault sync (development builds only)
+
+An opt-in end-to-end encrypted sync of the vault between devices that hold the same phrase exists in the code and is **not in release builds**. It is behind build flags (`VITE_RW_VAULT_SYNC` on desktop, `EXPO_PUBLIC_RW_VAULT_SYNC` on mobile, `RW_VAULT_SYNC=on` for the CLI), and the server function it calls (`vault-sync` on the `rootwallet` Orama namespace) is written and tested but not deployed.
+
+What it does when enabled:
+
+- Syncs logins, TOTP keys, SSH keys, notes, cards and folders to a personal space on the Orama namespace.
+- Encrypts end to end with XChaCha20-Poly1305, padded to 256 B buckets up to 64 KiB. The key chain is seed, then a key-encryption key, then a random space key, then a random key per record. Each record is signed by an identity key derived from the seed, whose public half is the sign-in "wallet".
+- Uses a device-bound session with one random Ed25519 key per install. You can list and revoke devices in Settings.
+- Merges conflicts: an edit beats a delete, later field edits win, and the losing value is kept for 30 days for review. Key material conflicts become "(conflict copy)" items.
+- Runs on unlock, focus, write and every 15 minutes (desktop and mobile), or by hand with `rw vault sync now`.
+- Limits: 10,000 entries and 50 MiB per space; 4 GiB namespace-wide; 240 requests a minute per wallet.
+
+Not done: clients poll (no push), mobile has no background sync, there is no signed space head, so a hostile server could withhold or reorder records and the clients cannot detect it yet, and there is no shared folder support.
+
+CLI: `rw vault sync enable|now|status [--devices]|disable [--purge]`. "Turn off" revokes the device and removes local sync state; `--purge` also deletes the server copy for every device.

@@ -1,4 +1,5 @@
 import { HttpClient } from "../core/http";
+import { SDKError } from "../errors";
 
 export interface PeerInfo {
   id: string;
@@ -82,12 +83,12 @@ export class NetworkClient {
   }
 
   /**
-   * Proxy an HTTP request through the Anyone network.
+   * Proxy an HTTP request through the Tor network (the node's Tor client).
    * Requires authentication (API key or JWT).
    *
    * @param request - The proxy request configuration
    * @returns The proxied response
-   * @throws {SDKError} If the Anyone proxy is not available or the request fails
+   * @throws {SDKError} If the node's Tor proxy is not available or the request fails
    *
    * @example
    * ```ts
@@ -109,9 +110,17 @@ export class NetworkClient {
       request
     );
 
-    // Check if the response contains an error
+    // The proxy answers 200 with an `error` field when the upstream request
+    // failed, so this is the only place the failure surfaces. It used to be a
+    // bare Error, the one failure in the SDK a caller could not branch on with
+    // `code`/`httpStatus` like every other.
     if (response.error) {
-      throw new Error(`Proxy request failed: ${response.error}`);
+      throw new SDKError(
+        `proxy request failed: ${response.error}`,
+        502,
+        "PROXY_FAILED",
+        { upstream_status: response.status_code, upstream_error: response.error }
+      );
     }
 
     return response;

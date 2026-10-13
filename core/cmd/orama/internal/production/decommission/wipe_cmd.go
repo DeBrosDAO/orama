@@ -1,0 +1,119 @@
+package decommission
+
+import (
+	"fmt"
+	"os"
+	"strings"
+
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/noderesolver"
+	"github.com/DeBrosOfficial/network/pkg/remotessh"
+)
+
+// WipeFlags holds wipe command flags.
+type WipeFlags struct {
+	Env     string
+	Node    string
+	Nuclear bool
+	Force   bool
+}
+
+// HandleWipe is the entry point for `orama node wipe`.
+//
+// Target-side only: it erases a node and says nothing to the cluster. Use it
+// when the node is already retired (a `decommission --offline` was run, or it
+// never joined), or to finish a decommission whose wipe failed.
+func RunWipe(flags *WipeFlags) error {
+	if err := flags.validate(); err != nil {
+		return err
+	}
+	return executeWipe(flags)
+}
+
+func (f *WipeFlags) validate() error {
+	if f.Env == "" {
+		return clierr.Usage("--env is required\nUsage: orama node wipe --env <devnet|testnet> [--node <ip>] --force")
+	}
+	return nil
+}
+
+// Seams for tests; production resolves nodes and keys the usual way.
+var (
+	resolveWipeNodes = noderesolver.ResolveNodes
+	prepareWipeKeys  = remotessh.PrepareNodeKeys
+	forgetNodeKey    = remotessh.ForgetNodeKey
+	wipeRemote       = wipeNode
+)
+
+func executeWipe(flags *WipeFlags) error {
+	nodes, err := resolveWipeNodes(flags.Env)
+	if err != nil {
+		return err
+	}
+	// Narrow to the target before asking RootWallet for keys: a wipe of one
+	// node needs that node's key only, and must not fail because another node
+	// in the environment has none yet.
+	if flags.Node != "" {
+		nodes = remotessh.FilterByIP(nodes, flags.Node)
+		if len(nodes) == 0 {
+			return fmt.Errorf("node %s not found in the %s environment", flags.Node, flags.Env)
+		}
+	}
+
+	cleanup, err := prepareWipeKeys(nodes)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	fmt.Printf("Wipe %s: %d node(s)\n", flags.Env, len(nodes))
+	if flags.Nuclear {
+		fmt.Printf("  Mode: NUCLEAR (removes shared binaries too)\n")
+	}
+	for _, n := range nodes {
+		fmt.Printf("  - %s (%s)\n", n.Host, n.Role)
+	}
+	fmt.Println()
+
+	if flags.Node != "" && len(nodes) == 1 {
+		fmt.Printf("Note: this erases the node but tells the cluster nothing. If it is still a\n")
+		fmt.Printf("      member, use `orama remove` instead, or the survivors will keep\n")
+		fmt.Printf("      counting it toward quorum.\n\n")
+	}
+
+	if !flags.Force {
+		fmt.Printf("This will DESTROY all data on these nodes.\n")
+		fmt.Printf("Type 'yes' to confirm: ")
+		if err := clierr.Confirm(os.Stdin, "yes"); err != nil {
+			fmt.Println("Aborted.")
+			return err
+		}
+		fmt.Println()
+	}
+
+	var failed []string
+	for i, node := range nodes {
+		fmt.Printf("[%d/%d] Wiping %s...\n", i+1, len(nodes), node.Host)
+		if err := wipeRemote(node, flags.Nuclear); err != nil {
+			fmt.Fprintf(os.Stderr, "  ✗ %s: %v\n", node.Host, err)
+			failed = append(failed, node.Host)
+			continue
+		}
+		fmt.Printf("  ✓ %s wiped\n", node.Host)
+		if err := forgetNodeKey(node); err != nil {
+			fmt.Fprintf(os.Stderr, "  ✗ %s: wiped, but its SSH key is still in the vault: %v (run the wipe again once RootWallet is unlocked)\n", node.Host, err)
+			failed = append(failed, node.Host)
+			continue
+		}
+		fmt.Printf("  ✓ %s@%s SSH key removed from the vault\n\n", node.User, node.Host)
+	}
+
+	if len(failed) > 0 {
+		return fmt.Errorf("wipe failed on %d node(s): %s", len(failed), strings.Join(failed, ", "))
+	}
+
+	fmt.Printf("✓ Wipe complete (%d nodes)\n", len(nodes))
+	fmt.Printf("  rm -rf is unlink, not cryptographic erase. Provider disks remain readable.\n")
+	fmt.Printf("  To reinstall: orama node setup --ip <ip> ... (see orama.network/docs/operator/node-setup)\n")
+	return nil
+}

@@ -1,0 +1,19 @@
+shape: sequence_diagram
+
+w: "wallet / indexer"
+tx: "x/cnft Msg server"
+tree: "types.Tree"
+cl: "changelog ring (buffer slots)"
+
+w -> w: "keep every leaf; rebuild siblings with types.Proof"
+w -> tx: "MsgTransfer(current leaf, proof: root R, index i, siblings)"
+tx -> tree: "SetLeaf(R, hash(current), hash(next), i, siblings)"
+tree -> tree: "fillProof: omitted top siblings come from the canopy"
+tree -> cl: "findRoot(R): is R one of the filled_buffer newest roots?"
+cl -> tree: "slot of R, or ErrRootNotInBuffer"
+tree -> tree: "recompute(leaf, siblings, i) must equal R, else ErrInvalidProof"
+tree -> cl: "replay each later changelog: fix the sibling at the critical bit, or take the new leaf if same index"
+tree -> tree: "leaf changed since R? ErrStaleProof"
+tree -> cl: "bump: write a new slot (root, path, index), sequence + 1"
+tree -> tx: "new root"
+tx -> w: "MsgTransferResponse(root, nonce)"

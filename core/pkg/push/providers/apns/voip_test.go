@@ -123,8 +123,8 @@ func TestVoIP_Send_ForcesHighPriority(t *testing.T) {
 	// VoIP path forces High so we never produce a request Apple will
 	// reject for that reason.
 	cases := []struct {
-		name        string
-		callerPrio  push.PushPriority
+		name         string
+		callerPrio   push.PushPriority
 		wantApnsPrio int
 	}{
 		{"caller_unset", "", apns2.PriorityHigh},

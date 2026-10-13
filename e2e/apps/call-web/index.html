@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Reference call</title></head>
+<body>
+<h1 id="app">reference-call</h1>
+<video id="remote" autoplay playsinline></video>
+<script>
+// The browser half of the reference call app: join a room over the
+// namespace's SFU signalling socket and talk relay-only through its TURN
+// (website/src/docs/operator/webrtc-operations.mdx). The e2e suite's headless peers speak the same protocol.
+const params = new URLSearchParams(location.search);
+const gateway = params.get('gateway') || '';
+const room = params.get('room') || 'standup';
+const token = sessionStorage.getItem('orama_token') || '';
+async function join() {
+  const ws = new WebSocket(gateway.replace('https:', 'wss:') + '/v1/webrtc/signal?room=' + encodeURIComponent(room));
+  let pc;
+  ws.onopen = () => ws.send(JSON.stringify({type: 'join', data: {roomId: room, userId: params.get('me') || 'web'}}));
+  ws.onmessage = async (e) => {
+    const m = JSON.parse(e.data);
+    if (m.type === 'turn-credentials') {
+      pc = new RTCPeerConnection({iceTransportPolicy: 'relay', iceServers: [{urls: m.data.uris, username: m.data.username, credential: m.data.password}]});
+      pc.ontrack = (ev) => { document.getElementById('remote').srcObject = ev.streams[0]; };
+      pc.onicecandidate = (ev) => ev.candidate && ws.send(JSON.stringify({type: 'ice-candidate', data: ev.candidate}));
+    }
+    if (m.type === 'refresh-credentials' && pc) {
+      pc.setConfiguration({...pc.getConfiguration(), iceServers: [{urls: m.data.uris, username: m.data.username, credential: m.data.password}]});
+    }
+    if (m.type === 'offer' && pc) {
+      await pc.setRemoteDescription(m.data);
+      await pc.setLocalDescription(await pc.createAnswer());
+      ws.send(JSON.stringify({type: 'answer', data: pc.localDescription}));
+    }
+  };
+}
+if (token && gateway) join();
+</script>
+</body>
+</html>

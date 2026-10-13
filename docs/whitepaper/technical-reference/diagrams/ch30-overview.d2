@@ -1,0 +1,41 @@
+direction: right
+
+op: "Operator machine" {
+  build: "orama build\nsigned archive (chapter 29)"
+  setup: "orama node setup\n(new machine)"
+  install_remote: "orama node install --remote"
+  push: "orama node push"
+  upgrade_env: "orama node upgrade --env"
+  dns: "orama node dns delegation"
+}
+
+node: "Node (root, /opt/orama)" {
+  archive: "/opt/orama\nmanifest.json, manifest.sig,\nbin/, systemd/, packages/" {shape: cylinder}
+  anchor: "/etc/orama/archive-signers\ntrust anchor" {shape: cylinder}
+  stage: "orama node stage-archive\nverify, lock, swap"
+  install: "orama node install\nProductionSetup phases"
+  upgrade: "orama node upgrade --restart\npre-stop, swap, re-exec, post-swap"
+  state: "Installed state\nnode.yaml, secrets/, units,\nprivhelper, ufw, wg0, Tor" {shape: cylinder}
+  autoupdate: "pkg/autoupdate\nDecide (CLI simulation only)"
+}
+
+cluster: "Existing cluster node"  {
+  join: "POST /v1/internal/join\n(pinned TLS, invite)"
+}
+
+op.build -> op.setup: "archive path"
+op.build -> op.push: "archive path"
+op.setup -> node.stage: "SSH: upload, verify, stage"
+op.install_remote -> node.stage: "SSH: upload, verify, stage"
+op.push -> node.stage: "SSH: upload, stage"
+op.setup -> node.install: "SSH: sudo orama node install"
+op.install_remote -> node.install: "SSH, secrets on stdin"
+op.upgrade_env -> node.upgrade: "SSH, one node at a time (chapter 31)"
+node.stage -> node.archive: "atomic swap"
+node.stage <- node.anchor: "verifies against"
+node.install -> node.anchor: "genesis: seed from --operator-wallet\njoin: from the join response"
+node.install -> cluster.join: "joining node only"
+node.install -> node.state
+node.upgrade -> node.state: "regenerates"
+node.archive -> node.install: "binaries, templates"
+node.archive -> node.upgrade: "binaries, templates"

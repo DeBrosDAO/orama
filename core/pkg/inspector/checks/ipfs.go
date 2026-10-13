@@ -36,20 +36,20 @@ func checkIPFSPerNode(nd *inspector.NodeData, data *inspector.ClusterData) []ins
 	// 3.1 IPFS daemon running
 	if ipfs.DaemonActive {
 		r = append(r, inspector.Pass("ipfs.daemon_active", "IPFS daemon active", ipfsSub, node,
-			"orama-ipfs is active", inspector.Critical))
+			"orama-namespace-ipfs@index is active", inspector.Critical))
 	} else {
 		r = append(r, inspector.Fail("ipfs.daemon_active", "IPFS daemon active", ipfsSub, node,
-			"orama-ipfs is not active", inspector.Critical))
+			"orama-namespace-ipfs@index is not active", inspector.Critical))
 		return r
 	}
 
 	// 3.2 IPFS Cluster running
 	if ipfs.ClusterActive {
 		r = append(r, inspector.Pass("ipfs.cluster_active", "IPFS Cluster active", ipfsSub, node,
-			"orama-ipfs-cluster is active", inspector.Critical))
+			"orama-namespace-ipfs-cluster@index is active", inspector.Critical))
 	} else {
 		r = append(r, inspector.Fail("ipfs.cluster_active", "IPFS Cluster active", ipfsSub, node,
-			"orama-ipfs-cluster is not active", inspector.Critical))
+			"orama-namespace-ipfs-cluster@index is not active", inspector.Critical))
 	}
 
 	// 3.6 Swarm peer count

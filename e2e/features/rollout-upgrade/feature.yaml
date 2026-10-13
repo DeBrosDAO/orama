@@ -1,0 +1,27 @@
+# Rolling upgrades, driven by the CLI under test: the plan puts the raft
+# leader last and needs --yes; a node whose upgrade fails stops the rollout
+# with the rest untouched and the leadership where it was, and the same
+# command resumes once it is fixed; an unknown node is refused. On a fleet
+# installed from the previous release: a mixed-release window, then the
+# rolling upgrade to HEAD under live namespace traffic, with identities and
+# data preserved and the old CLI still reading the new cluster.
+id: rollout-upgrade
+title: Rolling upgrade, halt and resume, N-1 to N
+area: infrastructure
+subtasks: [2843, 2860, 2861]
+stage: 10
+destructive: true
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  cli:
+    - orama node upgrade
+    - orama maint push
+  claims:
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-node-upgrade: without --yes the plan is printed and nothing is restarted"
+    - "website/src/docs/operator/upgrades.mdx: a rolling upgrade restarts followers first and the raft leader last"
+    - "website/src/docs/operator/upgrades.mdx: a node that fails its upgrade stops the rollout; the remaining nodes are untouched"
+    - "website/src/docs/contributor/architecture-reference.mdx: orama node upgrade does not restart the index stack again once its health gate has seen the node serving"
+    - "docs/whitepaper/technical-reference/vol1/31-rolling-upgrades.md#rolling-upgrades: followers first, leader last; a mixed-release cluster keeps working"

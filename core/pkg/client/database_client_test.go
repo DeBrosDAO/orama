@@ -36,7 +36,7 @@ func TestSafeWriteOne_recoversPanic(t *testing.T) {
 func TestSafeWriteOne_nilConnection(t *testing.T) {
 	// safeWriteOne with nil connection should recover from panic, not crash.
 	_, err := safeWriteOne(nil, gorqlite.ParameterizedStatement{
-		Query: "INSERT INTO test (a) VALUES (?)",
+		Query:     "INSERT INTO test (a) VALUES (?)",
 		Arguments: []interface{}{"x"},
 	})
 	if err == nil {
@@ -56,7 +56,7 @@ func TestIsWriteOperation(t *testing.T) {
 	d := &DatabaseClientImpl{}
 
 	tests := []struct {
-		sql    string
+		sql     string
 		isWrite bool
 	}{
 		{"INSERT INTO foo VALUES (1)", true},

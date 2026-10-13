@@ -1,0 +1,47 @@
+direction: right
+
+people: "Participants" {
+  holder: "Token holder\n(delegator or validator account)" {shape: person}
+  op: "Operator\n(x/nodes, 90 service days,\nlocked house bond)" {shape: person}
+  dev: "Contract author or user" {shape: person}
+}
+
+houses: "x/houses" {
+  props: "proposals, votes,\nhouse bonds" {shape: cylinder}
+  adv: "EndBlock: Advance\nvoting, veto, timelock, execute"
+  enacted: "Enacted" {shape: cylinder}
+  adv -> props
+  adv -> enacted
+}
+
+readers: "Consumers of an outcome" {
+  emission: "x/emission\nsplit, development spend"
+  relay: "x/relay\nreporter set"
+  upgrade: "x/upgrade\nplan -> cosmovisor"
+  policy: "x/wasmpolicy\nupload allow-list"
+}
+
+wasm: "Contract runtime (cgo + libwasmvm build)" {
+  ante: "ante: upload sunset,\ncontract send rule, deposit payer"
+  vm: "wasmd x/wasm\n+ depositEngine"
+  msgr: "wasmbindings.Messenger\nCustom messages, Any refused"
+  q: "wasmbindings.Querier"
+  ledger: "x/wasmpolicy\ndeposit chunks" {shape: cylinder}
+  mods: "x/token, x/cnft, x/market,\nx/storage, x/fees"
+  ante -> vm
+  vm -> msgr: "CosmosMsg"
+  vm -> q: "QueryRequest::Custom"
+  vm -> ledger: "state delta of each call"
+  msgr -> mods: "contract is the signer"
+  q -> mods
+}
+
+people.holder -> houses.props: "MsgVoteToken"
+people.op -> houses.props: "MsgLockHouseBond,\nMsgVoteOperator"
+people.holder -> houses.props: "MsgSubmitProposal"
+houses.enacted -> readers.emission
+houses.adv -> readers.relay: "MsgUpdateReporters\n(houses account)"
+houses.adv -> readers.upgrade: "ScheduleUpgrade"
+houses.enacted -> readers.policy: "CodeUploadAllowed"
+people.dev -> wasm.ante: "MsgStoreCode,\nMsgInstantiateContract,\nMsgExecuteContract"
+readers.policy -> wasm.ante

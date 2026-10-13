@@ -80,4 +80,3 @@ func (m *ModuleLifecycle) ValidateModule(module wazero.CompiledModule) error {
 	// Additional validation could be added here
 	return nil
 }
-

@@ -1,6 +1,8 @@
 package process
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -12,7 +14,7 @@ import (
 
 func TestNewManager(t *testing.T) {
 	logger := zap.NewNop()
-	m := NewManager(logger)
+	m := NewManager(logger, Config{})
 
 	if m == nil {
 		t.Fatal("NewManager returned nil")
@@ -26,7 +28,7 @@ func TestNewManager(t *testing.T) {
 }
 
 func TestGetServiceName(t *testing.T) {
-	m := NewManager(zap.NewNop())
+	m := NewManager(zap.NewNop(), Config{})
 
 	tests := []struct {
 		name      string
@@ -87,7 +89,7 @@ func TestGetServiceName(t *testing.T) {
 }
 
 func TestGetStartCommand(t *testing.T) {
-	m := NewManager(zap.NewNop())
+	m := NewManager(zap.NewNop(), Config{})
 	// On macOS (test environment), useSystemd will be false, so node/npm use short paths.
 	// We explicitly set it to test both modes.
 
@@ -175,51 +177,6 @@ func TestGetStartCommand(t *testing.T) {
 			got := m.getStartCommand(d, workDir)
 			if got != tt.want {
 				t.Errorf("getStartCommand() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestMapRestartPolicy(t *testing.T) {
-	m := NewManager(zap.NewNop())
-
-	tests := []struct {
-		name   string
-		policy deployments.RestartPolicy
-		want   string
-	}{
-		{
-			name:   "always",
-			policy: deployments.RestartPolicyAlways,
-			want:   "always",
-		},
-		{
-			name:   "on-failure",
-			policy: deployments.RestartPolicyOnFailure,
-			want:   "on-failure",
-		},
-		{
-			name:   "never maps to no",
-			policy: deployments.RestartPolicyNever,
-			want:   "no",
-		},
-		{
-			name:   "empty string defaults to on-failure",
-			policy: deployments.RestartPolicy(""),
-			want:   "on-failure",
-		},
-		{
-			name:   "unknown policy defaults to on-failure",
-			policy: deployments.RestartPolicy("unknown"),
-			want:   "on-failure",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := m.mapRestartPolicy(tt.policy)
-			if got != tt.want {
-				t.Errorf("mapRestartPolicy(%q) = %q, want %q", tt.policy, got, tt.want)
 			}
 		})
 	}
@@ -454,4 +411,62 @@ func TestDirSize(t *testing.T) {
 			t.Errorf("dirSize() = %d, want %d", got, want)
 		}
 	})
+}
+
+// A deployment is handed a credential of its own at start. Before this it got
+// none, so every app that talked to the platform carried a key somebody had
+// pasted into it — a namespace key, so an application compromise was a
+// namespace takeover.
+func TestStart_writesTheDeploymentsOwnCredential(t *testing.T) {
+	st := newRecordingStager()
+	m := &Manager{logger: zap.NewNop(), stager: st}
+	m.SetWorkloadTokenMinter(func(_ context.Context, namespace, name string) (string, error) {
+		return "token-for-" + namespace + "-" + name, nil
+	})
+
+	deployment := &deployments.Deployment{Namespace: "acme", Name: "web", Type: deployments.DeploymentTypeGoBackend}
+	if err := m.writeWorkloadToken(context.Background(), deployment, "orama-deploy-acme-web"); err != nil {
+		t.Fatalf("writeWorkloadToken: %v", err)
+	}
+	if st.token["acme-web"] != "token-for-acme-web" {
+		t.Errorf("staged %q", st.token["acme-web"])
+	}
+}
+
+// A gateway that cannot mint fails the deploy rather than starting a workload
+// with no identity. The unit refuses to start without the file anyway, and a
+// deployment that ran with no credential is the situation this replaces.
+func TestStart_refusesToStartADeploymentWithNoIdentity(t *testing.T) {
+	m := &Manager{logger: zap.NewNop(), stager: newRecordingStager()}
+	deployment := &deployments.Deployment{Namespace: "acme", Name: "web", Type: deployments.DeploymentTypeGoBackend}
+
+	if err := m.writeWorkloadToken(context.Background(), deployment, "orama-deploy-acme-web"); err == nil {
+		t.Fatal("a deployment was started with no credential")
+	}
+
+	m.SetWorkloadTokenMinter(func(context.Context, string, string) (string, error) {
+		return "", errors.New("the registry did not answer")
+	})
+	if err := m.writeWorkloadToken(context.Background(), deployment, "orama-deploy-acme-web"); err == nil {
+		t.Fatal("a failed mint was reported as success")
+	}
+}
+
+// The credential goes when the deployment does. Leaving it behind leaves a
+// working token on the node after the thing it belonged to is gone.
+func TestStop_removesTheCredential(t *testing.T) {
+	st := newRecordingStager()
+	m := &Manager{logger: zap.NewNop(), stager: st}
+	m.SetWorkloadTokenMinter(func(context.Context, string, string) (string, error) { return "token", nil })
+
+	deployment := &deployments.Deployment{Namespace: "acme", Name: "web", Type: deployments.DeploymentTypeGoBackend}
+	if err := m.writeWorkloadToken(context.Background(), deployment, "orama-deploy-acme-web"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.removeSecrets("orama-deploy-acme-web"); err != nil {
+		t.Fatalf("removeSecrets: %v", err)
+	}
+	if _, ok := st.token["acme-web"]; ok {
+		t.Error("the credential is still staged after the deployment was removed")
+	}
 }

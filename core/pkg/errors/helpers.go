@@ -19,7 +19,7 @@ func IsValidation(err error) bool {
 	}
 
 	var validationErr *ValidationError
-	return errors.As(err, &validationErr)
+	return errors.As(err, &validationErr) || errors.Is(err, ErrInvalidInput)
 }
 
 // IsUnauthorized checks if an error indicates lack of authentication.

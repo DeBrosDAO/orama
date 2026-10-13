@@ -1,0 +1,25 @@
+# Namespace backup under faults: a backup cut by the namespace rqlite leader
+# crashing completes or fails cleanly and the next one restores; rotating the
+# cluster's encryption root changes the restore key, a restore sealed to the
+# old key is refused with nothing written, and one sealed to the new key
+# succeeds. Runs alone: it crashes a raft leader. The rotation cannot be
+# undone, so it runs on a single-node eval cluster of its own (the extra
+# node), never on the run's fleet.
+id: namespace-backup-chaos
+title: Namespace backup across a leader change and a secrets rotation
+area: tenancy
+subtasks: [2831]
+stage: 11
+destructive: true
+requires:
+  extra_nodes: 1
+  probe: false
+  chain: false
+covers:
+  routes:
+    - /v1/namespace/backup
+    - /v1/namespace/restore
+    - /v1/namespace/restore-key
+  claims:
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-namespace-restore-key: the restore key changes when the encryption root is rotated"
+    - "docs/whitepaper/technical-reference/appendices/i-api-surface.md#namespace-management: a restore whose secrets are sealed to another key is refused before any write"

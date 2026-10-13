@@ -1,0 +1,27 @@
+direction: right
+
+op: "Relay operator" {shape: person}
+tor: "Relay (Tor)\nRSA identity + ed25519 identity" {shape: hexagon}
+
+auth: "Directory authority host (3 at launch)" {
+  votes: "Archived votes\n*.vote, hourly" {shape: cylinder}
+  rep: "orama-global reporter\nwindow, medians, chunks"
+  votes -> rep
+}
+tor -> auth.votes: "listed in each vote:\nMeasured bandwidth, flags, ed25519"
+
+chain: "oramad" {
+  relay: "x/relay\nrelays, reporters, chunks, reports,\nepoch results, payouts" {shape: cylinder}
+  nodes: "x/nodes\n(node, operator, ed25519 binding,\n/16)" {shape: hexagon}
+  emission: "x/emission\n(epoch counter, relay ceiling,\nmints)" {shape: hexagon}
+  fees: "x/fees\n(earnings)" {shape: hexagon}
+  storage: "x/storage\narchive fund" {shape: hexagon}
+  nodes -> relay: "RelayBinding"
+  emission -> relay: "CurrentEpoch, RelayCeiling"
+  relay -> emission: "MintRelayReward (once per epoch)"
+  relay -> fees: "CreditEarnings 90%"
+  relay -> storage: "FundArchive 5%"
+}
+
+op -> chain.relay: "MsgRegisterRelay\n(ed25519 cross-signature over the RSA fingerprint)"
+auth.rep -> chain.relay: "MsgReportEpoch chunks\n(hot key in the reporter set)"

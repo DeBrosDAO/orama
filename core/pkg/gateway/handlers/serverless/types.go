@@ -5,7 +5,9 @@ import (
 	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
+	"github.com/DeBrosOfficial/network/pkg/gateway/capability"
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
+	"github.com/DeBrosOfficial/network/pkg/gateway/wssession"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"github.com/DeBrosOfficial/network/pkg/serverless/persistent"
 	"github.com/DeBrosOfficial/network/pkg/serverless/triggers"
@@ -24,21 +26,48 @@ type JWTVerifier interface {
 // ServerlessHandlers contains handlers for serverless function endpoints.
 // It's a separate struct to keep the Gateway struct clean.
 type ServerlessHandlers struct {
-	invoker        *serverless.Invoker
-	engine         *serverless.Engine // for persistent WS instantiation
-	registry       serverless.FunctionRegistry
-	wsManager      *serverless.WSManager
-	triggerStore   *triggers.PubSubTriggerStore
-	cronStore      *triggers.CronTriggerStore // optional; nil = cron triggers unavailable
-	dispatcher     *triggers.PubSubDispatcher
-	persistentMgr  *persistent.Manager // optional; when nil persistent WS rejects 503
-	wsBridge       *wsbridge.Bridge    // optional; nil = no client→ns registration
-	secretsManager serverless.SecretsManager
-	jwtVerifier    JWTVerifier // optional; when nil, mid-session auth.refresh is disabled
-	logger         *zap.Logger
+	// servedNamespace is the namespace a namespace gateway serves; "" on the
+	// cluster gateway (SetServedNamespace).
+	servedNamespace string
+	// maxMemoryLimitMB and maxTimeoutSeconds are the ceilings a deploy is
+	// checked against (SetFunctionLimits); they start at the serverless
+	// defaults so a handler nobody configured still refuses an absurd limit.
+	maxMemoryLimitMB  int
+	maxTimeoutSeconds int
+	maxRetryCount     int
+	invoker           *serverless.Invoker
+	engine            *serverless.Engine // for persistent WS instantiation
+	registry          serverless.FunctionRegistry
+	wsManager         *serverless.WSManager
+	triggerStore      *triggers.PubSubTriggerStore
+	cronStore         *triggers.CronTriggerStore // optional; nil = cron triggers unavailable
+	dispatcher        *triggers.PubSubDispatcher
+	persistentMgr     *persistent.Manager // optional; when nil persistent WS rejects 503
+	wsBridge          *wsbridge.Bridge    // optional; nil = no client→ns registration
+	secretsManager    serverless.SecretsManager
+	jwtVerifier       JWTVerifier // optional; when nil, mid-session auth.refresh is disabled
+	// sessions holds every token-authorized function WebSocket to its token's
+	// expiry and revocation. It is the gateway's one registry, the one its
+	// sweeper runs over.
+	sessions *wssession.Registry
+	// capabilities and capabilityRevocations check the capabilities a
+	// function's WebSocket may be opened with (feat-264). Set once at gateway
+	// start via SetCapabilities; nil refuses every capability.
+	capabilities          *capability.Authority
+	capabilityRevocations CapabilityRevocations
+	capabilitySockets     *socketCounter
+	audit                 *auth.AuditLog
+	logger                *zap.Logger
 }
 
 // NewServerlessHandlers creates a new ServerlessHandlers instance.
+//
+// audit records the deploy, delete and secret events; a nil one drops them,
+// which is the test case.
+//
+// sessions is the gateway's WebSocket session registry: every token-authorized
+// socket these handlers open is registered there, and the gateway's sweeper
+// closes the ones whose token expires or is revoked. It is required.
 //
 // engine, persistentMgr, and wsBridge may be nil — persistent-WS
 // functions then return 503 on upgrade, and bridged WS clients can't
@@ -49,26 +78,34 @@ func NewServerlessHandlers(
 	engine *serverless.Engine,
 	registry serverless.FunctionRegistry,
 	wsManager *serverless.WSManager,
+	sessions *wssession.Registry,
 	triggerStore *triggers.PubSubTriggerStore,
 	cronStore *triggers.CronTriggerStore,
 	dispatcher *triggers.PubSubDispatcher,
 	persistentMgr *persistent.Manager,
 	wsBridge *wsbridge.Bridge,
 	secretsManager serverless.SecretsManager,
+	audit *auth.AuditLog,
 	logger *zap.Logger,
 ) *ServerlessHandlers {
+	defaults := serverless.DefaultConfig()
 	return &ServerlessHandlers{
-		invoker:        invoker,
-		engine:         engine,
-		registry:       registry,
-		wsManager:      wsManager,
-		triggerStore:   triggerStore,
-		cronStore:      cronStore,
-		dispatcher:     dispatcher,
-		persistentMgr:  persistentMgr,
-		wsBridge:       wsBridge,
-		secretsManager: secretsManager,
-		logger:         logger,
+		maxMemoryLimitMB:  defaults.MaxMemoryLimitMB,
+		maxTimeoutSeconds: defaults.MaxTimeoutSeconds,
+		maxRetryCount:     defaults.MaxRetryCount,
+		invoker:           invoker,
+		engine:            engine,
+		registry:          registry,
+		wsManager:         wsManager,
+		triggerStore:      triggerStore,
+		cronStore:         cronStore,
+		dispatcher:        dispatcher,
+		persistentMgr:     persistentMgr,
+		wsBridge:          wsBridge,
+		secretsManager:    secretsManager,
+		sessions:          sessions,
+		audit:             audit,
+		logger:            logger,
 	}
 }
 
@@ -93,28 +130,6 @@ func (h *ServerlessHandlers) HealthStatus() map[string]interface{} {
 		"connections": stats.ConnectionCount,
 		"topics":      stats.TopicCount,
 	}
-}
-
-// getNamespaceFromRequest extracts namespace from JWT or query param.
-func (h *ServerlessHandlers) getNamespaceFromRequest(r *http.Request) string {
-	// Try context first (set by auth middleware) - most secure
-	if v := r.Context().Value(ctxkeys.NamespaceOverride); v != nil {
-		if ns, ok := v.(string); ok && ns != "" {
-			return ns
-		}
-	}
-
-	// Try query param as fallback (e.g. for public access or admin)
-	if ns := r.URL.Query().Get("namespace"); ns != "" {
-		return ns
-	}
-
-	// Try header as fallback
-	if ns := r.Header.Get("X-Namespace"); ns != "" {
-		return ns
-	}
-
-	return "default"
 }
 
 // getCallerClaimsFromRequest returns the JWT custom claims for the caller,
@@ -157,78 +172,123 @@ func (h *ServerlessHandlers) getJWTSubjectFromRequest(r *http.Request) string {
 	return strings.TrimSpace(claims.Sub)
 }
 
-// getJWTExpiryFromRequest returns the Bearer JWT's `exp` claim (unix seconds)
-// if the request was JWT-authenticated, or 0 otherwise (e.g. API-key auth, or
-// a token without an exp). Persistent WS connections capture this at upgrade
-// to enforce mid-session expiry — a long-lived socket must stop serving RPCs
-// once its authorizing token expires, unless refreshed via the #321
-// auth.refresh control frame. Bugboard #868.
-func (h *ServerlessHandlers) getJWTExpiryFromRequest(r *http.Request) int64 {
-	v := r.Context().Value(ctxkeys.JWT)
-	if v == nil {
-		return 0
+// getDeviceIDFromRequest returns the device the caller's session is bound to —
+// the verified token's `did` — or "" when there is none. This is the source of
+// truth for `get_caller_device_id` inside WASM, as getJWTSubjectFromRequest is
+// for the account.
+func (h *ServerlessHandlers) getDeviceIDFromRequest(r *http.Request) string {
+	claims, _ := r.Context().Value(ctxkeys.JWT).(*auth.JWTClaims)
+	if claims == nil {
+		return ""
 	}
-	claims, ok := v.(*auth.JWTClaims)
-	if !ok || claims == nil {
-		return 0
-	}
-	return claims.Exp
+	return strings.TrimSpace(claims.Did)
 }
 
-// getWalletFromRequest extracts wallet address from JWT.
-func (h *ServerlessHandlers) getWalletFromRequest(r *http.Request) string {
-	// Import strings package functions inline to avoid circular dependencies
-	trimSpace := func(s string) string {
-		start := 0
-		end := len(s)
-		for start < end && (s[start] == ' ' || s[start] == '\t' || s[start] == '\n' || s[start] == '\r') {
-			start++
-		}
-		for end > start && (s[end-1] == ' ' || s[end-1] == '\t' || s[end-1] == '\n' || s[end-1] == '\r') {
-			end--
-		}
-		return s[start:end]
-	}
+// getJWTClaimsFromRequest returns the verified token claims the request was
+// authorized with, or nil for an API key or no credential. A WebSocket is
+// registered with these, so it is held to the token's expiry and revocation
+// for as long as it is open.
+func (h *ServerlessHandlers) getJWTClaimsFromRequest(r *http.Request) *auth.JWTClaims {
+	claims, _ := r.Context().Value(ctxkeys.JWT).(*auth.JWTClaims)
+	return claims
+}
 
-	hasPrefix := func(s, prefix string) bool {
-		return len(s) >= len(prefix) && s[0:len(prefix)] == prefix
+// getCallerHasInvokeFromRequest reports whether the caller may invoke a
+// private function (bugboard #259). HTTP /invoke is a public path, so
+// scopeMiddleware never runs; this is the grant check.
+//
+// True for: admin, an API key (or exchanged JWT) that holds ScopeInvoke,
+// or a SIWE wallet JWT (non-ak_ subject). Storage-only API keys are false.
+func (h *ServerlessHandlers) getCallerHasInvokeFromRequest(r *http.Request) bool {
+	if h.getCallerIsAdminFromRequest(r) {
+		return true
 	}
+	ctx := r.Context()
+	if v := ctx.Value(ctxkeys.Scopes); v != nil {
+		if s, ok := v.(auth.ScopeSet); ok && s.Has(auth.ScopeInvoke) {
+			return true
+		}
+	}
+	if v := ctx.Value(ctxkeys.JWT); v != nil {
+		if claims, ok := v.(*auth.JWTClaims); ok && claims != nil {
+			sub := strings.TrimSpace(claims.Sub)
+			// A deployed app holds what its grant says now. Its token carries
+			// the scopes of the grant at the moment its unit started, and an
+			// app is started before its owner can grant it anything, so the
+			// claim is the one answer that is wrong for as long as the app
+			// has not renewed (docs/whitepaper/technical-reference/vol1/14-authorization.md, "A workload's identity").
+			if auth.IsWorkloadSubject(sub) {
+				grant, _ := ctx.Value(ctxkeys.Grant).(*auth.Grant)
+				return grant != nil && grant.Scopes().Has(auth.ScopeInvoke)
+			}
+			if auth.IsAPIKeySubject(sub) {
+				if claims.Custom != nil {
+					if raw := strings.TrimSpace(claims.Custom["scopes"]); raw != "" && auth.ParseScopes(raw).Has(auth.ScopeInvoke) {
+						return true
+					}
+				}
+				return false
+			}
+			if sub != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
 
-	contains := func(s, substr string) bool {
-		return len(s) >= len(substr) && func() bool {
-			for i := 0; i <= len(s)-len(substr); i++ {
-				if s[i:i+len(substr)] == substr {
+// getCallerIsAdminFromRequest reports whether the request holds the admin
+// grant used to invoke `internal: true` functions (bugboard #152).
+func (h *ServerlessHandlers) getCallerIsAdminFromRequest(r *http.Request) bool {
+	ctx := r.Context()
+	if v := ctx.Value(ctxkeys.Scopes); v != nil {
+		if s, ok := v.(auth.ScopeSet); ok && s.IsAdmin() {
+			return true
+		}
+	}
+	// An API-key-exchanged JWT (from /v1/auth/token) carries the key's scopes in
+	// a custom claim — the JWT-bearer auth path sets ctxkeys.JWT but NOT
+	// ctxkeys.Scopes — so an admin key used via exchange would otherwise be
+	// wrongly denied. Mirror Gateway.callerScopes: trust custom["scopes"] ONLY
+	// for an ak_ subject; a SIWE wallet JWT must never self-assert admin here.
+	// A workload is not a key: its token's scopes are the grant of the moment
+	// its unit started, so its admin answer is the grant resolved below, which
+	// a narrowed or revoked grant changes at once rather than at renewal.
+	if v := ctx.Value(ctxkeys.JWT); v != nil {
+		if claims, ok := v.(*auth.JWTClaims); ok && claims != nil {
+			sub := strings.TrimSpace(claims.Sub)
+			if auth.IsAPIKeySubject(sub) && !auth.IsWorkloadSubject(sub) && claims.Custom != nil {
+				if raw := strings.TrimSpace(claims.Custom["scopes"]); raw != "" && auth.ParseScopes(raw).IsAdmin() {
 					return true
 				}
 			}
-			return false
-		}()
-	}
-
-	toLower := func(s string) string {
-		result := make([]byte, len(s))
-		for i := 0; i < len(s); i++ {
-			c := s[i]
-			if c >= 'A' && c <= 'Z' {
-				result[i] = c + 32
-			} else {
-				result[i] = c
-			}
 		}
-		return string(result)
 	}
-
-	// 1. Try X-Wallet header (legacy/direct bypass)
-	if wallet := r.Header.Get("X-Wallet"); wallet != "" {
-		return wallet
+	// The grant the authorization middleware resolved for this namespace. It
+	// used to be a boolean meaning "owner confirmed", so every member of a
+	// namespace was an admin here; a runtime or reader member is not.
+	if grant, _ := ctx.Value(ctxkeys.Grant).(*auth.Grant); grant != nil {
+		return grant.Scopes().IsAdmin()
 	}
+	return false
+}
 
-	// 2. Try JWT claims from context
+// getWalletFromRequest resolves the caller identity for an invoke from
+// VERIFIED sources only: the JWT subject (a wallet), else the API-key-derived
+// namespace. It deliberately does NOT trust any client-supplied identity header
+// (bugboard #152): the invoke paths are public, so an unauthenticated caller
+// could otherwise set a header and impersonate any wallet — including the
+// namespace owner — defeating in-function admin gates.
+func (h *ServerlessHandlers) getWalletFromRequest(r *http.Request) string {
+	// Identity comes only from a VERIFIED JWT subject, else the API-key-derived
+	// namespace. A client-supplied X-Wallet header is NOT trusted (bugboard
+	// #152) — it let an unauthenticated caller impersonate any wallet on the
+	// public invoke paths.
 	if v := r.Context().Value(ctxkeys.JWT); v != nil {
 		if claims, ok := v.(*auth.JWTClaims); ok && claims != nil {
-			subj := trimSpace(claims.Sub)
+			subj := strings.TrimSpace(claims.Sub)
 			// Ensure it's not an API key (standard Orama logic)
-			if !hasPrefix(toLower(subj), "ak_") && !contains(subj, ":") {
+			if auth.IsWalletSubject(subj) {
 				return subj
 			}
 		}
@@ -242,4 +302,17 @@ func (h *ServerlessHandlers) getWalletFromRequest(r *http.Request) string {
 	}
 
 	return ""
+}
+
+// recordAudit records one control-plane event for this namespace: who deployed,
+// deleted, or changed a secret, and when. Invokes are not recorded — they are
+// the data plane, and one row per call would fill a replicated table.
+func (h *ServerlessHandlers) recordAudit(r *http.Request, namespace, action, resource string) {
+	h.audit.RecordFromRequest(r.Context(), r, auth.AuditEvent{
+		Namespace: namespace,
+		Actor:     auth.ActorFromRequest(r),
+		Action:    action,
+		Resource:  resource,
+		Result:    auth.AuditSuccess,
+	})
 }

@@ -1,0 +1,15 @@
+direction: right
+
+healthy: "healthy\nmissCount = 0"
+suspect: "suspect\nsuspectAt set"
+dead: "dead\nreportedDead = true"
+grace: "suspect, startup grace\nmissCount >= 12 in first 5 min\n(no event written)"
+
+healthy -> suspect: "3 consecutive misses\nwrite 'suspect', OnNodeSuspect"
+suspect -> dead: "12 consecutive misses,\nafter the grace period\nwrite 'dead', checkQuorum"
+suspect -> grace: "12th miss inside\nthe grace period"
+grace -> dead: "first miss after grace expires\nwrite 'dead', checkQuorum"
+grace -> healthy: "one good probe\nwrite 'recovered', OnNodeRecovered"
+suspect -> healthy: "one good probe\nwrite 'recovered', OnNodeRecovered"
+dead -> healthy: "one good probe\nwrite 'recovered', OnNodeRecovered"
+healthy -> healthy: "good probe, or fresh heartbeat\n(missCount = 0)"

@@ -1,0 +1,13 @@
+direction: down
+
+step: "Step (every 2 s; no wait while 500 blocks behind)" 
+range: "HeightRange: earliest, latest\nnext = cursor + 1"
+pruned: "next below earliest:\nErrPruned, indexer stops" {shape: oval}
+blk: "Block + BlockResults\nresult count must equal tx count"
+tx: "Per tx: decode envelope, events,\nbase fee, signer, JSON body"
+idx: "Write tx, latest list, hourly stats,\naccount tx list + summary\nfor every account address in an event attribute"
+cnft: "Successful x/cnft and x/market messages:\nfold into asset, owner, tree, listing, bid records"
+commit: "One synced Pebble batch:\nblock + all rows + cursor" {shape: oval}
+
+step -> range -> blk -> tx -> idx -> cnft -> commit
+range -> pruned: "gap"

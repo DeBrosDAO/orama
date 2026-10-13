@@ -1,0 +1,43 @@
+direction: down
+
+start: IndexSupervisor.EnsureRQLite
+state: readIndexStart:\nraft state? recovery peers.json?\nmembership record?
+fix: state held, record absent or torn:\nwrite a record now
+ident: ResolveRaftIdentity
+idrefuse: raft state held but no raft-node-id marker:\nrefuse to start
+
+start -> state
+state -> fix: hasState and no usable record
+fix -> ident
+state -> ident
+ident -> idrefuse: state, no marker
+
+rec: recovery peers.json waiting? {
+  shape: diamond
+}
+ident -> rec
+rec -> nojoin1: yes: no -join,\nrqlited reforms from the file
+nojoin1: start without -join
+
+hs: raft state held? {
+  shape: diamond
+}
+rec -> hs: no
+
+ac: recorded address differs\nfrom raft advertise address? {
+  shape: diamond
+}
+hs -> ac: yes
+ac -> nojoin2: no
+nojoin2: restart into the configuration it has,\nno -join
+ac -> rejoin: yes
+rejoin: join recorded members except itself\nand its old address (+ node.yaml join address);\nnone: refuse to start
+
+hs -> rc: no
+rc: membership record exists? {
+  shape: diamond
+}
+rc -> fresh: no
+fresh: join node.yaml address if any;\nelse bootstrap a new cluster (genesis)
+rc -> lost: yes
+lost: join recorded members + node.yaml address;\nnone: refuse, never bootstrap a second cluster

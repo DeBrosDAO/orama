@@ -6,7 +6,7 @@ Thanks for helping improve the network! This monorepo contains multiple projects
 
 | Package | Language | Build |
 |---------|----------|-------|
-| `core/` | Go 1.24+ | `make core-build` |
+| `core/` | Go 1.27.2+ | `make core-build` |
 | `website/` | TypeScript (pnpm) | `make website-build` |
 | `vault/` | Zig 0.14+ | `make vault-build` |
 | `os/` | Go + Buildroot | `make os-build` |
@@ -14,8 +14,8 @@ Thanks for helping improve the network! This monorepo contains multiple projects
 ## Setup
 
 ```bash
-git clone https://github.com/DeBrosOfficial/network.git
-cd network
+git clone https://github.com/Orama-Network/orama.git
+cd orama
 ```
 
 ### Core (Go)

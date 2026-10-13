@@ -1,0 +1,17 @@
+shape: sequence_diagram
+
+gw: gateway prepareSchema
+rq: index rqlite (leader)
+other: another gateway
+
+gw -> rq: WaitForLeader: SELECT 1 until it answers
+gw -> rq: ensure schema_migrations and cluster_locks
+gw -> rq: INSERT OR IGNORE lock row, then conditional UPDATE\nexpires_at 10 min
+other -> rq: conditional UPDATE (loses: holder is set)
+other -> other: poll every 2 s, up to 12 min
+gw -> rq: SELECT version FROM schema_migrations (inside the lock)
+gw -> rq: one transaction: statements + INSERT OR IGNORE tracker row
+rq -> gw: committed or nothing applied
+gw -> rq: release: UPDATE where holder is still me
+other -> rq: acquires, re-reads applied set, finds nothing pending
+gw -> rq: AssertSchema: MAX(version) >= required

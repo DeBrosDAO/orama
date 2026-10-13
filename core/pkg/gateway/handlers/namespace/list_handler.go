@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"go.uber.org/zap"
 )
@@ -30,34 +30,17 @@ func (h *ListHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get current namespace from auth context
-	ns := ""
-	if v := r.Context().Value(ctxkeys.NamespaceOverride); v != nil {
-		if s, ok := v.(string); ok {
-			ns = s
-		}
-	}
-	if ns == "" {
-		writeListResponse(w, http.StatusUnauthorized, map[string]interface{}{"error": "not authenticated"})
+	// The calling wallet's own namespaces. This used to list those of the
+	// current namespace's owner, so any admin member saw the owner's whole
+	// portfolio, and a session in the lobby (which nobody owns) listed nothing.
+	wallet := walletFromContext(r)
+	if wallet == "" {
+		writeListResponse(w, http.StatusUnauthorized, map[string]interface{}{
+			"error": "listing your namespaces requires a signed-in wallet",
+		})
 		return
 	}
-
-	// Look up the owner wallet from the current namespace
-	type ownerRow struct {
-		OwnerID string `db:"owner_id"`
-	}
-	var owners []ownerRow
-	if err := h.ormClient.Query(r.Context(), &owners,
-		`SELECT owner_id FROM namespace_ownership
-		 WHERE namespace_id = (SELECT id FROM namespaces WHERE name = ? LIMIT 1)
-		 LIMIT 1`, ns); err != nil || len(owners) == 0 {
-		h.logger.Warn("Failed to resolve namespace owner",
-			zap.String("namespace", ns), zap.Error(err))
-		writeListResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "failed to resolve namespace owner"})
-		return
-	}
-
-	ownerID := owners[0].OwnerID
+	ownerID := auth.NormalizeWallet(wallet)
 
 	// Query all namespaces owned by this wallet
 	type nsRow struct {
@@ -69,9 +52,10 @@ func (h *ListHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err := h.ormClient.Query(r.Context(), &namespaces,
 		`SELECT n.name, n.created_at, COALESCE(nc.status, 'none') as cluster_status
 		 FROM namespaces n
-		 JOIN namespace_ownership no2 ON no2.namespace_id = n.id
+		 JOIN grants g ON g.namespace_id = n.id AND g.role = 'owner' AND g.revoked_at IS NULL
+		 JOIN principals p ON p.id = g.principal_id
 		 LEFT JOIN namespace_clusters nc ON nc.namespace_id = n.id
-		 WHERE no2.owner_id = ?
+		 WHERE p.type = 'wallet' AND p.identifier = ?
 		 ORDER BY n.created_at DESC`, ownerID); err != nil {
 		h.logger.Error("Failed to list namespaces", zap.Error(err))
 		writeListResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "failed to list namespaces"})

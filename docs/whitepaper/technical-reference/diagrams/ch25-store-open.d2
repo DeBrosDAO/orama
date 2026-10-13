@@ -1,0 +1,30 @@
+direction: down
+
+boot: "Index gateway constructed\n(deps.SQLDB set, not a namespace gateway)"
+wait: "AwaitReady"
+keys: "KeysFromClusterSecret" {shape: diamond}
+closed1: "store stays closed (503)\nerror logged" 
+marker: "data/tls/.legacy-imported exists?" {shape: diamond}
+imp: "ImportLegacy: seal certificates/ and acme/\nfrom /var/lib/caddy/caddy,\none statement per directory,\nonly where the store holds nothing"
+fail: "log error, retry every 1 min\nstore keeps answering 503"
+write: "write marker (0600)"
+open: "tlsStoreReady = true\nstore answers Caddy"
+base: "BaseDomain set?" {shape: diamond}
+done: "no export"
+loop: "every 1 min: Exporter.Export"
+caddy: "Caddy Provision: stat certificates\nevery 2 s for up to 2 min" 
+exit: "Provision fails, Caddy exits,\nsystemd restarts it after 5 s"
+
+boot -> wait -> keys
+keys -> closed1: "error"
+keys -> marker: "ok"
+marker -> open: "yes"
+marker -> imp: "no"
+imp -> fail: "error"
+fail -> imp
+imp -> write: "ok"
+write -> open
+open -> base
+base -> done: "no"
+base -> loop: "yes"
+caddy -> exit: "no answer in 2 min,\nor 404 (key refused)"

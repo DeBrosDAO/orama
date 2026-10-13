@@ -1,0 +1,47 @@
+direction: right
+
+inet: "Internet" {
+  client: "Client (HTTPS :443, HTTP :80)"
+  le: "ACME CA\n(Let's Encrypt production by default)"
+}
+
+node: "Every node" {
+  caddy: "orama-namespace-caddy@index\nCaddy 2.11.4, h1 only" {
+    cm: "CertMagic"
+    prov: "dns.providers.orama"
+    stor: "caddy.storage.orama\n(seals values)"
+    cm -> prov: "DNS-01 present / cleanup"
+    cm -> stor: "load / store / lock"
+  }
+  gw: "Index gateway :10104" {
+    acme: "/v1/internal/acme/*\nMAC under ACME key"
+    store: "/v1/internal/tls-store\ncoordination v2 stamp, loopback only"
+    exp: "tlsstore.Exporter\nevery 1 min"
+  }
+  turn: "Host TURN server\n(TURNS listener)"
+  files: "data/tls/wildcard.crt + .key\norama 0600" {shape: cylinder}
+  keys: "/etc/caddy/orama-acme.key\n/etc/caddy/orama-tls-store.key\nroot:orama 0640" {shape: cylinder}
+}
+
+reg: "Index RQLite (cluster registry)" {
+  ts: "tls_store" {shape: cylinder}
+  tl: "tls_locks" {shape: cylinder}
+  dr: "dns_records (TXT, namespace acme)" {shape: cylinder}
+}
+
+dns: "CoreDNS on nameserver nodes\nreads dns_records"
+
+inet.client -> node.caddy: "TLS handshake, SNI"
+node.caddy -> node.gw: "reverse_proxy localhost:10104"
+node.caddy.prov -> node.gw.acme: "HTTP POST (MAC v1 header, body hash)"
+node.caddy.stor -> node.gw.store: "HTTP POST (MAC V2 + nonce)"
+node.gw.acme -> reg.dr: "INSERT / DELETE TXT"
+node.gw.store -> reg.ts: "sealed values"
+node.gw.store -> reg.tl: "lease rows"
+reg.dr -> dns
+inet.le -> dns: "TXT _acme-challenge.<name>"
+node.caddy.cm -> inet.le: "ACME order"
+node.keys -> node.caddy: "read at provision"
+reg.ts -> node.gw.exp: "newest *.<base> pair, opened"
+node.gw.exp -> node.files
+node.files -> node.turn: "mtime poll 60 s"

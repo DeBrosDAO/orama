@@ -1,0 +1,4 @@
+name: guestbook
+public: true
+memory: 32
+timeout: 15

@@ -1,0 +1,11 @@
+direction: right
+
+closed: "closed\nAllow() true"
+open: "open\nAllow() false (fast-fail)"
+half: "half-open\none probe admitted"
+
+closed -> closed: "RecordSuccess: failures = 0"
+closed -> open: "5 failures\n(RecordFailure)"
+open -> half: "Allow() after 30 s"
+half -> closed: "RecordSuccess"
+half -> open: "RecordFailure, or probe silent for 30 s"

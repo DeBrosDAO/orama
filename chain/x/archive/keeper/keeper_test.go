@@ -1,0 +1,211 @@
+package keeper_test
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"testing"
+	"time"
+
+	cmtproto "github.com/cometbft/cometbft/proto/tendermint/types"
+	"github.com/stretchr/testify/require"
+
+	"github.com/cosmos/cosmos-sdk/codec"
+	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
+	"github.com/cosmos/cosmos-sdk/runtime"
+	storetypes "github.com/cosmos/cosmos-sdk/store/v2/types"
+	"github.com/cosmos/cosmos-sdk/testutil"
+	sdk "github.com/cosmos/cosmos-sdk/types"
+
+	"github.com/DeBrosOfficial/network/chain/x/archive/keeper"
+	"github.com/DeBrosOfficial/network/chain/x/archive/types"
+)
+
+// testRangeBlocks is the range width the tests' genesis sets: the ranges the tests attest are
+// 1-50, 51-100 and so on.
+const testRangeBlocks int64 = 50
+
+type testFixture struct {
+	Ctx     sdk.Context
+	Keeper  keeper.Keeper
+	Msg     types.MsgServer
+	Query   types.QueryServer
+	Nodes   *fakeNodes
+	Storage *fakeStorage
+}
+
+// fakeNodes: node "node-N" has hot key acc(N) and operator opOf(N), unless
+// operator overrides it. A node listed in inactive has no ARCHIVER role.
+type fakeNodes struct {
+	operator map[string]string
+	inactive map[string]bool
+}
+
+func nodeOf(n byte) string { return fmt.Sprintf("node-%d", n) }
+
+func (f *fakeNodes) ArchiverOperator(_ context.Context, nodeID, signer string) (string, error) {
+	var n byte
+	if _, err := fmt.Sscanf(nodeID, "node-%d", &n); err != nil {
+		return "", fmt.Errorf("node %q is not registered", nodeID)
+	}
+	if f.inactive[nodeID] {
+		return "", fmt.Errorf("node %s has no active ARCHIVER role", nodeID)
+	}
+	if acc(n).String() != signer {
+		return "", fmt.Errorf("%s is not the hot key of node %s", signer, nodeID)
+	}
+	if op, ok := f.operator[nodeID]; ok {
+		return op, nil
+	}
+	return opOf(n), nil
+}
+
+// ArchiverActive: a node is active when it is numbered and not listed in inactive.
+func (f *fakeNodes) ArchiverActive(_ context.Context, nodeID string) (bool, error) {
+	var n byte
+	if _, err := fmt.Sscanf(nodeID, "node-%d", &n); err != nil {
+		return false, nil
+	}
+	return !f.inactive[nodeID], nil
+}
+
+// opOf is node-N's default operator account.
+func opOf(n byte) string { return acc(n + 100).String() }
+
+// fakeStorage: every deal id is an active ARCHIVE deal except 10 and the ones marked ended. A
+// deal opened through CreateArchiveDeal is numbered from firstOpened, is OPEN (live, not active)
+// until activate is called, and its request is kept in opened.
+type fakeStorage struct {
+	ended  map[uint64]bool
+	open   map[uint64]bool
+	next   uint64
+	opened []openedDeal
+}
+
+type openedDeal struct {
+	ID       uint64
+	Root     []byte
+	Bytes    uint64
+	Duration uint64
+}
+
+const firstOpened uint64 = 500
+
+func (s *fakeStorage) ArchiveDealActive(_ context.Context, id uint64) (bool, error) {
+	return id != 10 && !s.ended[id] && !s.open[id], nil
+}
+
+func (s *fakeStorage) ArchiveDealLive(_ context.Context, id uint64) (bool, error) {
+	return id != 10 && !s.ended[id], nil
+}
+
+func (s *fakeStorage) CreateArchiveDeal(_ context.Context, root []byte, _, _, pieceBytes, duration uint64) (uint64, error) {
+	id := firstOpened + s.next
+	s.next++
+	s.open[id] = true
+	s.opened = append(s.opened, openedDeal{ID: id, Root: root, Bytes: pieceBytes, Duration: duration})
+	return id, nil
+}
+
+// activate gives an OPEN deal its first provider.
+func (s *fakeStorage) activate(ids ...uint64) {
+	for _, id := range ids {
+		delete(s.open, id)
+	}
+}
+
+func newTestFixture(t *testing.T) *testFixture {
+	t.Helper()
+
+	key := storetypes.NewKVStoreKey(types.StoreKey)
+	tkey := storetypes.NewTransientStoreKey("transient_test")
+	testCtx := testutil.DefaultContextWithDB(t, key, tkey)
+	ctx := testCtx.Ctx.WithBlockHeader(cmtproto.Header{
+		Height: 1_000_000,
+		Time:   time.Unix(1_700_000_000, 0),
+	}).WithBlockHeight(1_000_000)
+
+	interfaceRegistry := codectypes.NewInterfaceRegistry()
+	types.RegisterInterfaces(interfaceRegistry)
+	cdc := codec.NewProtoCodec(interfaceRegistry)
+	nodes := &fakeNodes{operator: map[string]string{}, inactive: map[string]bool{}}
+	storage := &fakeStorage{ended: map[uint64]bool{}, open: map[uint64]bool{}}
+	k := keeper.NewKeeper(cdc, runtime.NewKVStoreService(key), nodes, storage)
+
+	return &testFixture{
+		Ctx:     ctx,
+		Keeper:  k,
+		Msg:     keeper.NewMsgServerImpl(k),
+		Query:   keeper.NewQueryServerImpl(k),
+		Nodes:   nodes,
+		Storage: storage,
+	}
+}
+
+func (f *testFixture) initGenesis(t *testing.T, mutate func(*types.GenesisState)) {
+	t.Helper()
+	gs := types.DefaultGenesisState()
+	gs.Params.RangeBlocks = testRangeBlocks
+	if mutate != nil {
+		mutate(gs)
+	}
+	require.NoError(t, f.Keeper.InitGenesis(f.Ctx, *gs))
+}
+
+func acc(n byte) sdk.AccAddress {
+	return sdk.AccAddress(bytes.Repeat([]byte{n}, 20))
+}
+
+func digest(b byte) []byte {
+	return bytes.Repeat([]byte{b}, types.HashLen)
+}
+
+func (f *testFixture) attest(t *testing.T, signer byte, start, end int64, cid string, bundle, root []byte) *types.MsgAttestResponse {
+	t.Helper()
+	res, err := f.Msg.Attest(f.Ctx, withPiece(&types.MsgAttest{
+		Archiver:    acc(signer).String(),
+		NodeId:      nodeOf(signer),
+		StartHeight: start,
+		EndHeight:   end,
+		BundleCid:   cid,
+		BundleHash:  bundle,
+		MerkleRoot:  root,
+	}))
+	require.NoError(t, err)
+	return res
+}
+
+func (f *testFixture) attach(t *testing.T, signer byte, start, end int64, dealIDs ...string) *types.MsgAttachReplicasResponse {
+	t.Helper()
+	res, err := f.Msg.AttachReplicas(f.Ctx, &types.MsgAttachReplicas{
+		Archiver:    acc(signer).String(),
+		NodeId:      nodeOf(signer),
+		StartHeight: start,
+		EndHeight:   end,
+		DealIds:     dealIDs,
+	})
+	require.NoError(t, err)
+	return res
+}
+
+// withPiece gives an attestation the piece commitment every test range shares.
+func withPiece(m *types.MsgAttest) *types.MsgAttest {
+	m.PieceRoot, m.RealLeafCount, m.PaddedLeafCount, m.PieceBytes = digest(7), 3, 4, 3000
+	return m
+}
+
+// attestQuorum has three operators attest the same range, the quorum that lets deals be opened.
+func (f *testFixture) attestQuorum(t *testing.T, start, end int64, cid string, bundle, root []byte) {
+	t.Helper()
+	for n := byte(1); n <= 3; n++ {
+		f.attest(t, n, start, end, cid, bundle, root)
+	}
+}
+
+// attestBy has each of the signers attest the same range and tuple.
+func (f *testFixture) attestBy(t *testing.T, signers []byte, start, end int64, cid string, bundle, root []byte) {
+	t.Helper()
+	for _, n := range signers {
+		f.attest(t, n, start, end, cid, bundle, root)
+	}
+}

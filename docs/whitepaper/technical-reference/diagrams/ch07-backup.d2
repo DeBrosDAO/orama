@@ -1,0 +1,18 @@
+direction: right
+
+loop: backup loop\ninterval from node.yaml: 24h
+leader: leader?
+skip: follower: skip silently
+dl: GET /db/backup\n(2 min budget)
+disk: backups/rqlite/\nrqlite-backup-TIMESTAMP.db\nmode 0600
+push: pushBackupOffBox (5 min budget):\nseal AES-256-GCM, IPFS add,\npin RF 3, row in rqlite_backups
+unwired: no uploader or key is ever\nsupplied by the node:\npush returns an error, logged
+prune: backupsToKeep:\n24 newest + first of each of\nthe last 7 days
+
+loop -> leader
+leader -> skip: no
+leader -> dl: yes
+dl -> disk
+disk -> push
+push -> unwired: today
+disk -> prune

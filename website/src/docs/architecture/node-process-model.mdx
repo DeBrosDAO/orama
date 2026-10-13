@@ -1,0 +1,76 @@
+# Node process model
+
+What runs on a node, in what order, and what happens when things fail. This is the page to read before you operate a node, or before you wonder why a restart did not do what you expected.
+
+## One host unit, many template instances
+
+Install enables **two** systemd units: `orama-node.service` and `orama-namespace-wireguard@index.service`. `orama-node` is a **supervisor**: it does not embed the HTTP gateway or exec `rqlited`. On start it brings up everything else as instances of `orama-namespace-<driver>@<instance>` templates.
+
+| Plane | Membership | Units |
+|---|---|---|
+| **index** | Every node | `orama-namespace-{wireguard,ipfs,ipfs-cluster,ipfs-gc,rqlite,olric,pubsub,gateway,vault,caddy,ntfy,tor}@index`, and optionally `sni-router@index` |
+| **nameserver** | This node, if installed with `--nameserver` | `orama-namespace-coredns@nameserver` |
+| **tenant** | The N members chosen when a namespace is created | `orama-namespace-{rqlite,olric,gateway}@<name>`, plus `sfu` and `turn` if WebRTC is on |
+
+Reserved instance names `index` and `nameserver` are not tenant-provisionable. Drive nodes through `orama node …`, not `systemctl`.
+
+**The overlay is not a child of the supervisor.** The mesh comes up at boot on its own, so a node whose supervisor cannot start (a bad `node.yaml`, a failed validation, a missing binary) is still reachable on `10.0.0.x` for diagnosis. The WireGuard unit is deliberately not `PartOf=orama-node.service` and its stop is a no-op, so `orama node restart` does not tear `wg0` down and sever every namespace's Raft and Olric. Every unit that reaches across the overlay is ordered after it, so a cold boot cannot start Olric or the SFU against an address that does not exist yet. The distribution's `wg-quick@wg0` unit stays on disk, disabled, and must not be started.
+
+**Unit dependencies express ordering, not lifecycle.** `Requires=` propagates stop and restart, so it is reserved for the two cases where one unit is useless without another (`ipfs-cluster@` and `ipfs-gc@` on `ipfs@`). Everything else is `Wants=` plus `After=`. In particular the gateway does not `Require` RQLite or Olric: restarting a namespace's RQLite (which split-brain recovery does) must not bounce the gateway with it. The gateway waits for RQLite itself (90 s, then exits and is restarted) and reconnects to Olric in the background, with its cache endpoints answering 503 meanwhile. Olric never reads the database, so it has no RQLite dependency at all.
+
+**Restart policy.** Every long-running unit uses `Restart=always`, `RestartSec=5s` and `StartLimitIntervalSec=0`: `on-failure` leaves a daemon down after a clean exit nobody asked for, and a start limit would turn a transient failure into one that needs a human. `orama status` reads the restart counter instead and raises a critical alert for a unit that has restarted repeatedly and never reached active.
+
+## Boot: components, not a sequence
+
+`orama-node` converges its services; it does not start them in a line. Every piece of start-up is a **component** with declared dependencies, and the supervisor runs each one whose dependencies are ready, retrying failures with exponential backoff (1 s up to 60 s) instead of exiting.
+
+| Tier | Components | Needs |
+|---|---|---|
+| **local** | data directory, WireGuard, libp2p, peer info, monitoring, pub/sub, IPFS Cluster config, storage, storage watch, cluster discovery, local RQLite, nameserver, gateway, edge serving, edge aux, WireGuard sync, IPFS swarm sync | This machine only |
+| **cluster** | cluster RQLite, membership, membership record, DNS registration | A Raft quorum |
+
+That split is what lets a node that boots with every peer down still bring up WireGuard, IPFS, the local RQLite replica, CoreDNS, the index gateway, Caddy, ntfy and its tenants. It announces itself **degraded** rather than active, and goes active on its own when quorum returns, with no restart, because nothing exited. A degraded node is *serving*: it is not taken out of rotation.
+
+Details worth knowing:
+
+- **`edge-serving`** is vault, the optional SNI router and Caddy; **`edge-aux`** is ntfy and Tor. They are separate because DNS registration depends on the first and not the second: a `dns_nodes` row saying `active` is a promise that this node terminates TLS and proxies tenants, so a node whose Caddy never started must not advertise itself, while a broken ntfy must not take a healthy node out of DNS.
+- **The promise holds at runtime.** Every 30-second DNS heartbeat checks Caddy. Once two heartbeats in a row find it inactive, the node removes its own A records from the base names and every `ns-<name>` round-robin (never the last record of a name) and keeps heartbeating.
+- **The `dns_nodes` row** is written by the index gateway on the host, not by the node process: the node POSTs to `/v1/internal/node/register` and `/heartbeat` stamped with an Ed25519 signature naming which node it is. See [Secrets and keys](/docs/architecture/secrets-and-keys#node-identity).
+- **Two health checks**, polled every 30 s: `rqlite-local` (the local `rqlited` answers `/status`; it does not require a leader) and `rqlite-cluster` (a leader-routed read succeeds; this is the single component that waits for consensus).
+- **Storage watch** keeps the IPFS daemon, cluster peer and GC timer up; stop the node with `orama node stop` to keep storage down.
+
+## Lifecycle states
+
+`joining` then `active` and `degraded` (a serving state), with `draining` and `maintenance` driven by operators and never overridden by the supervisor. A cluster node leaves `joining` once its serving core, local RQLite and the gateway, is up. Read the state from the node's log: `sudo orama node logs node --since -1h | grep "Node lifecycle state changed"` (it also lists components that have not converged).
+
+`orama-node.service` has `StartLimitIntervalSec=0` and `TimeoutStopSec=60`; the stop sequence announces maintenance, waits up to 10 s for the supervisor, tears down and hands Raft leadership over.
+
+## Gateway readiness
+
+A gateway reports its own start-up state on `/health` and `/v1/health`, separately from the health of what it talks to.
+
+| State | Meaning | HTTP |
+|---|---|---|
+| `starting` | Listening, but the database schema is not yet at the version this binary requires (almost always because the local RQLite has no leader), or start-up work that gates on the schema has not finished. Retried with backoff for as long as the process lives | 503 |
+| `ready` | Schema at the required version, gating work done | 200 |
+| `blocked` | A leader answered and the schema is genuinely *below* what the binary requires. Retrying cannot fix it: migrate the database or roll the binary back | 503 |
+
+While not `ready` the gateway refuses everything except a short passthrough list (`/health`, `/v1/health`, `/status`, `/v1/status`, `/v1/version`, `/v1/internal/ping`, `/v1/internal/tls/check` and the ACME challenge path), with `503 {"status":"starting","reason":…}` and a stable reason code (`initializing`, `schema`, `post-schema`, `schema-version`) rather than the error behind it. The refusal is issued inside the CORS middleware so a browser client can read the reason. Publishing the signing key and the API-key migrations gate readiness, so no token is minted that other gateways would refuse. Only a genuine version mismatch is `blocked`; a failure to read the migration tracker stays retryable.
+
+The node's namespace-health probe asks each local gateway's `/v1/health` on the WireGuard address, so a gateway that is up but `starting` is withdrawn from the `ns-<name>` DNS round-robin.
+
+## Reconcilers
+
+A tenant reconciler on every node converges that node's namespace services every 60 seconds: it restarts missing services, rewrites configurations that no longer match cluster membership (Olric peers, gateway `olric_servers`), and one elected member per namespace prunes departed members. See [Replace a node](/docs/operator/node-replacement) and [Monitoring](/docs/operator/monitoring#in-cluster-failure-detection-the-ring-monitor).
+
+### One lock per namespace
+
+On one node, every path that starts or stops a namespace's units takes that namespace's lock and decides under it: a teardown, the reconciler's restore, the boot-time restore from local state, the WebRTC sweeps and every spawn. The write of a namespace's saved cluster state (the file a boot restores it from) is admitted like a spawn, so a late save cannot bring a deleted namespace back at boot. A spawn reads the namespace's cluster from the registry under the lock and is refused with 409 when the namespace is being deleted or gone, so a delete that races a slow provisioning cannot be followed by units started into the teardown. A spawn also names its cluster (`cluster_id`) and is refused with 409 (`ErrClusterMismatch`) when that is not the namespace's current cluster, which stops the provisioner of a deleted and re-created namespace from starting units into the new one. The wait for the lock is bounded at three minutes, so a holder stuck on a hung `systemctl` call cannot stall every operation on the namespace. During a rolling upgrade a spawn request without `cluster_id` is checked for deletion only.
+
+## DNS degrades rather than failing
+
+The CoreDNS RQLite plugin serves stale answers when the backend is unreachable: an entry stays usable for 24 hours past its TTL and is returned with a 30-second TTL so a resolver comes back promptly. A negative answer is cached for 30 seconds and never served stale. A name that exists but has no record of the type asked (an AAAA query for a name that only has A records) answers NODATA, not NXDOMAIN, so a resolver does not conclude the name is gone; a name exists when it owns a record, has names below it, or the nearest wildcard covers it, and a name that owns a record or has names below it is never covered by a wildcard. A negative answer costs three indexed database queries however deep the name is (which names have names below them is held in memory), and a failed query is SERVFAIL, never a guessed NXDOMAIN. Without this, an index RQLite with no leader would take every name in the fleet offline, including the names an operator needs to reach the machines and fix it.
+
+## A one-node and two-node fleet
+
+A one-node fleet provisions single-node namespaces (evaluation). A two-node fleet is refused. A larger fleet still provisions tenants at three, not at fleet size. WebRTC requires three members. See [One-VPS evaluation](/docs/operator/one-vps).

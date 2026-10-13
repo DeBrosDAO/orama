@@ -247,9 +247,9 @@ func TestValidateSwarmKey(t *testing.T) {
 
 func TestExtractTCPPort(t *testing.T) {
 	tests := []struct {
-		name     string
+		name      string
 		multiaddr string
-		want     string
+		want      string
 	}{
 		{
 			"valid multiaddr with tcp port",

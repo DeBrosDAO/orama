@@ -12,7 +12,7 @@ type IdentityRateLimiter struct {
 	pullBuckets sync.Map // identity -> *tokenBucket
 	pushRate    float64  // tokens per second
 	pushBurst   int
-	pullRate    float64  // tokens per second
+	pullRate    float64 // tokens per second
 	pullBurst   int
 	stopCh      chan struct{}
 }

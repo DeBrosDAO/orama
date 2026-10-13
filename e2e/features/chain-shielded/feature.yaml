@@ -1,0 +1,59 @@
+# Stage 8: x/shielded on the live run chain (docs/whitepaper/technical-reference/vol2/43-the-shielded-pool.md "x/shielded: the
+# Ironwood shielded pool"). The run's oramad is built with CGO_ENABLED=0 and
+# no verifier binary (e2e/scripts/chain-deploy.sh), and the run chain holds no
+# bank balance, so no bundle can be accepted: the tests drive every message
+# with structurally canonical bundles (zeros for the proof, random notes) and
+# assert each refusal the chain gives before, and instead of, a proof check:
+# framing, value-balance sign, unshield target, fee floor, duplicate
+# nullifier, transaction shape (signed shielded message alone in its tx,
+# signer-less transfer with the protocol signer, no memo, no fee), and the
+# refusal of a well-formed bundle at the anchor gate (Admit checks the anchor
+# before any verifier; the run's build cannot even hash the tree). The
+# verifiers are not reached. After each
+# step the pool, the note tree and the nullifier set are unchanged and every
+# module's Invariants query holds on every validator. The queries Params,
+# Pools, TreeState, NullifierSpent and Invariants are read through abci_query.
+# Shielding is optional: a public bank send and MsgWithdrawEarnings need no pool
+# (features/chain-core, chain-transfers), and the CLI and SDK are private unless
+# told --public / public: true. The success paths (a wallet-built scenario:
+# shield, shield from earnings, transfer, unshield, as chain/scripts/stagenet
+# gen-shielded builds it) need a run chain built with the Orchard library and the pinned verifier binary.
+# realproof_test.go puts real Halo 2 proofs on the chain: a committed vector, a valid bundle for
+# another chain id, is refused (its signatures commit to the chain id), the same with a flipped
+# proof bit is refused, and the wallet crate's scenario for the run's own chain id (two shields
+# from earnings, a signer-less transfer, an unshield) is accepted by both verifiers on every
+# validator. On a run chain without the library and the verifier binary (chain-deploy.sh today)
+# both tests stop at the anchor gate and report not applicable, so the success path is not
+# covered there; the success path also needs a Rust toolchain on the runner and an empty note
+# tree.
+id: chain-shielded
+title: Shielded pool refusals, the anchor gate and queries
+area: chain
+subtasks: []
+stage: 8
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: true
+covers:
+  msgs:
+    - orama.shielded.v1.MsgShield
+    - orama.shielded.v1.MsgShieldEarnings
+    - orama.shielded.v1.MsgShieldedTransfer
+    - orama.shielded.v1.MsgUnshield
+  queries:
+    - orama.shielded.v1.Params
+    - orama.shielded.v1.Pools
+    - orama.shielded.v1.TreeState
+    - orama.shielded.v1.NullifierSpent
+    - orama.shielded.v1.Invariants
+  claims:
+    - "docs/whitepaper/technical-reference/vol2/43-the-shielded-pool.md#admission: a bundle needs the right value-balance sign for its message, a canonical framing and at most max_actions_per_bundle actions"
+    - "docs/whitepaper/technical-reference/vol2/43-the-shielded-pool.md#admission: a shielded message is the only message in its tx; a signer-less transfer carries no signature, no fee and no memo and names the protocol signer"
+    - "docs/whitepaper/technical-reference/vol2/43-the-shielded-pool.md#admission: an unshield goes only to a target its signer owns; deposit and contract targets are not linked"
+    - "docs/whitepaper/technical-reference/vol2/43-the-shielded-pool.md#admission: a transfer's value balance is its fee and covers the base fee of its gas and the nullifier fee of every action"
+    - "docs/whitepaper/technical-reference/vol2/43-the-shielded-pool.md#execution: a bundle whose anchor is not one of the tree's is refused before any proof is checked, and a node that cannot hash the tree accepts none; the pool, the tree and the nullifier set stay untouched"
+    - "docs/whitepaper/technical-reference/vol2/39-chain-architecture.md: the module account equals the pools plus the queue, no pool is negative, the nullifier database folds to the accumulator"
+    - "docs/whitepaper/technical-reference/vol2/43-the-shielded-pool.md#the-two-verifiers: a bundle with a valid Halo 2 proof built for another chain id is refused by the verifiers (the signatures commit to the chain id), and so is the same bundle with a flipped proof bit; the pool, the note tree and the nullifier set stay untouched (applicable only where the validators run both verifiers)"
+    - "docs/whitepaper/technical-reference/vol2/43-the-shielded-pool.md#execution: orama.shielded.v1.MsgShieldEarnings, orama.shielded.v1.MsgShieldedTransfer and orama.shielded.v1.MsgUnshield with wallet-built real proofs are accepted by both verifiers on every validator, the note tree grows by each bundle's commitments and the nullifier set by its nullifiers, and every module's invariants hold (applicable only where the validators run both verifiers, with a Rust toolchain on the runner and an empty note tree; MsgShield from the bank balance is covered by the refusal paths and chain/app's real-verifier tests)"

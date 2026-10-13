@@ -19,10 +19,10 @@ func TestDispatchLocalWildcards_noDispatcherIsNoOp(t *testing.T) {
 	// before the setter fires), publishing must NOT crash. The wildcard
 	// dispatch path silently no-ops.
 	h := &HostFunctions{}
-	h.SetInvocationContext(&serverless.InvocationContext{Namespace: "ns"})
+	invCtx := invocationCtx(&serverless.InvocationContext{Namespace: "ns"})
 	// Should not panic. No dispatcher, so we don't reach the dispatcher's
 	// DispatchLocalPublish (which would itself panic on nil store).
-	h.dispatchLocalWildcards(context.Background(), "presence:user-1", []byte("data"))
+	h.dispatchLocalWildcards(invCtx, "presence:user-1", []byte("data"))
 }
 
 func TestDispatchLocalWildcards_noNamespaceIsNoOp(t *testing.T) {
@@ -128,7 +128,7 @@ func TestFunctionInvoke_propagatesTriggerDepth(t *testing.T) {
 	// would never hit the depth bound. Pin this by spying on the
 	// InvokeRequest the host fn would construct.
 	h := &HostFunctions{}
-	h.SetInvocationContext(&serverless.InvocationContext{
+	invCtx := invocationCtx(&serverless.InvocationContext{
 		Namespace:    "ns",
 		TriggerDepth: 4, // one hop from maxTriggerDepth
 	})
@@ -137,7 +137,7 @@ func TestFunctionInvoke_propagatesTriggerDepth(t *testing.T) {
 		captured = req
 	}})
 
-	_, _ = h.FunctionInvoke(context.Background(), "inner-fn", []byte("payload"))
+	_, _ = h.FunctionInvoke(invCtx, "inner-fn", []byte("payload"))
 	if captured == nil {
 		t.Fatal("invoker was not called; can't verify TriggerDepth propagation")
 	}
@@ -174,11 +174,11 @@ func TestDispatchLocalWildcards_readsInvCtxTriggerDepth(t *testing.T) {
 	// interface), but we can pin the invocation-context shape so a
 	// future refactor that drops the TriggerDepth field gets caught.
 	h := &HostFunctions{}
-	h.SetInvocationContext(&serverless.InvocationContext{
+	invCtx := invocationCtx(&serverless.InvocationContext{
 		Namespace:    "ns",
 		TriggerDepth: 3,
 	})
-	cur := h.currentInvocationContext(context.Background())
+	cur := h.currentInvocationContext(invCtx)
 	if cur == nil {
 		t.Fatal("invocation context unexpectedly nil")
 	}
@@ -187,5 +187,5 @@ func TestDispatchLocalWildcards_readsInvCtxTriggerDepth(t *testing.T) {
 			"(if this fails, the audit C6 fix's data path is broken)", cur.TriggerDepth)
 	}
 	// And the no-dispatcher no-op stays nil-safe regardless of depth.
-	h.dispatchLocalWildcards(context.Background(), "x:y", []byte("d"))
+	h.dispatchLocalWildcards(invCtx, "x:y", []byte("d"))
 }

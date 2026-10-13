@@ -1,0 +1,27 @@
+[package]
+name = "orama-orchard-verifier"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+publish = false
+description = "Out-of-process Ironwood bundle verifier for the Orama chain: the second verifier of x/shielded (C12a). Nodes never prove."
+
+[[bin]]
+name = "orama-orchard-verifier"
+path = "src/main.rs"
+
+[lib]
+name = "orama_orchard_verifier"
+path = "src/lib.rs"
+
+[dependencies]
+# Upstream Zcash Orchard with the Ironwood pool, pinned here on its own: this crate has its own
+# Cargo.lock and shares no source with x/shielded/orchardffi. No fork, no ZSA.
+orchard = { version = "=0.15.5", features = ["circuit"] }
+zcash_primitives = { version = "=0.30.1", default-features = false, features = ["std"] }
+zcash_protocol = "=0.10.6"
+
+[profile.release]
+# A panic must not unwind out of a request: it is caught and answered, or the process dies and
+# the node restarts it. Either way the bundle is rejected.
+panic = "unwind"

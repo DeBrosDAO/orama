@@ -231,6 +231,13 @@ main() {
     
     CURRENT_BRANCH=$(check_current_branch)
     log "Current branch: $CURRENT_BRANCH"
+
+    # A release that declares a governed chain upgrade plan must carry its handler.
+    log "Checking the release's chain upgrade plan..."
+    if ! make -C "$(dirname "$0")/../../chain" upgrade-check; then
+        error "chain/app/upgrades/CURRENT declares a plan with no registered handler (or the registry is invalid). Fix it before releasing."
+        exit 1
+    fi
     
     # Get release type
     release_type=$(prompt_release_type)

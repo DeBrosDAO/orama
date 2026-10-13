@@ -1,0 +1,26 @@
+direction: down
+
+start: "CertMagic calls Storage.Store(key, value)"
+seal: "Seal: AES-256-GCM, 12-byte random nonce\nAAD = 'orama-tls-store-v1\\n' + key\nvalue = 'v1.' + base64(nonce + ciphertext)"
+sign: "signV2: random 16-byte nonce\nMAC = HMAC-SHA256(mac key, version, method,\naudience caddy-tls-store, path, query,\nSHA-256(body), nonce, ts)"
+post: "POST http://localhost:10104/v1/internal/tls-store"
+loop: "fromLoopback?\nnot a namespace gateway?" {shape: diamond}
+stamp: "valid v2 stamp,\nwithin 60 s, nonce unseen?" {shape: diamond}
+ready: "tlsStoreReady?" {shape: diamond}
+check: "op known, key valid,\nvalue sealed and at most 256 KiB,\nholder / lease in range?" {shape: diamond}
+run: "tlsstore.Store: one SQL statement\nthrough Raft on the index RQLite"
+r404: "404 (route does not confirm it exists)"
+r503: "503 (store not open yet)"
+r400: "400"
+r200: "200 JSON"
+
+start -> seal -> sign -> post -> loop
+loop -> r404: "no"
+loop -> stamp: "yes"
+stamp -> r404: "no"
+stamp -> ready: "yes"
+ready -> r503: "no"
+ready -> check: "yes"
+check -> r400: "no"
+check -> run: "yes"
+run -> r200

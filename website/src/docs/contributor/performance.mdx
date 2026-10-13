@@ -1,0 +1,236 @@
+# Performance
+
+Two measurements guard the chain's speed. Go microbenchmarks time the hot paths of the code on one machine and fail a release when one of them got more than 25% slower. The fleet e2e feature `chain-perf` times the running chain on the fleet the owner runs. This page says what each measures, how to run it, on what hardware, and where the numbers go. A state generator with its measurements, and a soak of a day or more, cover the chain once it has aged ([10x state and soak](#10x-state-and-soak)). It holds no numbers itself: they are filled by the owner's run on the baseline machine, and a figure from a laptop never goes into a baseline.
+
+## The block interval
+
+The chain produces a block about every 5 seconds. `oramad init` writes CometBFT's `config.toml` with `timeout_commit = 5s`, taken from `BlockIntervalSeconds` in `chain/app/params/params.go` (`initCometBFTConfig` in `chain/cmd/oramad/cmd/commands.go`); the installer and the e2e deploy script edit no consensus timeout. The interval is that wait plus the time of a round of votes, so it is a little over 5 s on a healthy network. `chain-perf` reads `timeout_commit` from a node's `config.toml` and measures the interval over 40 blocks.
+
+Every parameter counted in blocks that stands for a length of time is computed from that same constant: the wasm upload sunset (3,162,240 blocks, 183 days), the shielded anchor window (17,280 blocks, 24 hours) and the archive retention window (241,920 blocks, 14 days). An epoch closes after 24 hours of block time and at least 14,400 blocks, both; at 5 s blocks the clock binds.
+
+## Go microbenchmarks
+
+All of them are in the `chain` module and run with `make bench`:
+
+| Benchmark | Package | What it times |
+|---|---|---|
+| `BenchmarkVerify/actions=1,2` | `x/shielded/verify/orchard` | The in-process Rust Orchard/Ironwood verifier on a real bundle, per action count. It skips with a message when the library is not linked. |
+| `BenchmarkVerify/actions=1,2` | `x/shielded/verify/orchardproc` | The out-of-process verifier: the Go client and the Rust binary it keeps running, same bundles. It skips when the binary is not built. |
+| `BenchmarkCommit/entries=1000000` (and `10000000`) | `x/shielded/nullifier` | One block's 100 nullifiers committed to a Pebble store holding that many entries. |
+| `BenchmarkRunEndBlock/validators=30,100,300` | `x/power/keeper` | `x/power`'s end-block computation over a bonded set of that size. |
+| `BenchmarkRequired/...` | `x/inclusion` | The inclusion rule's sequential walk over 100 validators' lists, shared or distinct. |
+| `BenchmarkFinalizeBlock/txs=0,1,100` | `app` | One block executed and committed on the app harness: empty, with one and with 100 public sends. |
+| `BenchmarkCheckTx` | `app` | The mempool admission of one signed public send. |
+| `BenchmarkIAVLCommit/keys=100000,1000000` (and `10000000`) | `app` | One busy block's 1,000 writes to an IAVL tree of that size on Pebble, and the version save. |
+| `BenchmarkWASMExecute`, `BenchmarkWASMQuery` | `app` | A `cw20-base` transfer as a transaction in its own block, and a balance query. They need libwasmvm. |
+
+Only two bundle sizes are timed, one action and two, because those are the real proofs committed to the repository; a larger bundle needs the wallet crate's prover. The 10M-entry nullifier store and 10M-key IAVL tree take minutes to fill, so they run only with `BENCH_LARGE=1`.
+
+### Running them
+
+```bash
+cd chain
+make orchard-lib orchard-verifier     # once: the Rust verifier library and binary, for the verifier benchmarks
+make bench                            # BENCH_COUNT runs of every benchmark (6 by default) into bench/latest.txt
+make bench BENCH_FILTER='RunEndBlock|CheckTx' BENCH_TIME=10x   # a subset, quickly
+```
+
+`make bench` builds with `-tags orchardffi` when the library for this machine is in `x/shielded/verify/orchard/lib`, and with `-tags nowasm` when libwasmvm is not installed. It says which benchmarks will skip. The output is the standard Go benchmark format, readable by `benchstat`, with one comment line at the top that records where it was measured (`# benchgate: goos=... goarch=... cpus=... stable=... release=...`).
+
+### The baseline machine
+
+A baseline comes from a stable 8-core Linux amd64 machine, never a laptop: a laptop throttles and shares cores, and its numbers move more between runs than the 25% the gate allows. `make bench-baseline` writes `bench/baseline.txt` and refuses unless the machine is linux/amd64 with at least 8 CPUs. `BENCH_ALLOW_UNSTABLE=1` writes the file anyway, stamped `release=false`; `make bench-compare` refuses such a file as a baseline unless it is given the same variable.
+
+### The regression gate
+
+```bash
+make bench-compare BASE=bench/baseline.txt
+```
+
+It runs `benchstat` (golang.org/x/perf at a pinned version, through `go run`) over the baseline and `bench/latest.txt`, prints its table, and hands benchstat's CSV to `cmd/benchgate`. The gate fails, with a non-zero exit, when:
+
+- a benchmark's time per operation is more than 25% slower than the baseline's and benchstat says the difference is not noise (`DefaultRegressionPercent` in `chain/cmd/benchgate/compare.go`; `BENCH_REGRESSION_PERCENT` changes it);
+- a benchmark in the baseline has no result in the new run (it was renamed, removed or skipped, so the gate could not see it regress);
+- the input is empty, or a compared benchmark has fewer than 5 runs on a side (use `BENCH_COUNT=6` or more);
+- the baseline is not a release baseline, the new run did not come from a stable machine, or the two come from different platforms.
+
+A benchmark that is only in the new run is listed as new and does not fail.
+
+## The chain-perf fleet feature
+
+`e2e/features/chain-perf` runs in stage 9 of `make e2e-fleet`, alone after the stage's other packages. On the run's chain it records:
+
+| Metric | What it is |
+|---|---|
+| `chain-block-interval` | The interval between consecutive blocks over 40 blocks. |
+| `chain-transfer-inclusion` | The time from broadcasting a public transfer to the node serving it from a block, p50, p95 and p99 over 30 transfers sent one at a time. |
+| `chain-checktx` | The CheckTx rate of one node: 200 transfers broadcast back to back over one connection, latency percentiles and transfers per second. |
+
+The transaction timings run on the validator's node against its loopback RPC, so they measure the chain and not the path from the runner. The files are in the run's artifact directory under `chain-perf/`: `baseline.json` with every metric, one file per metric, and `run.json` with the shape of the run. Give a previous run's `baseline.json` to the next run as `E2E_CHAIN_BASELINE_FILE`, and a p95 or a throughput more than `E2E_PERF_REGRESSION_PCT` percent (25 by default) worse fails. The comparison is the same code the `perf` feature uses for the gateway and data plane ([Testing](/docs/contributor/testing)).
+
+## Load and saturation tests
+
+`chain/cmd/oramad-bench` is the load generator of the L1 chain. It signs transactions offline, broadcasts them straight to the validators' CometBFT RPC, and reports how many the chain took, how long they waited for a block, how full the mempools got, what x/fees' base fee did, and whether every validator computed the same state at every height of the run. It runs on one machine against `chain/scripts/localnet`. It never touches devnet, testnet or stagenet and needs no SSH: it refuses any node whose chain id is not `orama-[<name>-]localnet-<id>`, because its accounts are derived from a public seed. (There is no separate performance page yet; this section is where the tool is described.)
+
+### Running it
+
+```bash
+cd chain
+make bench-load                                       # the smoke profile on a fresh 4-validator localnet
+BENCH_PROFILE=full make bench-load                    # the saturation ladders; takes a long time
+BENCH_TYPES=bank-send,cnft-mint make bench-load       # a subset of the profile's types
+VOTE_EXTENSIONS_ENABLE_HEIGHT=2 make bench-load       # the same run with C13 inclusion lists on
+N=6 TIMEOUT_COMMIT=2s make bench-load                 # six validators, 2 s blocks
+KEEP_LOCALNET=1 make bench-load                       # leave the localnet running afterwards
+```
+
+`make bench-load` (`chain/scripts/localnet/bench-load.sh`) refuses to start when `chain/scripts/localnet/.localnet` exists, because it would wipe it: run `make localnet-clean` first. Otherwise it builds `oramad-bench`, starts the localnet with the faucet on and 1 s blocks (`TIMEOUT_COMMIT`; CometBFT's own default is 5 s, which leaves a short run only a handful of blocks), waits for every validator, writes the faucet signer's key (`localnet.sh funder-key`), builds the shielded bundles when `cargo` is installed, runs the profile and tears the localnet down. CosmWasm is built in when libwasmvm is installed (`make build-wasm` says how to install it). The JSON report is written to `chain/build/bench-report.json` (`BENCH_OUT`) and a summary is printed.
+
+The exit code is 0 for a finished run, 1 for a run that could not be carried out, 2 for bad flags and 3 when the validators disagreed on state at any height of the run. A run with exit code 3 prints the mismatch before any number: the throughput of a chain that has forked means nothing.
+
+By hand, against a localnet you started yourself with `FAUCET_ENABLED=1` (and `WITH_WASM=1`, `WITH_SHIELDED=1` for the types that need them):
+
+```bash
+cd chain
+./scripts/localnet/localnet.sh funder-key > /tmp/funder.key
+go build -o build/oramad-bench ./cmd/oramad-bench
+build/oramad-bench prepare -profile smoke -funder-key-file /tmp/funder.key    # shielded bundles; see below
+build/oramad-bench run     -profile smoke -funder-key-file /tmp/funder.key -out build/bench-report.json
+build/oramad-bench list                                                       # the types and profiles
+```
+
+`-nodes` takes the validators' RPC addresses when they are not the localnet's (`tcp://127.0.0.1:31001`, `31011`, and so on). At least two are needed, because the app hash comparison needs something to compare. `-broadcast async` uses `broadcast_tx_async` (a refused transaction is then never seen as refused: it just never appears in a block, so a profile with a closed-loop step is refused in that mode); the default `sync` returns after CheckTx, so a refusal is counted with the chain's reason.
+
+### What it sends
+
+Each type prepares the chain state it needs, outside the measured part, and is reported as **skipped, with the reason**, when that cannot be set up. A skipped type is never replaced by something that looks like it.
+
+| Type | Message | Set-up and when it is skipped |
+|---|---|---|
+| `bank-send` | x/bank `MsgSend` of 1 norama between two bench accounts | none |
+| `token-transfer` | x/token `MsgTransfer` of 1 unit of a token created for the run | creates the token and mints it to every account |
+| `wasm-call` | `MsgExecuteContract`: a CW20 transfer on a contract instantiated from standard code 1 | skipped when the node was built without CosmWasm or the genesis has no standard contracts (`WITH_WASM=1`) |
+| `storage-deal` | x/storage `MsgCreateDeal`: a PUBLIC_PIN deal over one piece commitment | none; creating a deal needs no provider, so this measures the chain's cost of a deal, not of storing data |
+| `register-node` | x/nodes `MsgRegisterNode` with a hot-key binding the hot key signs | registers every bench account as an operator |
+| `cnft-mint` | x/cnft `MsgMint` of one asset into a tree its signer created | creates a collection and a tree per account; every mint of a step names the root the step began with, which the tree's changelog buffer (2,048) keeps |
+| `market-list` | x/market `MsgList` of an asset the signer owns, with its Merkle proof | mints the assets and computes the proofs; listing does not change the tree, so the proofs stay valid |
+| `shield`, `unshield` | x/shielded `MsgShield`, `MsgUnshield` (to the signer's fee-only balance) | needs the shielded cache |
+| `shielded-transfer-2`, `-4`, `-8`, `-16` | x/shielded `MsgShieldedTransfer` of that many actions | needs the shielded cache |
+
+Every type that is signed offers `fee-multiple` (32) times the base fee per gas, with a gas limit of 150% of the gas one simulated transaction of the type used; both are flags. A tip above the base fee has to come from a public bank balance, which the bench accounts have (the faucet funds them) and a validator seat's earnings do not, so the seat's own faucet transactions offer exactly the base fee. A shielded transfer is signature-less and fee-less and declares exactly `action_gas` times its actions.
+
+### Profiles and modes
+
+The two built-in profiles are in `chain/cmd/oramad-bench/internal/profile/builtin.go`. `smoke` uses 16 accounts and sends every type for a few seconds at a rate any machine keeps up with; it shows the pipeline works and gives rough numbers, and it does not find a saturation point. `full` uses 64 accounts and gives each type a ladder of open-loop rates and closed-loop windows, 30 s a step; the shielded types climb a shorter ladder, because every transaction needs a proof made beforehand.
+
+- **Open loop** sends at a fixed rate whatever the chain does: the n-th transaction is due n/rate seconds after the start, and a sender that falls behind sends at once until it has caught up. Latency is measured from the moment a transaction was due, so time spent waiting inside the load generator counts.
+- **Closed loop** keeps a fixed number of transactions in flight and offers the next as soon as one is included or refused. It is how the maximum is found: the best throughput over the windows is the closed-loop maximum. A closed-loop number is bounded by block time, since a window of w completes at most w transactions per block.
+
+All transactions of a step are signed before the step starts, with sequences decided offline: the n-th transaction of an account carries its committed sequence plus n. The accounts are derived from a seed string, each is pinned to one node, and the transactions of one account leave in order. When CheckTx refuses a transaction, the account's later transactions of the step are held back (they would only fail with a sequence mismatch) and counted as not sent. Sequences are reloaded from the chain before every step.
+
+### What the report holds
+
+Per type and step: the offered, included, refused, failed-in-block, not-sent and lost counts, with the chain's reasons (lost transactions reached no block before the drain time ran out, so the latency percentiles, which cover only transactions that did, leave them out); the transactions per second included while the load was on; the inclusion latency (p50, p90, p99, measured to the moment the follower saw the block, polled every 50 ms); the mempool size of every node over time (read every 500 ms); the base fee after every block, with its start, end and maximum; and the blocks produced (transactions, gas used and requested against the block gas limit, interval). The report also states the number of validators, whether vote extensions were on, the block gas limit and the machine the numbers were measured on.
+
+**Saturation.** An open-loop step is *sustained* when at least 90% of the offered rate was included while the load was on and at most 5% of its transactions were refused or failed. The window is shifted by the step's median latency, since a transaction sent at the start cannot be included before one latency has passed. The saturation point is the lowest offered rate that was not sustained; the open-loop maximum is the highest sustained rate below it. A step whose send window holds fewer than 20 block intervals is not judged: blocks are discrete, so the inclusions counted in the window are off by up to a block's worth, which is 5% over 20 intervals and far more over a few. Neither is a step in which the load generator itself fell behind (64 transactions waiting for one sender worker): that step measured the generator.
+
+**App hash.** After the last step, every node's header is fetched at every height of the run, through the block after the last one (a header carries the app hash of the state before it, so that block's header covers the last block's result), and compared: app hash, last results hash, validators hash and block hash. A difference at any height is reported with the heights and the values per node, and the run exits 3.
+
+### Shielded bundles
+
+Proving takes seconds and runs in Rust (`chain/x/shielded/wallet`, the `gen_bench` example), so the bundles are built before a run by `oramad-bench prepare` and kept in a cache file (`chain/scripts/localnet/.localnet/bench-shielded.json` by default). `prepare` submits shield bundles to the chain to create the notes the transfers and unshields spend, reads the note tree back from the chain's blocks, checks that it roots to the chain's own tree root, and proves the spends against that root. It changes the chain; run it against the localnet the run will use, shortly before the run.
+
+The cache records the chain id, the hash of block 1, the height its anchor is valid from and the anchor window. A run **refuses a stale cache**: another chain id, a chain that was reset (a different genesis hash), a chain below the cache's height or with a smaller note tree than at the time, an anchor older than the chain's window less a margin of 600 blocks, or a cache with no unused bundle. A nullifier can be spent once, so every bundle a run sends is marked used in the cache file and is never offered again; a second run on the same localnet needs a new `prepare`. A node built without the Orchard verifier accepts no shielded bundle, which `prepare` reports; start the localnet with `WITH_SHIELDED=1`.
+
+### Reading the numbers
+
+The validators and the load generator share one machine, so every number is of that machine (CPU, disk and the loopback network), not of a network of separate hosts, and the report says so. Block time (`TIMEOUT_COMMIT`) is a setting you choose, and a closed-loop number moves with it. The load generator is itself a bottleneck at high rates; the report gives the longest queue inside the sender, and a step that shows one is measuring the generator. A fee that is fixed when a transaction is signed can be overtaken by the base fee, which rises up to 12.5% a block while blocks are fuller than the target; such a transaction is refused with the chain's insufficient-fee reason and shows in the refused column, which is the behaviour of the base fee under that load and not an error of the tool.
+
+The follower reads a block once the next one exists: a node reports a height as its latest a moment before it has saved that block's results and committed its state, so a block read at once would ask for results that are not there yet. Each block, its results and the base fee after it are read once, and a read that fails stops the run with the error.
+
+## 10x state and soak
+
+The microbenchmarks and `chain-perf` run on a young chain. Two more tools say what an aged one costs: a state ten times larger than the one expected, and a soak of a day or more. Like the others they hold no numbers on this page: the figures are the owner's run on the machine described below, and a figure from a laptop never becomes a baseline.
+
+### Where the tooling is
+
+`chain/cmd/oramad-state` is a binary of its own, not a subcommand of `oramad`: a production node never ships a generator that writes state without blocks. It drives the `oramad` it is given (`build/oramad-state-oramad`, built without cgo like every static node build) for everything a node does itself, so what it times is the real command: `oramad start`, `oramad snapshots`, `oramad export`. Its packages are `internal/stategen` (the generator) and `internal/measure` (the measurements). `make build-oramad-state` builds both binaries into `chain/build/`.
+
+### The state generator
+
+`make state-gen` writes a large application state into a fresh node home. The defaults are the full-scale targets, set with `STATE_NULLIFIERS`, `STATE_ASSETS` and `STATE_KEYS` (plain numbers, or `100k`, `10M`, `1G`):
+
+| Kind | Target | Written through | What is written |
+|---|---|---|---|
+| spent nullifiers | 10M | `x/shielded`'s nullifier database (`nullifier.Store.Commit`) and its keeper's accumulator and count | the records go to `data/shielded_nullifiers.db` at the height of the step, and the running accumulator and the count in state fold them in order, exactly as a block's end does, so the node's start-up check (`CheckNullifierStore`) accepts the database |
+| cNFT assets | 1M | `x/cnft`'s collections | one collection, 16 trees of depth 20, and the assets as decompressed assets with real owners; compressed leaves are not chain state (a tree keeps a root and the leaves live in the index), so only decompressed assets scale the chain |
+| filler IAVL keys | 100M | `x/auth`'s account keeper | accounts with a new account number each (two IAVL keys per account: the record and the number index); the accounts hold no funds, so supply and the bank invariants are untouched |
+
+The identifiers are SHA-256 of the seed, a kind and an index, so the same plan and `STATE_SEED` write the same bytes; the unit tests check that two runs end on the same app hash. The writes are committed in steps, one committed height each (at most 100,000 nullifiers, 50,000 assets and 100,000 accounts per step, which bounds the memory), and a run that stops resumes after the last committed step: `stategen.json` in the home holds the plan and a different plan on the same home is refused. The tool prints the plan, the steps, the height, the app hash, the nullifier count in state, the wall time of the run and the sizes of `application.db`, `shielded_nullifiers.db` and `data/`; while it runs it logs every hundredth of the steps with the time spent and the time left at the rate so far. The cost of a step grows with the tree, because IAVL reads from disk every key it inserts a neighbour of: the generator therefore gives IAVL a node cache of 2,000,000 nodes (`--iavl-cache`; a node's own is 100,000) and lets the Go heap grow to three times what is live, and `--cpuprofile` writes a profile of the run. `--pruning` replaces the pruning strategy of the home's `app.toml`; the default keeps every version, and `everything` prunes at every tenth commit and is slower.
+
+To make a node start on that state without blocks, the last step rewrites the home's `genesis.json` so its `initial_height` is the next height, its `app_hash` is the last commit's and its `validators` are the ones `InitChain` returned, and saves CometBFT's own state for that genesis in `data/state.db`. CometBFT runs `InitChain` only for an application that has no block, and finds no state for one that does, so without the saved state the node stops after its handshake. The generator's blocks are empty and 1 ms apart before the genesis time, which is the time of the node's first block.
+
+`make state-prepare` makes the home: `oramad init`, a key, a bootstrap committee of one, the localnet's short epoch and a finite block gas limit.
+
+### The measurements
+
+Each prints one JSON object (and `make` also keeps it in `build/state/results/`):
+
+| Target | Measures | Main fields |
+|---|---|---|
+| `make state-boot` | a single-node chain on the home, from the process start to the first block it commits | `rpc_up_seconds` (state loaded, nullifier database checked against the committed state, RPC answering), `first_block_seconds`, `timeout_commit_seconds` and `first_block_less_timeout_commit_seconds`: CometBFT waits `timeout_commit` after it starts before it proposes, and the wait is in the first figure |
+| `make state-snapshot` | `oramad snapshots export` of the latest height, the portable archive (`dump`), `load` into a fresh home and `restore` there | `create_seconds`, `snapshot_store_bytes`, `dump_archive_seconds`, `archive_bytes`, `load_seconds`, `restore_seconds`, the restored databases' sizes |
+| `make state-export` | `oramad export`, the genesis document of the whole state | `export_seconds`, `genesis_bytes` |
+| `make state-indexer` | the indexer's follower (`indexer.NewFollower`, 500 blocks a step) from height 1 to the tip of a fresh localnet whose `timeout_commit` is `STATE_HISTORY_TIMEOUT_COMMIT` (50 ms), `STATE_HISTORY_BLOCKS` blocks long | `blocks_per_second_produced`, `catch_up_seconds`, `blocks_per_second`, `index_bytes` |
+| `make state-prune` | `BlockStore.PruneBlocks` of a synthetic block store at `archive.RetainHeight(tip, window, lastArchived)`, which is what a node does after a commit once `x/archive` allows it | `blocks_pruned`, `prune_seconds`, `milliseconds_per_1000_blocks`, store sizes before and after |
+
+`make state-measure` runs the generator, then snapshot, export and boot (in that order, because a boot adds blocks to the home), then the indexer and the prune. The snapshot and the export need the home to be free: stop any node on it.
+
+What each figure leaves out: the restore is the application half of a state sync (the chunks applied to empty stores), not the transfer of chunks between peers; the history of `state-indexer` is empty blocks, so it measures the follower's work per block and the node's RPC, not busy blocks; `state-prune` builds blocks of `--txs` transactions of `--tx-bytes` bytes (10 of 250 bytes) in a LevelDB store, prunes the block store only (not the state store) and keeps `x/archive`'s rule by calling it, because the chain's retention window (241,920 blocks, `RetentionWindowBlocks`) cannot be shortened in a genesis: give `STATE_PRUNE_BLOCKS` above twice `STATE_PRUNE_WINDOW`, and the full-scale run uses the chain's window; the generated state is pruned by the home's own `app.toml` strategy, so a node with the default strategy keeps more versions on disk than the sizes the tool prints.
+
+### What full scale needs
+
+The sizes scale with the counts: the full-scale targets are 100 times `make state-gen STATE_NULLIFIERS=100k STATE_ASSETS=10k STATE_KEYS=1M`, so run that first, read `sizes` and `elapsed_seconds` in its output and multiply by 100 for a first estimate (the time grows a little faster than that, because the tree is deeper and more of it is on disk). The snapshot, the restore and the export each need about as much again as the store they read, and the export builds the whole genesis document in memory (every nullifier in one list and every account in the auth section), so it needs memory of the order of the genesis document's size, which at full scale is the figure to watch and may be the finding. Use a machine of the baseline class (8 cores, linux/amd64) with an SSD, a disk of several times the generated state (the home, the snapshot store, the archive, the restored home and the exported document are all on it at once), and time measured in hours for the generator at 100M keys.
+
+### The chain soak
+
+`e2e/features/chain-soak` drives steady mixed load on the fleet's chain for as long as `E2E_CHAIN_SOAK` says (a Go duration; 24h to 72h for the owner's run) and samples every five minutes. It is opt-in: a run that does not set the variable does not plan, budget or report the package, so `make e2e-fleet` is unchanged ([Testing](/docs/contributor/testing#chain-soak)). To run it:
+
+```bash
+# as the last package of stage 11 of a whole run (the fleet is held for the soak and then torn down)
+E2E_CHAIN_SOAK=24h make e2e-fleet
+# or alone, against a fleet that is up (kept with --keep-on-fail, or the stagenet)
+cd e2e && E2E_CHAIN_SOAK=72h E2E_FLEET_STATE=<state.json> go run ./cmd/e2e-fleet test --features chain-soak
+```
+
+The load is one public transfer every ten seconds from a funded payer, signed an hour ahead and broadcast in slices of 30 per cycle; every cycle also checks that the earlier transfers are in blocks as a second validator sees them. Every sample records, for each validator: the height and whether it is catching up, the block hash and app hash at the height every validator has committed, the mempool size, and for the chain unit and the indexer unit the anonymous memory of the cgroup, the restart count and the size of the state directory, and how far the indexer's cursor is behind its tip.
+
+`chain-soak/timeline.json` in the run's artifact directory holds a summary (blocks, mean block interval, transfers sent, memory slope in MiB per hour and state growth in bytes per day of each service), the findings, the limits and every sample. The run stops at once on a **divergence** (two validators store different hashes for one block) or a **stall** (the head does not move for 15 minutes), and judges the rest at the end (`harness/chainsoak`, `DefaultLimits`):
+
+| Finding | Rule |
+|---|---|
+| memory growth | after the first tenth of a series (and between restarts) with at least 12 samples left, the median of the last third is at least 25% and 64 MiB over the median of the first third, and at least 90% of the steps do not fall by more than 2 MiB |
+| restart | a service's restart counter rose |
+| node behind | a validator more than 60 blocks behind the head, or catching up, at 3 samples in a row |
+| indexer lag | an indexer more than 200 blocks behind its tip at 3 samples in a row |
+| mempool stuck | a mempool of at least 500 transactions at 6 samples in a row |
+
+## At a release
+
+1. On the baseline machine: `cd chain && make bench-compare BASE=bench/baseline.txt` after `make bench`. It must pass.
+2. Run `make e2e-fleet` with `E2E_CHAIN_BASELINE_FILE` set to the previous release's `chain-perf/baseline.json`. `chain-perf` must pass.
+3. If both pass and the release is kept, record its numbers as the next baseline: `make bench-baseline` on the baseline machine, commit `chain/bench/baseline.txt`, and keep the run's `chain-perf/baseline.json` with the release.
+4. For a release that changes stored state or the node's start-up, run `make state-measure` at full scale and the chain soak, and keep their JSON with the release.
+
+| Measure | Release baseline |
+|---|---|
+| Microbenchmarks (`chain/bench/baseline.txt`) | not recorded yet |
+| Block interval, p50 / p95 / p99 | not recorded yet |
+| Public transfer inclusion, p50 / p95 / p99 | not recorded yet |
+| CheckTx rate | not recorded yet |
+| Node boot on the 10x state | not recorded yet |
+| Snapshot create / restore on the 10x state | not recorded yet |
+| Genesis export of the 10x state | not recorded yet |
+| Indexer catch-up, blocks per second | not recorded yet |
+| Block-store prune at the retention window | not recorded yet |
+| Chain soak (duration, memory slope, state growth) | not recorded yet |

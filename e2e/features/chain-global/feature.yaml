@@ -1,0 +1,93 @@
+# Stage 8, E2E-32 + E2E-39: the operator CLI's chain commands and the
+# cluster/chain co-hosting. `orama global bind` signs the documented binding
+# statement (verified here for ed25519 and secp256k1); every chain command
+# without --node prints only a SIGN_MODE_DIRECT sign document (chain id,
+# account, sequence, fee, gas, one message of the documented type) and the
+# documents are transactions the chain executes (signed by the operator's own
+# key on its node: the headless RootWallet agent refuses orama-tx until
+# RootWallet task 2857; with --node the tests expect ORAMA_TX_REFUSED, or,
+# with E2E_ORAMA_TX_SIGNING=1, a signature from the agent's own key);
+# `orama storage seal|open|rewrap` round trip locally and put/get check the
+# chain first. Co-hosting: the chain unit runs confined as orama-chain and
+# cannot see /etc/orama or /etc/wireguard, p2p only on the WireGuard address,
+# RPC/gRPC/REST/Prometheus only on loopback, no chain port open publicly, the
+# monitor's chain section, and the deploy script's read-only status and
+# invariants. The validator commands: unjail and edit print MsgUnjail and
+# MsgEditValidator documents the chain executes (an unjail of a bonded
+# validator is refused, an edit of the details is applied and restored);
+# check-sign-floor passes with no floor; migrate prepare and cancel, export-key
+# and reseal seal and reseal the validator key to X25519 keys made in the test
+# process (the import that needs a stopped chain is chain-global-destructive);
+# global install is exercised for
+# every refusal it gives before it changes the machine (its success path needs
+# a staged release and a machine the stagenet deploy script did not install).
+# The public Kubo's GC oneshot (orama-global-ipfs-gc.service) on a node that
+# `orama global install --services ipfs` ran on: it runs `orama node ipfs-gc`, the
+# bearer is in gc.env and in neither the unit nor its ExecStart, and a run ends
+# successful (not applicable on a target with no such node).
+id: chain-global
+title: Chain CLI documents, RootWallet signing gap, co-hosting
+area: chain
+subtasks: [2851, 2859]
+stage: 8
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: true
+covers:
+  cli:
+    - orama global
+    - orama global bind
+    - orama global bond
+    - orama global unbond
+    - orama global capacity
+    - orama global install
+    - orama global register
+    - orama global retire
+    - orama maint global validator
+    - orama maint global validator check-sign-floor
+    - orama maint global validator edit
+    - orama maint global validator export-key
+    - orama maint global validator migrate
+    - orama maint global validator migrate cancel
+    - orama maint global validator migrate prepare
+    - orama maint global validator reseal
+    - orama maint global validator unjail
+    - orama cluster register-onchain
+    - orama cluster retire-onchain
+    - orama storage
+    - orama storage accept
+    - orama storage create
+    - orama storage decline
+    - orama storage extend
+    - orama storage get
+    - orama storage grant
+    - orama storage open
+    - orama storage prove
+    - orama storage put
+    - orama storage revoke
+    - orama storage rewrap
+    - orama storage seal
+    - orama status chain
+  queries:
+    - orama.nodes.v1.Cluster
+    - orama.nodes.v1.Node
+    - orama.storage.v1.Authorization
+  claims:
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-global-bind: the binding signs orama-global-bind-v1|chain-id|operator|service|hex(pubkey)"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md: without --node every chain command prints the sign document and submits nothing"
+    - "docs/whitepaper/technical-reference/vol2/37-global-nodes.md#operator-side-commands: the CLI-built sign documents are transactions the chain executes"
+    - "plans/e2e-fleet.md: the headless RootWallet agent refuses wallet:sign:orama-tx (ORAMA_TX_REFUSED) until RootWallet task 2857"
+    - "docs/whitepaper/technical-reference/vol2/41-storage-deals.md#the-owners-side: seal writes one ciphertext per slot; open and rewrap with the right seeds only; seed files must be 0600"
+    - "docs/whitepaper/technical-reference/vol2/39-chain-architecture.md#local-and-stagenet-scripts: chain p2p on the overlay, RPC/gRPC/REST/Prometheus on loopback only"
+    - "docs/whitepaper/technical-reference/vol2/39-chain-architecture.md#local-and-stagenet-scripts: the chain unit runs as orama-chain and cannot see /etc/orama or /etc/wireguard"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-maint-global-validator-unjail: x/slashing refuses an unjail for a validator that is not jailed; without --node the command prints the sign document"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-maint-global-validator-edit: only the flags given change; every other description field is sent as [do-not-modify]"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-maint-global-validator-check-sign-floor: with no sign floor recorded it passes"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-maint-global-validator-export-key: the key is sealed to an X25519 public key the node never holds the private half of; --to must not exist"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-maint-global-validator-reseal: the identity file must be mode 0600 and the bundle carries no sign state"
+    - "website/src/docs/contributor/architecture-reference.mdx#boot-components-not-a-sequence: a machine that already has preferences (a cluster node) keeps them when the global services are installed beside it"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-global-install: every refusal happens before the machine changes"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-global-install: REFUSAL PATHS ONLY: the install itself needs a staged release and a machine the deploy script did not install (trigger: the harness installs the chain through orama global install)"
+    - "website/src/docs/blockchain/run-a-global-node.mdx#install: the public Kubo's GC unit (orama-global-ipfs-gc.service) runs `orama node ipfs-gc`, which reads the RPC bearer from the environment file gc.env (mode 0600), so it is never on a command line; the run ends successful (needs a node that `orama global install --services ipfs` ran on; without one the test says not applicable)"

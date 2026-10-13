@@ -1,0 +1,178 @@
+syntax = "proto3";
+package orama.token.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/token/types";
+
+import "amino/amino.proto";
+import "cosmos/msg/v1/msg.proto";
+import "cosmos_proto/cosmos.proto";
+import "gogoproto/gogo.proto";
+import "orama/token/v1/token.proto";
+
+// Msg defines x/token's message service. There is no module admin key and no
+// verified-registry message.
+service Msg {
+  option (cosmos.msg.v1.service) = true;
+
+  rpc CreateToken(MsgCreateToken) returns (MsgCreateTokenResponse);
+  rpc Mint(MsgMint) returns (MsgMintResponse);
+  rpc Burn(MsgBurn) returns (MsgBurnResponse);
+  rpc Transfer(MsgTransfer) returns (MsgTransferResponse);
+  rpc SetFrozen(MsgSetFrozen) returns (MsgSetFrozenResponse);
+  rpc SetPaused(MsgSetPaused) returns (MsgSetPausedResponse);
+  rpc Renounce(MsgRenounce) returns (MsgRenounceResponse);
+  rpc SetShieldable(MsgSetShieldable) returns (MsgSetShieldableResponse);
+  // DeleteToken removes a zero-supply token and releases its metadata deposit.
+  rpc DeleteToken(MsgDeleteToken) returns (MsgDeleteTokenResponse);
+}
+
+// MsgCreateToken creates factory/{creator}/{subdenom}. The creation fee is
+// burned and a metadata deposit is locked. Capabilities in this message are
+// fixed for the life of the token except by renounce.
+message MsgCreateToken {
+  option (cosmos.msg.v1.signer) = "creator";
+  option (amino.name)           = "orama/token/MsgCreateToken";
+
+  string creator            = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  string subdenom           = 2;
+  string name               = 3;
+  string symbol             = 4;
+  string description        = 5;
+  bool   mint               = 6;
+  bool   freeze             = 7;
+  string permanent_delegate = 8;
+  uint32 transfer_fee_bps   = 9;
+  bool   non_transferable   = 10;
+  bool   pause              = 11;
+  // transfer_hook is the address of an existing contract that the chain calls on
+  // every transfer of the token (empty: none).
+  string transfer_hook      = 12;
+}
+
+message MsgCreateTokenResponse {
+  string denom = 1;
+}
+
+// MsgMint mints amount of denom to recipient. The signer must still hold mint.
+message MsgMint {
+  option (cosmos.msg.v1.signer) = "sender";
+  option (amino.name)           = "orama/token/MsgMint";
+
+  string sender    = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  string denom     = 2;
+  string recipient = 3 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  string amount    = 4 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable)   = false
+  ];
+}
+
+message MsgMintResponse {}
+
+// MsgBurn burns amount of denom from the signer's own bank balance.
+message MsgBurn {
+  option (cosmos.msg.v1.signer) = "sender";
+  option (amino.name)           = "orama/token/MsgBurn";
+
+  string sender = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  string denom  = 2;
+  string amount = 3 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable)   = false
+  ];
+}
+
+message MsgBurnResponse {}
+
+// MsgTransfer moves amount of denom from `from` to `to` by a bank send, after
+// the pause, freeze, non-transferable, and transfer-fee checks. `from` must
+// be the signer, unless the signer is the current permanent delegate.
+message MsgTransfer {
+  option (cosmos.msg.v1.signer) = "sender";
+  option (amino.name)           = "orama/token/MsgTransfer";
+
+  string sender = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  string from   = 2 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  string to     = 3 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  string denom  = 4;
+  string amount = 5 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable)   = false
+  ];
+}
+
+message MsgTransferResponse {}
+
+// MsgSetFrozen freezes or unfreezes account. The freeze capability must still
+// be held, and the signer must be the creator.
+message MsgSetFrozen {
+  option (cosmos.msg.v1.signer) = "sender";
+  option (amino.name)           = "orama/token/MsgSetFrozen";
+
+  string sender  = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  string denom   = 2;
+  string account = 3 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  bool   frozen  = 4;
+}
+
+message MsgSetFrozenResponse {}
+
+// MsgSetPaused pauses or unpauses transfers. The pause capability must still
+// be held, and the signer must be the creator.
+message MsgSetPaused {
+  option (cosmos.msg.v1.signer) = "sender";
+  option (amino.name)           = "orama/token/MsgSetPaused";
+
+  string sender = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  string denom  = 2;
+  bool   paused = 3;
+}
+
+message MsgSetPausedResponse {}
+
+// MsgRenounce drops one capability that is still held. The signer must be the
+// creator, except for permanent delegate, which only that delegate can renounce.
+message MsgRenounce {
+  option (cosmos.msg.v1.signer) = "sender";
+  option (amino.name)           = "orama/token/MsgRenounce";
+
+  string    sender    = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  string    denom     = 2;
+  Extension extension = 3;
+}
+
+message MsgRenounceResponse {}
+
+// MsgSetShieldable sets the one-way shieldable flag. It does not move tokens
+// into a shielded pool. Any signer may call it; it is refused while freeze,
+// permanent delegate, or pause is still held.
+message MsgSetShieldable {
+  option (cosmos.msg.v1.signer) = "sender";
+  option (amino.name)           = "orama/token/MsgSetShieldable";
+
+  string sender = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  string denom  = 2;
+}
+
+message MsgSetShieldableResponse {}
+
+// MsgDeleteToken deletes a token whose issued supply is zero and releases the
+// metadata deposit (99% refunded to the creator's earnings, 1% burned).
+message MsgDeleteToken {
+  option (cosmos.msg.v1.signer) = "sender";
+  option (amino.name)           = "orama/token/MsgDeleteToken";
+
+  string sender = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  string denom  = 2;
+}
+
+message MsgDeleteTokenResponse {
+  string refund = 1 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable)   = false
+  ];
+  string burned = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable)   = false
+  ];
+}

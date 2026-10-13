@@ -47,7 +47,7 @@ func TestAppendRQLiteQueryParams_noExistingQueryString(t *testing.T) {
 }
 
 // TestAppendRQLiteQueryParams_preservesAuthCredentials — credentials injected
-// upstream by injectRQLiteAuth must survive the param append unchanged.
+// upstream by credentialedRQLiteDSN must survive the param append unchanged.
 func TestAppendRQLiteQueryParams_preservesAuthCredentials(t *testing.T) {
 	got := appendRQLiteQueryParams("http://orama:secret@localhost:5001")
 	if !strings.Contains(got, "orama:secret@localhost:5001") {

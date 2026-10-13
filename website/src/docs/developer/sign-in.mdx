@@ -1,0 +1,211 @@
+# Sign-in and sessions
+
+Orama has no accounts, no passwords and no sign-up. Everything that reaches a gateway is one of two things.
+
+- **A wallet** is a person. It proves itself by signing a message: EIP-4361 (Sign-In with Ethereum) for an EVM address, Sign-In with Solana for a Solana one. The gateway issues the message, the wallet signs it, the gateway hands back a session.
+- **A key** is a program: `orama_<type>_<payload>_<checksum>`, minted by an owner of a namespace and carrying a fixed set of grants. It proves itself by being presented. See [Access control and keys](/docs/developer/access-control).
+
+A namespace is created by a wallet, and every credential in it descends from that wallet. The wallet that signs in is its **subject**: an EVM address lowercased (case carries only the checksum), a Solana address exactly as signed (base58, where case is part of the address).
+
+## The handshake
+
+```text
+client                          gateway
+  | POST /v1/auth/challenge        |
+  |------------------------------->|  mints a nonce, stores it single use
+  | <-- the message to sign -------|  EIP-4361 / SIWS text: nonce, domain, issued-at, expiry
+  | sign it in the wallet          |
+  | POST /v1/auth/verify           |
+  | { message, signature }         |
+  |------------------------------->|  recovers the address, checks the message is the one it
+  |                                |  issued, consumes the nonce
+  | <-- access + refresh token ----|
+```
+
+The message goes back **verbatim**. It carries the nonce the gateway will consume, the domain it will compare against its own, and the times it will check. A signature over a message the gateway did not issue proves nothing about which site asked for it, and a signature collected by another site does not verify here. The message lasts five minutes.
+
+The result is a **session**, not a key:
+
+| Token | Lifetime | Notes |
+|---|---|---|
+| Access token (JWT) | 15 minutes | Signed by the gateway's own Ed25519 key |
+| Refresh token | 30 days | Stored only as a hash. Rotates on every use |
+
+A rotated refresh token is accepted **once more**, for 60 seconds, so a client that lost the response can recover. After that, presenting it is a replay: refused with 401 and recorded as `auth.refresh.replay`.
+
+### From the CLI
+
+```bash
+orama auth login                      # RootWallet signs; stores a session
+orama auth login --namespace myapp
+orama auth whoami                     # asks the gateway
+orama auth status                     # shows what is stored; asks nobody
+orama auth list                       # every stored credential
+orama auth switch
+orama auth logout
+```
+
+With `--namespace` omitted at a terminal, `orama auth login` offers the saved credentials and then asks which namespace to sign in to; blank signs in to the lobby. With no terminal (a script, CI) it does not prompt.
+
+The CLI renews the access token a minute before it expires. Only the gateway *refusing* the refresh token (401, or 403 for a device-bound session) ends the session and exits with code `3`. A gateway that cannot be reached, a 5xx (the refresh answers 503 while the registry leader moves during a rolling upgrade), a 429 or a 400 leaves the stored session untouched and fails only that attempt. Renewal is single flight across every CLI process on the machine, under a lock on `~/.orama/credentials.json.lock`.
+
+### From the SDK
+
+```ts
+const challenge = await client.auth.challenge({ wallet: "0x…", namespace: "acme", chain_type: "ETH" });
+const signature = await wallet.signMessage(challenge.message);     // verbatim
+const session = await client.auth.verify({ message: challenge.message, signature });
+```
+
+See [TypeScript SDK](/docs/developer/sdk-reference#wallet-login).
+
+## The lobby
+
+A challenge with no namespace signs you in to `default`: the **lobby**. It belongs to nobody, needs no grant and writes none. You get a session and no key, and it holds no permission beyond the routes that ask for none: `POST /v1/namespaces` and `GET /v1/namespace/list`. The first creates a namespace and makes you its owner, when this cluster's namespace-creation setting allows the wallet. A new cluster allows only its operators.
+
+Signing in no longer *claims* a namespace. A namespace with no owner is one nobody may sign in to (`NAMESPACE_UNOWNED`), not one the next caller takes.
+
+## Sign-in policy
+
+By default a namespace lets in only wallets that hold a grant: sign-in is by invitation, and a wallet with none is refused `NAMESPACE_NOT_OWNED`. An application whose public end users each sign in with their own wallet cannot invite them one by one, so the owner may open the namespace:
+
+```bash
+orama namespace session-policy                        # show
+orama namespace session-policy --sign-in open         # or members
+orama namespace session-policy --device-policy approval
+```
+
+or `PUT /v1/namespace/session-policy {"sign_in": "open"}` (needs namespace write). A `PUT` carries `sign_in`, `device_policy` or both; both are validated before either is written, and a field left out keeps its value. Opening and closing are recorded as `namespace.sign_in_policy`.
+
+| `sign_in` | A wallet with no grant |
+|---|---|
+| `members` (default) | Refused, `NAMESPACE_NOT_OWNED` |
+| `open` | Signs in as an **end user** |
+
+An end user is a wallet the namespace never invited, and it stays one:
+
+- Signing in writes nothing. No grant, no membership, no claim on the namespace; the owner is still the only owner.
+- It gets a session and **no API key**. `verify` returns no `api_key`, and `POST /v1/auth/api-key` answers `ROLE_HAS_NO_KEY`. A key is a member's credential.
+- Its permissions are what a wallet with no grant holds: storage, cache, push, webrtc, proxy, invoking functions, and *reading* pub/sub but not publishing to it (a topic an end user writes to is the application's decision, made from a function or by a grant). Nothing on the control plane.
+- The device policy applies as to any end user: under `required` or `approval` it must bind a device ([Devices](/docs/developer/devices)).
+
+The lobby has no policy and refuses to be given one, and a namespace with no owner stays closed whatever it says. Members are unaffected either way.
+
+**Closing sign-in** refuses new sign-ins at once, including sessions a device link or the device-code flow would hand out. A session already issued ends at its next refresh, which answers 403 `SIGN_IN_CLOSED` within 10 seconds of the closing; an access token already issued lives out its 15 minutes.
+
+## Signing in from a machine with no wallet
+
+On a server reached over SSH, in a container, or in CI there is no wallet. The device authorization grant (RFC 8628) splits the two halves.
+
+```text
+waiting machine                 gateway                 a machine with a wallet
+  | POST /v1/auth/device          |                              |
+  |------------------------------>|  records a pending login     |
+  | <-- device code + user code --|                              |
+  | prints the user code          |                              |
+  |                               |  POST /v1/auth/device/approve
+  |                               |  { user_code, message, signature }
+  |                               |<-----------------------------|
+  | POST /v1/auth/device/token    |                              |
+  | { device_code }  ------------>|                              |
+  | <-- access + refresh token ---|                              |
+```
+
+Nothing secret crosses between the two machines. The user code is short enough to read aloud and is worthless alone, because approving it still costs a wallet signature. The device code is the waiting machine's own credential: 256 bits, stored only as a SHA-256 hash, collects a session exactly once. A pending login lasts ten minutes.
+
+`orama auth login` on the waiting machine prints:
+
+```text
+    Your code:  BCDF-GHJK
+
+  On a machine where RootWallet is running, run:
+
+    orama auth approve BCDF-GHJK
+```
+
+`orama auth approve <code> --deny` refuses, and the waiting machine stops instead of polling until the code expires. There is no web approval page yet, so approval is always from a second machine's CLI.
+
+## Which machines are signed in as you
+
+```bash
+orama auth sessions                  # every live session for this wallet
+orama auth sessions revoke <id>      # end one
+orama auth sessions revoke --all     # end all of them
+```
+
+Every session has an id (`sid` in its access tokens, kept across refresh rotations). Ending one revokes its refresh token and puts its id on the revocation list, so the access tokens it already minted, and the sockets they hold open, stop within about 10 seconds. A session issued before sessions carried an id cannot be named that way: its access tokens work until they expire, at most 15 minutes, and the command says so.
+
+## Sending a credential
+
+```text
+Authorization: Bearer <token>
+```
+
+for a key and a JWT alike. On a WebSocket upgrade, where a browser cannot set a header, a token goes in `?jwt=` and a key in `?api_key=` or `?token=`, and only there (a credential in a query string ends up in access logs and the Referer of the next request). `X-API-Key`, `Authorization: ApiKey <token>` and a bare `Authorization: <token>` are still accepted, answer with `Deprecation: true`, and are going away. Neither the CLI nor the SDK sends them.
+
+`ORAMA_TOKEN` is the CI credential and takes either shape.
+
+## How long a change takes to land
+
+| Change | When it takes effect |
+|---|---|
+| Revoking a key | At once on the gateway that records it; within 10 seconds on every other |
+| Revoking a token | By its `jti`: within 10 seconds everywhere |
+| Narrowing or changing a wallet's grant | Next request on routes that resolve it; within 10 seconds on the data plane |
+| Narrowing a key's scopes, or revoking a grant it holds | Within one minute, on every gateway that had seen it |
+| Revoking the token an open WebSocket was opened with | The socket closes within 10 seconds (`4403`) |
+| Ending a session | Its access tokens are refused and its sockets closed within 10 seconds |
+| Revoking a device | Its sessions, access tokens and sockets end within 10 seconds |
+| A WebSocket's token expiring | Closed within 10 seconds of two minutes past `exp` (`4401`), unless refreshed on the socket |
+| Closing sign-in | New sign-ins refused at once; a grantless wallet's refresh within 10 seconds |
+| Setting a session policy | At once for everything that issues a credential |
+
+What a credential may do is read from the grant on every request, not from the token it carries. A token that carried its own answer could not be changed until it expired.
+
+## Which key signed a token
+
+Every gateway signs with its own Ed25519 key, generated at first boot, and publishes the public half to the cluster registry (`GET /v1/auth/jwks` serves every live key). A token's `kid` names the key. A namespace gateway's key is **bound to its namespace**: a token signed with it is refused everywhere unless its `namespace` claim matches, which stops one tenant's gateway minting a token for another. Operators rotate keys without signing anyone out ([Cluster administration](/docs/operator/cluster-admin#key-rotation)).
+
+## Error codes
+
+Every 401, 403 and `AUTH_UNAVAILABLE` 503 carries `{error, code, hint}`.
+
+| Code | Means |
+|---|---|
+| `AUTH_MISSING` | No credential presented |
+| `AUTH_INVALID_KEY` | The key is not one this cluster knows |
+| `AUTH_REVOKED` | The credential was revoked. Sign in again |
+| `AUTH_UNAVAILABLE` | The gateway could not tell whether it was revoked (503, `Retry-After`). Retry |
+| `AUTH_EXPIRED` | The access token expired. Refresh it |
+| `USER_JWT_REQUIRED` | This operation needs a logged-in user; a key alone is not enough |
+| `INSUFFICIENT_SCOPE` | The credential lacks a grant; `required_scope` names it |
+| `NAMESPACE_MISMATCH` | The credential belongs to another namespace |
+| `ORIGIN_NOT_ALLOWED` | A WebSocket upgrade whose `Origin` is not this host or a name under it |
+| `OWNERSHIP_REQUIRED` | The credential holds no grant in this namespace |
+| `NOT_AN_OPERATOR` | The wallet is not on the cluster's operator list |
+| `DESTINATION_NOT_ALLOWED` | The proxy refused the destination |
+| `RELAY_DESTINATION_NOT_ALLOWED`, `RELAY_UNAVAILABLE`, `RATE_LIMITED` | See [Relayed fetch](/docs/privacy/relayed-fetch) |
+| `FETCH_CAP_MISSING`, `FETCH_CAP_INVALID`, `FETCH_CAP_REVOKED`, `FETCH_CAP_REVOKE_KEY_INVALID`, `FETCH_CAP_NOT_ALONE`, `FETCH_CAP_DEVICE_REQUIRED`, `FETCH_CAP_UNAVAILABLE` | Fetch capabilities |
+
+Signing in has its own codes:
+
+| Code | Means |
+|---|---|
+| `AUTH_MESSAGE_MALFORMED` | Not a Sign-In-With message this gateway can read |
+| `AUTH_DOMAIN_MISMATCH` | The message names a domain this gateway does not serve |
+| `AUTH_MESSAGE_EXPIRED` | Outside its own issued-at and expiry window |
+| `AUTH_SIGNATURE_INVALID` | The signature does not recover the address in the message |
+| `AUTH_CHALLENGE_INVALID` | The nonce is unknown, already used or expired |
+| `NAMESPACE_UNKNOWN` | No such namespace. `orama namespace create` makes one |
+| `NAMESPACE_NOT_OWNED` | The wallet holds no grant and the namespace's `sign_in` is `members` |
+| `NAMESPACE_UNOWNED` | The namespace has no owner, so nobody may sign in |
+| `NAMESPACE_HAS_NO_KEYS` | The lobby has no keys. Create a namespace first |
+| `ROLE_HAS_NO_KEY` | A key was asked for by a member whose role cannot carry one (`reader`, `developer`), or by an end user |
+| `SIGN_IN_CLOSED` | The wallet holds no grant and the namespace is not open: its session was refused a refresh |
+| `TOO_MANY_CHALLENGES` | Too many challenges asked for. Slow down |
+
+Device codes are on [Devices](/docs/developer/devices#error-codes).
+
+## Rate limits
+
+The client is the peer address (a forwarded address is honoured only from the local reverse proxy, and only its last entry). Credential endpoints (challenge, verify, api-key, token, refresh) have their own bucket: 30 a minute per address, bursting to 10, against a general 10,000. `/v1/auth/challenge` is also limited per wallet, because it writes a row for a wallet the caller does not have to own.

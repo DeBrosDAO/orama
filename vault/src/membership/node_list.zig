@@ -48,13 +48,6 @@ pub const NodeList = struct {
         return count;
     }
 
-    /// Compute adaptive threshold: max(3, floor(N/3))
-    pub fn threshold(self: *const NodeList) usize {
-        const alive = self.aliveCount();
-        const t = alive / 3;
-        return if (t < 3) 3 else t;
-    }
-
     /// Update a node's state.
     pub fn updateState(self: *NodeList, address: []const u8, port: u16, state: NodeState) void {
         for (self.nodes) |*node| {
@@ -126,7 +119,7 @@ pub fn fromStatic(allocator: std.mem.Allocator, addresses: []const []const u8, p
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
-test "node_list: static creation and threshold" {
+test "node_list: static creation" {
     const allocator = std.testing.allocator;
     const addrs = [_][]const u8{ "10.0.0.1", "10.0.0.2", "10.0.0.3", "10.0.0.4", "10.0.0.5" };
     var nl = try fromStatic(allocator, &addrs, 7500);
@@ -134,10 +127,9 @@ test "node_list: static creation and threshold" {
 
     try std.testing.expectEqual(@as(usize, 5), nl.nodes.len);
     try std.testing.expectEqual(@as(usize, 0), nl.aliveCount());
-    try std.testing.expectEqual(@as(usize, 3), nl.threshold()); // 0 alive → max(3, 0/3) = 3
 }
 
-test "node_list: alive count and threshold" {
+test "node_list: alive count" {
     const allocator = std.testing.allocator;
     const addrs = [_][]const u8{
         "10.0.0.1", "10.0.0.2", "10.0.0.3", "10.0.0.4", "10.0.0.5",
@@ -153,7 +145,6 @@ test "node_list: alive count and threshold" {
     }
 
     try std.testing.expectEqual(@as(usize, 14), nl.aliveCount());
-    try std.testing.expectEqual(@as(usize, 4), nl.threshold()); // 14/3 = 4
 }
 
 test "node_list: updateState" {
@@ -185,17 +176,6 @@ test "node_list: peers excludes self" {
     defer allocator.free(peer_list);
 
     try std.testing.expectEqual(@as(usize, 2), peer_list.len);
-}
-
-test "node_list: threshold minimum is 3" {
-    const allocator = std.testing.allocator;
-    const addrs = [_][]const u8{ "10.0.0.1", "10.0.0.2", "10.0.0.3", "10.0.0.4", "10.0.0.5" };
-    var nl = try fromStatic(allocator, &addrs, 7500);
-    defer nl.deinit();
-
-    // Only 5 alive → 5/3 = 1, but minimum is 3
-    for (nl.nodes) |*node| node.state = .alive;
-    try std.testing.expectEqual(@as(usize, 3), nl.threshold());
 }
 
 test "node_list: fetchFromRqlite returns empty (MVP)" {

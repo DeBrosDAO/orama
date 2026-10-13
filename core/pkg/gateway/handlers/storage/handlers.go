@@ -16,10 +16,13 @@ import (
 // This interface matches the ipfs.IPFSClient implementation.
 type IPFSClient interface {
 	Add(ctx context.Context, reader io.Reader, name string) (*ipfs.AddResponse, error)
+	AddLocal(ctx context.Context, reader io.Reader, name string) (*ipfs.AddResponse, error)
 	Pin(ctx context.Context, cid string, name string, replicationFactor int) (*ipfs.PinResponse, error)
 	PinStatus(ctx context.Context, cid string) (*ipfs.PinStatus, error)
 	Get(ctx context.Context, cid string, ipfsAPIURL string) (io.ReadCloser, error)
+	GetStored(ctx context.Context, cid string, ipfsAPIURL string) (io.ReadCloser, error)
 	Unpin(ctx context.Context, cid string) error
+	EvictLocal(ctx context.Context, cid string) (int, error)
 }
 
 // Config holds configuration values needed by storage handlers.
@@ -28,6 +31,17 @@ type Config struct {
 	IPFSReplicationFactor int
 	// IPFSAPIURL is the IPFS API endpoint URL
 	IPFSAPIURL string
+	// ClusterSecret keys the coordination MAC that authenticates node-to-node
+	// evict calls (pkg/auth/coordination.go). Every gateway of a cluster holds
+	// the same one.
+	ClusterSecret string
+	// NodePeerID is this node's libp2p peer id: the audience an evict call must
+	// have been signed for to be accepted here.
+	NodePeerID string
+	// ServedNamespace is the namespace this gateway serves, set on a namespace
+	// gateway and empty on the index gateway. A relayed download carries no
+	// credential to name a namespace, so the one the gateway serves is it.
+	ServedNamespace string
 }
 
 // Handlers provides HTTP handlers for IPFS storage operations.
@@ -37,15 +51,50 @@ type Handlers struct {
 	logger     *logging.ColoredLogger
 	config     Config
 	db         rqlite.Client // For tracking IPFS content ownership
+	// globalDB reads the MAIN cluster's RQLite. Content-ownership rows live in
+	// `db` (this gateway's own database), but cluster TOPOLOGY — dns_nodes —
+	// exists only in the main cluster, so the immediate-eviction fan-out must
+	// read it from here (bugboard #153). On the main gateway it is the same
+	// handle as db.
+	globalDB rqlite.Client
+	// evictPort overrides the per-node internal gateway port the eviction
+	// fan-out dials. Zero selects internalGatewayPort, which is what production
+	// always uses; tests set it to point the fan-out at a local stub node.
+	evictPort int
+	// refs is the cluster-wide reference index an unpin decides "last
+	// reference" from (cidrefs.go). It reads the registry, not this namespace's
+	// database.
+	refs *CIDRefs
+	// fetchCaps mints, checks and revokes fetch capabilities (bugboard #266);
+	// nil refuses them all, saying so. fetchStreams counts the downloads each
+	// capability has in flight.
+	fetchCaps    FetchCapGate
+	fetchStreams *fetchCounter
 }
 
+// CIDRefs is the reference index this handler set decides unpins from.
+func (h *Handlers) CIDRefs() *CIDRefs { return h.refs }
+
+// SetCIDRefs makes this handler set share the gateway's reference index with
+// the deployment and namespace handlers, so one readiness state covers them.
+func (h *Handlers) SetCIDRefs(refs *CIDRefs) { h.refs = refs }
+
 // New creates a new storage handlers instance with the provided dependencies.
-func New(ipfsClient IPFSClient, logger *logging.ColoredLogger, config Config, db rqlite.Client) *Handlers {
+// db is this gateway's own RQLite (content ownership); globalDB is the MAIN
+// cluster's RQLite, the only place cluster topology (dns_nodes) exists.
+func New(ipfsClient IPFSClient, logger *logging.ColoredLogger, config Config, db rqlite.Client, globalDB rqlite.Client) *Handlers {
+	if globalDB == nil {
+		globalDB = db
+	}
 	return &Handlers{
 		ipfsClient: ipfsClient,
 		logger:     logger,
 		config:     config,
 		db:         db,
+		globalDB:   globalDB,
+		refs:       NewCIDRefs(globalDB),
+
+		fetchStreams: newFetchCounter(),
 	}
 }
 
@@ -67,13 +116,88 @@ func (h *Handlers) recordCIDOwnership(ctx context.Context, cid, namespace, name,
 		return nil
 	}
 
-	query := `INSERT INTO ipfs_content_ownership (id, cid, namespace, name, size_bytes, is_pinned, uploaded_at, uploaded_by)
-		VALUES (?, ?, ?, ?, ?, ?, datetime('now'), ?)
-		ON CONFLICT(cid, namespace) DO NOTHING`
+	// A re-upload of content the namespace already owns keeps the row (and
+	// its first uploaded_at) but is a fresh pin request.
+	query := `INSERT INTO ipfs_content_ownership (id, cid, namespace, name, size_bytes, is_pinned, uploaded_at, uploaded_by, pin_requested_at)
+		VALUES (?, ?, ?, ?, ?, ?, datetime('now'), ?, datetime('now'))
+		ON CONFLICT(cid, namespace) DO UPDATE SET pin_requested_at = datetime('now')`
 
 	id := cid + ":" + namespace // Simple unique ID
 	_, err := h.db.Exec(ctx, query, id, cid, namespace, name, sizeBytes, false, uploadedBy)
 	return err
+}
+
+// quotaRowToInt64 coerces an rqlite scalar (float64 / int64 / int) to int64.
+func quotaRowToInt64(v interface{}) int64 {
+	switch n := v.(type) {
+	case int64:
+		return n
+	case float64:
+		return int64(n)
+	case int:
+		return int64(n)
+	}
+	return 0
+}
+
+// getNamespaceStorageBudget returns the namespace's configured storage budget
+// in raw (RF-inclusive) bytes from namespace_quotas, or 0 when there is no row
+// or a non-positive value — meaning storage is unlimited and quota enforcement
+// is skipped. Enforcement is OPT-IN (bugboard #141): a namespace is only capped
+// once an operator sets a positive max_storage_bytes.
+func (h *Handlers) getNamespaceStorageBudget(ctx context.Context, namespace string) (int64, error) {
+	var rows []map[string]interface{}
+	if err := h.db.Query(ctx, &rows,
+		`SELECT max_storage_bytes FROM namespace_quotas WHERE namespace = ?`, namespace); err != nil {
+		return 0, err
+	}
+	if len(rows) == 0 {
+		return 0, nil
+	}
+	return quotaRowToInt64(rows[0]["max_storage_bytes"]), nil
+}
+
+// getNamespaceStorageUsage returns the namespace's current LOGICAL stored bytes
+// (sum of size_bytes across all owned CIDs). Multiply by the replication factor
+// for the raw cluster cost.
+func (h *Handlers) getNamespaceStorageUsage(ctx context.Context, namespace string) (int64, error) {
+	var rows []map[string]interface{}
+	if err := h.db.Query(ctx, &rows,
+		`SELECT COALESCE(SUM(size_bytes), 0) AS used FROM ipfs_content_ownership WHERE namespace = ?`, namespace); err != nil {
+		return 0, err
+	}
+	if len(rows) == 0 {
+		return 0, nil
+	}
+	return quotaRowToInt64(rows[0]["used"]), nil
+}
+
+// storageQuotaExceeded reports whether adding additionalBytes of LOGICAL content
+// would push the namespace's RF-inclusive storage over its configured budget
+// (bugboard #141). Returns exceeded=false when the namespace has no budget
+// (unlimited) or when h.db is nil (test mode). budget/projected are returned for
+// the error message. A DB error is surfaced so the caller can decide fail-open.
+func (h *Handlers) storageQuotaExceeded(ctx context.Context, namespace string, additionalBytes int64) (exceeded bool, budget, projected int64, err error) {
+	if h.db == nil {
+		return false, 0, 0, nil
+	}
+	budget, err = h.getNamespaceStorageBudget(ctx, namespace)
+	if err != nil {
+		return false, 0, 0, err
+	}
+	if budget <= 0 {
+		return false, 0, 0, nil // not configured → unlimited
+	}
+	usage, err := h.getNamespaceStorageUsage(ctx, namespace)
+	if err != nil {
+		return false, budget, 0, err
+	}
+	rf := int64(h.config.IPFSReplicationFactor)
+	if rf < 1 {
+		rf = 3
+	}
+	projected = (usage + additionalBytes) * rf
+	return projected > budget, budget, projected, nil
 }
 
 // checkCIDOwnership verifies that a namespace owns (has uploaded) a specific CID.
@@ -131,6 +255,11 @@ func (h *Handlers) updatePinStatus(ctx context.Context, cid, namespace string, i
 	}
 
 	query := `UPDATE ipfs_content_ownership SET is_pinned = ? WHERE cid = ? AND namespace = ?`
+	if isPinned {
+		// A pin is a pin request: a download right after it may find the
+		// pin still propagating (see pinPropagationWindow).
+		query = `UPDATE ipfs_content_ownership SET is_pinned = ?, pin_requested_at = datetime('now') WHERE cid = ? AND namespace = ?`
+	}
 	_, err := h.db.Exec(ctx, query, isPinned, cid, namespace)
 	return err
 }

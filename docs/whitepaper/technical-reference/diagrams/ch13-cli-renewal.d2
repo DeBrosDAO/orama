@@ -1,0 +1,38 @@
+direction: down
+
+bearer: "Bearer(gatewayURL, store, creds)\nholds sessionMu (this process)" {shape: oval}
+live: "access token good for\nmore than 60 s?" {shape: diamond}
+use: "send the stored access token" {shape: oval}
+lock: "flock LOCK_EX on credentials.json.lock\n(other CLI processes wait)"
+reread: "reload credentials.json and\nfind the same wallet + namespace"
+gone: "entry gone: signed out while waiting\nerror, no renewal" {shape: oval}
+fresh: "stored token already renewed\nby another process?" {shape: diamond}
+rt: "refresh token stored?" {shape: diamond}
+refresh: "POST /v1/auth/refresh\n(30 s timeout, redirects refused)"
+outcome: "gateway answer" {shape: diamond}
+transient: "unreachable, 5xx, 429, 400:\nsession left exactly as it was,\nthis attempt fails" {shape: oval}
+clear: "401 or 403: refresh token is dead,\nclear it"
+key: "API key stored?" {shape: diamond}
+exchange: "POST /v1/auth/token with the key\n(the only request that sends it)"
+ended: "ErrSessionEnded after a refusal:\nexit code 3 (auth), run orama auth login" {shape: oval}
+save: "write rotated session back\n(0600 temp file, fsync, rename)\nthen release the lock"
+
+bearer -> live
+live -> use: "yes"
+live -> lock: "no"
+lock -> reread
+reread -> gone: "missing"
+reread -> fresh
+fresh -> use: "yes"
+fresh -> rt: "no"
+rt -> refresh: "yes"
+rt -> key: "no"
+refresh -> outcome
+outcome -> save: "200"
+outcome -> transient: "other failure"
+outcome -> clear: "401 or 403"
+clear -> key
+key -> exchange: "yes"
+key -> ended: "no"
+exchange -> save
+save -> use

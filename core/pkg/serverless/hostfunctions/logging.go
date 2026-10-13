@@ -9,26 +9,20 @@ import (
 	"go.uber.org/zap"
 )
 
-// LogInfo logs an info message. Writes to the per-invocation LogBuffer
-// attached to ctx (see log_buffer.go); falls back to the legacy
-// HostFunctions singleton slice when no buffer is on ctx (test paths
-// that haven't migrated).
-//
-// Bugboard #108 fix: previously this always wrote to the singleton
-// `h.logs`, causing cross-contamination between concurrent invocations
-// (push-fanout's invocation record captured rpc-router's log lines).
+// LogInfo logs an info message into the per-invocation LogBuffer attached to
+// ctx (see log_buffer.go), and to the gateway's own log either way.
 func (h *HostFunctions) LogInfo(ctx context.Context, message string) {
 	entry := serverless.LogEntry{
 		Level:     "info",
 		Message:   message,
 		Timestamp: time.Now(),
 	}
+	// The per-invocation buffer, or nowhere. A shared slice was how one
+	// invocation's log lines ended up in another's record (bugboard #108); a
+	// call with no buffer is one outside any invocation, and there is no
+	// record for it to belong to.
 	if buf := serverless.LogBufferFromCtx(ctx); buf != nil {
 		buf.Append(entry)
-	} else {
-		h.logsLock.Lock()
-		h.logs = append(h.logs, entry)
-		h.logsLock.Unlock()
 	}
 
 	h.logger.Info(message,
@@ -37,21 +31,19 @@ func (h *HostFunctions) LogInfo(ctx context.Context, message string) {
 	)
 }
 
-// LogError logs an error message. See LogInfo for the per-invocation
-// LogBuffer / singleton fallback semantics — same code path, same
-// bugboard #108 rationale.
+// LogError logs an error message. See LogInfo.
 func (h *HostFunctions) LogError(ctx context.Context, message string) {
 	entry := serverless.LogEntry{
 		Level:     "error",
 		Message:   message,
 		Timestamp: time.Now(),
 	}
+	// The per-invocation buffer, or nowhere. A shared slice was how one
+	// invocation's log lines ended up in another's record (bugboard #108); a
+	// call with no buffer is one outside any invocation, and there is no
+	// record for it to belong to.
 	if buf := serverless.LogBufferFromCtx(ctx); buf != nil {
 		buf.Append(entry)
-	} else {
-		h.logsLock.Lock()
-		h.logs = append(h.logs, entry)
-		h.logsLock.Unlock()
 	}
 
 	h.logger.Error(message,

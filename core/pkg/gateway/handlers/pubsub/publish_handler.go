@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
+	gwauth "github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/pubsub"
 	"go.uber.org/zap"
 )
@@ -44,19 +46,25 @@ func (p *PubSubHandlers) PublishHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	p.deliverLocal(ns, body.Topic, data)
+	if refuseReservedPublish(w, body.Topic) || !authorizeTopic(w, r, body.Topic, gwauth.ActionWrite) {
+		return
+	}
+	if refuseReservedEnvelope(w, data, "the message") {
+		return
+	}
 
-	// Publish to libp2p asynchronously for cross-node delivery.
-	go func() {
-		publishCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		ctx := pubsub.WithNamespace(client.WithInternalAuth(publishCtx), ns)
-		if err := p.client.PubSub().Publish(ctx, body.Topic, data); err != nil {
-			p.logger.ComponentWarn("gateway", "async libp2p publish failed",
-				zap.String("topic", body.Topic),
-				zap.Error(err))
-		}
-	}()
+	// Hand the message to the pubsub service inside the request. The service
+	// delivers it, in the order it receives it, to every subscriber on this
+	// node and on others; answering only once it has it keeps one publisher's
+	// messages in order and tells the publisher when one did not get through.
+	ctx, cancel := context.WithTimeout(r.Context(), p.publishTimeout)
+	defer cancel()
+	ctx = pubsub.WithNamespace(client.WithInternalAuth(ctx), ns)
+	if err := p.client.PubSub().Publish(ctx, body.Topic, data); err != nil {
+		p.writePublishError(w, fmt.Sprintf("topic %q", body.Topic), err)
+		return
+	}
+	p.firePublishTriggers(ns, body.Topic, data)
 
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
@@ -75,12 +83,10 @@ type PublishBatchEntry struct {
 
 // PublishBatchResponse is the response body for /v1/pubsub/publish-batch.
 //
-// libp2p delivery is asynchronous and not awaited here, mirroring the
-// single-publish handler's fire-and-forget contract. Per-topic failures
-// are not surfaced via this response — operators should consult logs /
-// metrics for delivery health.
+// It is sent only once the pubsub service holds every message; a batch it does
+// not accept is answered with an error status and an {"error": ...} body.
 type PublishBatchResponse struct {
-	Status string `json:"status"` // always "ok" — request was accepted
+	Status string `json:"status"` // always "ok" when this body is sent
 }
 
 // MaxPerMessageBytes caps an individual message payload inside a batch.
@@ -89,8 +95,8 @@ const MaxPerMessageBytes = 1 << 20
 
 // PublishBatchHandler handles POST /v1/pubsub/publish-batch.
 // Accepts up to MaxPublishBatchSize messages and publishes them in parallel,
-// preserving namespace isolation. Local subscribers receive messages
-// immediately; libp2p delivery is async.
+// preserving namespace isolation. It answers once the pubsub service, which
+// delivers to subscribers on this node and on others, has accepted the batch.
 func (p *PubSubHandlers) PublishBatchHandler(w http.ResponseWriter, r *http.Request) {
 	if p.client == nil {
 		writeError(w, http.StatusServiceUnavailable, "client not initialized")
@@ -140,60 +146,58 @@ func (p *PubSubHandlers) PublishBatchHandler(w http.ResponseWriter, r *http.Requ
 			writeError(w, http.StatusBadRequest, "message too large at index "+strconv.Itoa(i))
 			return
 		}
+		// Every topic in the batch, before any of them is delivered: a batch
+		// that is half refused is worse than one that is refused.
+		if refuseReservedPublish(w, m.Topic) || !authorizeTopic(w, r, m.Topic, gwauth.ActionWrite) {
+			return
+		}
+		if refuseReservedEnvelope(w, data, "message at index "+strconv.Itoa(i)) {
+			return
+		}
 		decoded = append(decoded, pubsub.TopicMessage{Topic: m.Topic, Data: data})
 	}
 
-	// Deliver locally + dispatch triggers per topic synchronously (fast in-process).
-	for _, msg := range decoded {
-		p.deliverLocal(ns, msg.Topic, msg.Data)
+	ctx, cancel := context.WithTimeout(r.Context(), p.publishTimeout)
+	defer cancel()
+	ctx = pubsub.WithNamespace(client.WithInternalAuth(ctx), ns)
+	opts := client.PublishBatchOptions{BestEffort: body.BestEffort}
+	if err := p.client.PubSub().PublishBatch(ctx, toClientMessages(decoded), opts); err != nil {
+		p.writePublishError(w, fmt.Sprintf("a batch of %d messages", len(decoded)), err)
+		return
 	}
-
-	// Async libp2p batch publish, similar to PublishHandler's approach.
-	go func() {
-		publishCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		ctx := pubsub.WithNamespace(client.WithInternalAuth(publishCtx), ns)
-		opts := pubsub.PublishBatchOptions{BestEffort: body.BestEffort}
-		err := p.client.PubSub().PublishBatch(ctx, toClientMessages(decoded), clientOpts(opts))
-		if err != nil {
-			p.logger.ComponentWarn("gateway", "async libp2p batch publish failed",
-				zap.Int("messages", len(decoded)),
-				zap.Error(err))
-		}
-	}()
+	for _, msg := range decoded {
+		p.firePublishTriggers(ns, msg.Topic, msg.Data)
+	}
 
 	writeJSON(w, http.StatusOK, PublishBatchResponse{Status: "ok"})
 }
 
-// deliverLocal handles local-subscriber delivery and fires PubSub triggers.
-// It does NOT publish to libp2p — callers handle that themselves (single
-// or batched) so this helper stays focused on in-process fan-out.
-func (p *PubSubHandlers) deliverLocal(ns, topic string, data []byte) {
-	p.mu.RLock()
-	localSubs := p.getLocalSubscribers(topic, ns)
-	p.mu.RUnlock()
-
-	localDeliveryCount := 0
-	if len(localSubs) > 0 {
-		for _, sub := range localSubs {
-			select {
-			case sub.msgChan <- data:
-				localDeliveryCount++
-			default:
-				p.logger.ComponentWarn("gateway", "local subscriber buffer full, dropping message",
-					zap.String("topic", topic))
-			}
-		}
+// writePublishError answers a publish the pubsub service did not accept: 504
+// when it did not answer in time, 503 otherwise. what names the message(s).
+// The cause and the unit to check go to the operator's log; the tenant is told
+// the publish did not happen and may be retried, not the node's internals.
+func (p *PubSubHandlers) writePublishError(w http.ResponseWriter, what string, err error) {
+	p.logger.ComponentWarn("gateway", "pubsub publish failed: check that orama-namespace-pubsub@index is running",
+		zap.String("what", what), zap.Duration("timeout", p.publishTimeout), zap.Error(err))
+	if errors.Is(err, context.DeadlineExceeded) {
+		writeError(w, http.StatusGatewayTimeout, fmt.Sprintf(
+			"publish of %s was not confirmed within %s and may not have been delivered; retry it", what, p.publishTimeout))
+		return
 	}
+	writeError(w, http.StatusServiceUnavailable, fmt.Sprintf(
+		"publish of %s was not delivered: the pub/sub service is unavailable on this node; retry it", what))
+}
 
+// firePublishTriggers dispatches the PubSub triggers of serverless functions
+// for a message published through this gateway. It does not deliver the message
+// to anyone: subscribers, on this node or another, receive it from the node's
+// pubsub service, which the caller publishes to.
+func (p *PubSubHandlers) firePublishTriggers(ns, topic string, data []byte) {
 	p.logger.ComponentInfo("gateway", "pubsub publish: processing message",
 		zap.String("topic", topic),
 		zap.String("namespace", ns),
-		zap.Int("data_len", len(data)),
-		zap.Int("local_subscribers", len(localSubs)),
-		zap.Int("local_delivered", localDeliveryCount))
+		zap.Int("data_len", len(data)))
 
-	// Fire PubSub triggers for serverless functions (non-blocking).
 	if p.onPublish != nil {
 		go p.onPublish(context.Background(), ns, topic, data)
 	}
@@ -207,10 +211,6 @@ func toClientMessages(msgs []pubsub.TopicMessage) []client.TopicMessage {
 		out[i] = client.TopicMessage{Topic: m.Topic, Data: m.Data}
 	}
 	return out
-}
-
-func clientOpts(o pubsub.PublishBatchOptions) client.PublishBatchOptions {
-	return client.PublishBatchOptions{BestEffort: o.BestEffort, MaxConcurrency: o.MaxConcurrency}
 }
 
 // TopicsHandler lists topics within the caller's namespace
@@ -232,7 +232,7 @@ func (p *PubSubHandlers) TopicsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Client returns topics already trimmed to its namespace; return as-is
-	writeJSON(w, http.StatusOK, map[string]any{"topics": all})
+	writeJSON(w, http.StatusOK, map[string]any{"topics": withoutReservedTopics(r, all)})
 }
 
 // writeError writes an error response

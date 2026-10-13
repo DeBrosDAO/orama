@@ -49,6 +49,7 @@ func TestSpawnedGatewayConfig_loadsSecretsEncryptionKey(t *testing.T) {
 		WebRTC               webrtc   `yaml:"webrtc"`
 		SecretsEncryptionKey string   `yaml:"secrets_encryption_key"`
 		ClusterSecretPath    string   `yaml:"cluster_secret_path"`
+		StateDir             string   `yaml:"state_dir"`
 	}
 
 	var y yamlCfgMirror

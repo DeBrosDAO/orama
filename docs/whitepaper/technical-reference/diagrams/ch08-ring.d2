@@ -1,0 +1,25 @@
+direction: right
+
+title: "Five nodes sorted by peer id; each probes the next 3 (wrapping)" {shape: text}
+
+a: "node A"
+b: "node B"
+c: "node C"
+d: "node D"
+e: "node E"
+
+a -> b: "probe"
+a -> c: "probe"
+a -> d: "probe"
+b -> c
+b -> d
+b -> e
+c -> d
+c -> e
+c -> a
+d -> e
+d -> a
+d -> b
+e -> a
+e -> b
+e -> c

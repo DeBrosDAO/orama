@@ -1,0 +1,28 @@
+{
+  "route": "/v1/proxy/anon",
+  "method": "POST",
+  "sdk": "network.proxyAnon()",
+  "goStruct": "",
+  "call": {
+    "module": "network",
+    "method": "proxyAnon",
+    "args": [
+      {
+        "url": "https://example.onion",
+        "method": "GET"
+      }
+    ]
+  },
+  "request": {
+    "url": "https://example.onion",
+    "method": "GET"
+  },
+  "response": {
+    "status_code": 200,
+    "body": "hello"
+  },
+  "returns": {
+    "status_code": 200,
+    "body": "hello"
+  }
+}

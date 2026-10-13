@@ -1,0 +1,12 @@
+direction: right
+
+absent: "no row"
+active: "active\nis_active = TRUE"
+dark: "soft-disabled\nis_active = FALSE"
+gone: "deleted"
+
+absent -> active: "provision (CreateNamespaceRecords)\nrepair (AddNamespaceRecord)\nnode ensure on its 30 s sweep"
+active -> dark: "gateway unhealthy 3 probes (own row)\nring: node suspect (any observer)\nboth refuse the last active row"
+dark -> active: "own probe healthy 3 probes (own withdrawal)\nstale 10 min reclaim (peer's verdict)\nreactivate after /v1/health ok (60 s)\nring: node recovered\nAddNamespaceRecord / UpdateNamespaceRecord"
+active -> gone: "node silent 15 min and not active\n(purge, never empties a name)\nedge down 2 ticks (own row, never the last)\nnamespace deleted or absent\ndead node replaced: value swapped"
+dark -> gone: "namespace deleted or absent\nreplacement swaps the value"

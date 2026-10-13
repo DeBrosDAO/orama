@@ -1,0 +1,85 @@
+package node
+
+import (
+	"fmt"
+
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmdmeta"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/production/setup"
+	"github.com/spf13/cobra"
+)
+
+var setupOpts setup.Options
+
+// setupDeprecation is what `orama node setup` prints before it runs.
+const setupDeprecation = "orama node setup is replaced by `orama setup`, which also installs the global layer and registers the node; this command still works for now"
+
+var setupCmd = &cobra.Command{
+	Use:    "setup",
+	Hidden: true,
+	Short:  "Set up a fresh VPS as an Orama node (use orama setup)",
+	Long: `Use "orama setup": it does this for every machine you give it, and the rest of joining the
+network as well. This command stays for now and installs the cluster node only.
+
+Bootstrap a fresh VPS into a running Orama node in one command.
+
+Creates an SSH key in rootwallet, installs it on the VPS, uploads the binary
+archive, and runs the node install. For the first node, use --genesis to
+create a new cluster.
+
+Examples:
+  # Genesis node (first node, creates new cluster).
+  # Store the VPS login first: rw vault add 1.2.3.4 (username root).
+  # --password is a switch; it reads that login. --archive is the path
+  # "orama maint build" printed.
+  orama node setup --ip 1.2.3.4 --password --env devnet \
+    --base-domain orama-devnet.network --role nameserver --genesis \
+    --archive /tmp/orama-<version>-linux-amd64.tar.gz
+
+  # From a published release: no checkout, no Go or zig. The root is the
+  # release signers' key set you decided to trust; the cluster adopts it.
+  orama node setup --ip 1.2.3.4 --password --env mycluster \
+    --base-domain cluster.example.com --role nameserver --genesis \
+    --release 0.3.1 --release-repo https://releases.example.org/tuf --release-root ./root.json
+
+  # Join existing cluster
+  orama node setup --ip 5.6.7.8 --password --env devnet \
+    --base-domain orama-devnet.network \
+    --archive /tmp/orama-<version>-linux-amd64.tar.gz
+
+  # Key-only VPS (no password login): install the RootWallet key once
+  # with the key that opens it today. Do not pass --password as well.
+  orama node setup --ip 5.6.7.8 --user ubuntu --bootstrap-key ~/.ssh/id_ed25519 \
+    --env devnet --base-domain orama-devnet.network \
+    --archive /tmp/orama-<version>-linux-amd64.tar.gz
+
+  # Join as nameserver
+  orama node setup --ip 9.10.11.12 --password --env devnet \
+    --base-domain orama-devnet.network --role nameserver \
+    --archive /tmp/orama-<version>-linux-amd64.tar.gz`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		fmt.Fprintln(cmd.ErrOrStderr(), setupDeprecation)
+		return setup.Run(setupOpts)
+	},
+}
+
+func init() {
+	setupCmd.Flags().StringVar(&setupOpts.IP, "ip", "", "Public IP address of the VPS (required)")
+	setupCmd.Flags().StringVar(&setupOpts.Env, "env", "", "Target environment (default: active)")
+	setupCmd.Flags().StringVar(&setupOpts.Role, "role", "node", "Node role: node or nameserver")
+	setupCmd.Flags().StringVar(&setupOpts.User, "user", "root", "SSH user on the VPS")
+	setupCmd.Flags().BoolVar(&setupOpts.UsePassword, "password", false, "Bootstrap over password login; the password is read from your RootWallet vault login for the IP (rw vault add <ip>), never from the command line")
+	setupCmd.Flags().StringVar(&setupOpts.BaseDomain, "base-domain", "", "Base domain for the network")
+	setupCmd.Flags().StringVar(&setupOpts.Gateway, "gateway", "", "Gateway URL of the cluster to join (default: the environment's): its domain, e.g. https://orama-devnet.network; the invite is minted through one of its nodes and pins that node's certificate")
+	setupCmd.Flags().BoolVar(&setupOpts.Genesis, "genesis", false, "Create a new cluster (first node)")
+	setupCmd.Flags().StringVar(&setupOpts.HostKey, "host-key", "", "Expected SSH host-key fingerprint (SHA256:...) of the VPS; omit to confirm it interactively")
+	setupCmd.Flags().StringVar(&setupOpts.BootstrapKey, "bootstrap-key", "", "SSH private key that opens the VPS today (key-only images, e.g. --user ubuntu); used once to install the RootWallet key, never stored")
+	setupCmd.Flags().StringVar(&setupOpts.Archive, "archive", "", "Build archive to install — the path `orama maint build` printed [required]; a node already running this exact build is not re-uploaded")
+	setupCmd.Flags().StringVar(&setupOpts.JoinVia, "join-via", "", "user@ip of a node already in the cluster; the invite is minted there over SSH (no 'orama auth login' needed)")
+	setupCmd.Flags().StringVar(&setupOpts.ACMECA, "acme-ca", "", "ACME directory for the node's TLS certificates (passed to node install): letsencrypt, letsencrypt-staging or an https URL")
+	setupCmd.Flags().StringVar(&setupOpts.Release, "release", "", "Install this published release version instead of an archive you built: it is fetched from --release-repo, verified against --release-root, then signed by your RootWallet")
+	setupCmd.Flags().StringVar(&setupOpts.ReleaseRepo, "release-repo", "", "https URL of the release repository (TUF metadata and archives); with --release")
+	setupCmd.Flags().StringVar(&setupOpts.ReleaseRoot, "release-root", "", "The TUF root.json of the release signers you trust, checked out of band; with --release. The cluster adopts it")
+	setupCmd.Flags().StringVar(&setupOpts.Channel, "channel", "", "Release channel to read (default stable); with --release")
+	setupCmd.MarkFlagRequired("ip")
+	cmdmeta.MarkListed(setupCmd)
+}

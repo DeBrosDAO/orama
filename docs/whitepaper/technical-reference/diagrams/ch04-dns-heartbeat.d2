@@ -1,0 +1,22 @@
+direction: down
+
+tick: "every 30 s"
+hb: "Heartbeat via coreapi\nrefresh last_seen, re-assert active"
+chk: "edgeServing(): Caddy (and SNI router when enabled) active?"
+ok: "edgeDown = 0\nensureBaseDNSRecords + ensureNamespaceHostRecords"
+miss: "edgeDown + 1"
+two: "edgeDown >= 2?"
+wd: "withdrawFromDNS\ndelete own A records from base names and\nns-name round-robins, never the last record"
+wait: "keep heartbeating, wait one more tick"
+maint: "maintainClusterDNS (every tick, edge up or not)\nretract own TURN records without an allocation,\nmark nodes silent over 120 s inactive and drop their A records,\npurge namespace records of nodes non-active over 15 min,\npurge records of namespaces that no longer exist"
+
+tick -> hb
+hb -> chk
+chk -> ok: "yes"
+chk -> miss: "no"
+miss -> two
+two -> wd: "yes"
+two -> wait: "no"
+ok -> maint
+wd -> maint
+wait -> maint

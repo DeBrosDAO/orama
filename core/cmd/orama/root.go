@@ -1,0 +1,262 @@
+package main
+
+import (
+	"fmt"
+	"os"
+
+	"github.com/spf13/cobra"
+
+	cli "github.com/DeBrosOfficial/network/cmd/orama/internal"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmdmeta"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/printer"
+
+	// Command groups
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/app"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/auditcmd"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/authcmd"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/chaincmd"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/clustercmd"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/dbcmd"
+	deploycmd "github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/deploy"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/editcmd"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/functioncmd"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/globalcmd"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/memberscmd"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/namespacecmd"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/networkcmd"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/node"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/nodescmd"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/removecmd"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/setupcmd"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/sshcmd"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/statuscmd"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/storagecmd"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/upgradecmd"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/domain"
+)
+
+// version metadata populated via -ldflags at build time
+// Must match Makefile: -X 'main.version=...' -X 'main.commit=...' -X 'main.date=...'
+var (
+	version = "dev"
+	commit  = ""
+	date    = ""
+)
+
+func newRootCmd() *cobra.Command {
+	rootCmd := &cobra.Command{
+		Use:   "orama",
+		Short: "Orama CLI — operate nodes and manage a namespace",
+		Long: `The human interface to the Orama network. One binary, three audiences:
+
+  Operators  orama status, upgrade, edit, remove, ssh, network, …
+  Tenants    orama deploy, app, function, db, namespace, …
+  Maintainers  orama maint …  (hidden from this help; every command in it works)
+
+Programs use the SDK and the gateway HTTP API. There is no Orama dashboard
+and no Orama MCP.`,
+		SilenceUsage:  true,
+		SilenceErrors: true,
+	}
+
+	printer.Register(rootCmd)
+
+	// The cluster unit's process. Hidden: operators start the unit, not this.
+	rootCmd.AddCommand(serveIPFSClusterCmd())
+
+	// Version command
+	rootCmd.AddCommand(&cobra.Command{
+		Use:   "version",
+		Short: "Show version information",
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Fprintln(cmd.OutOrStdout(), resolveBuildInfo(version, commit, date))
+		},
+	})
+
+	// Join a network from fresh machines
+	rootCmd.AddCommand(setupcmd.Cmd)
+
+	// Node operator commands (was "prod")
+	rootCmd.AddCommand(node.Cmd)
+
+	// Deploy command (top-level, upsert)
+	rootCmd.AddCommand(deploycmd.Cmd)
+
+	// App management (was "deployments")
+	rootCmd.AddCommand(app.Cmd)
+
+	// Database commands
+	rootCmd.AddCommand(dbcmd.Cmd)
+
+	// Custom domain commands
+	rootCmd.AddCommand(domain.Cmd)
+
+	// Namespace commands
+	rootCmd.AddCommand(namespacecmd.Cmd)
+	rootCmd.AddCommand(memberscmd.Cmd)
+
+	// The networks the CLI knows; `orama network` is its hidden, deprecated old name
+	rootCmd.AddCommand(networkcmd.Cmd)
+	rootCmd.AddCommand(networkcmd.EnvCmd)
+
+	// Auth commands
+	rootCmd.AddCommand(authcmd.Cmd)
+
+	// The audit trail
+	rootCmd.AddCommand(auditcmd.Cmd)
+
+	// Cluster operations
+	rootCmd.AddCommand(clustercmd.Cmd)
+	rootCmd.AddCommand(globalcmd.Cmd)
+	rootCmd.AddCommand(storagecmd.Cmd)
+
+	// Read the chain
+	rootCmd.AddCommand(chaincmd.Cmd)
+
+	// Monitor command
+
+	// Serverless function commands
+	rootCmd.AddCommand(functioncmd.Cmd)
+
+	// Unified node management commands
+	rootCmd.AddCommand(nodescmd.Cmd)
+	rootCmd.AddCommand(statuscmd.Cmd)
+	rootCmd.AddCommand(upgradecmd.Cmd)
+	rootCmd.AddCommand(removecmd.Cmd)
+	rootCmd.AddCommand(editcmd.Cmd)
+	rootCmd.AddCommand(sshcmd.Cmd)
+
+	hideReplacedGroups()
+	rootCmd.AddCommand(newMaintCmd())
+
+	classifyUsageErrors(rootCmd)
+
+	return rootCmd
+}
+
+// classifyUsageErrors makes cobra's own argument validation exit with the
+// usage code instead of the generic failure code.
+//
+// A caller that can tell "you typed it wrong" from "the cluster refused" can
+// act on the difference: the first is never worth retrying, the second may be.
+// Only commands that declare an Args validator are wrapped — leaving Args nil
+// selects cobra's own default, which is what makes a parent command reject an
+// unknown subcommand, and replacing it would make that silently succeed.
+func classifyUsageErrors(cmd *cobra.Command) {
+	// A group command — subcommands, nothing of its own to run — rejects a
+	// positional argument, because the only thing one can be is a subcommand
+	// name that does not exist. Cobra returns help and exits zero for a
+	// command it considers not runnable, and it decides that before it
+	// validates arguments, so `orama node <typo>` printed the group's help and
+	// succeeded: a script never learned the subcommand did not exist.
+	if cmd.Run == nil && cmd.RunE == nil && cmd.HasSubCommands() {
+		cmd.RunE = func(c *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				return c.Help()
+			}
+			return clierr.Usage("unknown %s subcommand %q\n  Run 'orama %s --help' to see what it takes",
+				c.Name(), args[0], c.CommandPath()[len("orama "):])
+		}
+	}
+
+	if inner := cmd.Args; inner != nil {
+		cmd.Args = func(c *cobra.Command, args []string) error {
+			return clierr.Wrap(clierr.CodeUsage, inner(c, args))
+		}
+	}
+	cmd.SetFlagErrorFunc(func(c *cobra.Command, err error) error {
+		return clierr.Wrap(clierr.CodeUsage, err)
+	})
+	if cmd.Runnable() {
+		classifyRequiredFlags(cmd)
+	}
+	for _, sub := range cmd.Commands() {
+		classifyUsageErrors(sub)
+	}
+}
+
+// classifyRequiredFlags makes a missing required flag, or a flag group left
+// unsatisfied, a usage error. Cobra checks both after PreRunE and returns its
+// own plain error, which came back as the generic failure code: `orama node
+// enroll` without --gateway exited 1, the same as a gateway that was down. The
+// same checks run here first, before whatever PreRun the command had.
+func classifyRequiredFlags(cmd *cobra.Command) {
+	prevE, prev := cmd.PreRunE, cmd.PreRun
+	cmd.PreRunE = func(c *cobra.Command, args []string) error {
+		if err := c.ValidateRequiredFlags(); err != nil {
+			return clierr.Wrap(clierr.CodeUsage, err)
+		}
+		if err := c.ValidateFlagGroups(); err != nil {
+			return clierr.Wrap(clierr.CodeUsage, err)
+		}
+		if prevE != nil {
+			return prevE(c, args)
+		}
+		if prev != nil {
+			prev(c, args)
+		}
+		return nil
+	}
+}
+
+// runCLI executes the command tree and turns its error into an exit code.
+//
+// This is the only place the process exits. Handlers used to call os.Exit
+// themselves, which meant deferred cleanup never ran — a push left staged
+// private keys behind — and every failure was code 1, so a script could not
+// tell a mistyped flag from a cluster that had lost quorum.
+// needsEnvironmentCAs reports whether cmd may talk to a gateway. `orama network`
+// (and its old name `orama network`) manages the CA files themselves, so a missing one must not lock it out of
+// the command that fixes it; `version` talks to nobody; a node-local command
+// (cmdmeta) runs from a systemd unit with no home and no operator environment.
+func needsEnvironmentCAs(cmd *cobra.Command) bool {
+	if cmdmeta.IsNodeLocal(cmd) {
+		return false
+	}
+	for c := cmd; c != nil; c = c.Parent() {
+		switch c.Name() {
+		case "network", "env", "version", "serve-ipfs-cluster":
+			if c.Parent() != nil && c.Parent().Parent() == nil {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func runCLI() {
+	rootCmd := newRootCmd()
+
+	// Resolve the command line to a command first. Cobra reports a name it
+	// cannot resolve as a plain error, which would come back as the generic
+	// failure code while a mistyped subcommand one level down reports a usage
+	// error — the same mistake, two different answers to a script.
+	target, _, err := rootCmd.Find(os.Args[1:])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(clierr.CodeUsage)
+	}
+
+	if needsEnvironmentCAs(target) {
+		if err := cli.TrustEnvironmentCAs(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(clierr.CodeFailure)
+		}
+	}
+
+	err = rootCmd.Execute()
+	if err == nil {
+		return
+	}
+
+	code := clierr.CodeOf(err)
+	if code == clierr.CodeAborted {
+		// The operator declined a confirmation. Nothing happened and nothing
+		// is wrong, so this is not reported as an error.
+		os.Exit(code)
+	}
+
+	fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+	os.Exit(code)
+}

@@ -1,0 +1,21 @@
+shape: sequence_diagram
+
+c: Owner
+ch: x/storage (oramad)
+p: Provider (hot key)
+em: x/emission
+
+c -> c: "seal file: inner AEAD, then per-slot outer layer; piece root per slot"
+c -> ch: "MsgCreateDeal (fee burned, escrow = price x replicas x epochs)"
+ch -> ch: "slots UNASSIGNED, deal OPEN, assign_at_height = h+1"
+ch -> p: "BeginBlock h+1: picker binds each slot, event storage_slot_assigned"
+c -> p: "POST /pieces/ROOT (403 until the provider has read the assignment)"
+p -> p: "Ingest: SHA-256 piece root must equal ROOT; denylist, disk check"
+p -> ch: "MsgAcceptDeal (within 50 blocks)"
+ch -> ch: "slot ACTIVE, deal ACTIVE, challenge for this epoch drawn"
+p -> ch: "MsgSubmitProofs: leaf + Merkle siblings"
+ch -> ch: "VerifyChallenge against slot.piece_root"
+em -> ch: "epoch counter moves"
+ch -> ch: "closeEpoch: score proved vs missed, mint plan, settlement rows"
+ch -> em: "MintStorageService(epoch, total)"
+ch -> p: "EndBlock: pay escrow + mint (90% earnings, 5% burn, 5% archive fund)"

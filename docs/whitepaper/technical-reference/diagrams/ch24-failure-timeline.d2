@@ -1,0 +1,19 @@
+shape: sequence_diagram
+
+n: "Node X (gateway for namespace foo)"
+o: "Ring observers"
+g: "X's own index gateway"
+s: "Every node's 30 s sweep"
+c: "Cluster manager (leader of recovery)"
+r: "Resolver"
+
+n -> n: "t0: stops answering"
+g -> g: "only if X's index gateway still runs:\nservices failing, 3 probes x 30 s"
+g -> s: "withdraw own ns-foo rows (if not the last)"
+o -> o: "t0 + ~85 to 95 s: suspect (3 misses + heartbeat window)"
+o -> s: "HandleSuspectNode: disable X's ns-foo rows (not the last)"
+s -> s: "t0 + 120 s: reaper marks X inactive,\ndeletes X's system A rows"
+o -> c: "dead after quorum: HandleDeadNode"
+c -> s: "ReplaceClusterNode: swap X's IP for the replacement's IP"
+s -> s: "t0 + 15 min: purge deletes any remaining active rows of X\n(gateway rows never emptied; TURN rows deleted outright)"
+r -> r: "cached answers live for the record TTL (60 s ns-, 300 s base)\nplus 30 s inside CoreDNS"

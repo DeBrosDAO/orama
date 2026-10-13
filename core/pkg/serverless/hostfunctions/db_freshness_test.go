@@ -147,7 +147,7 @@ func TestDBQueryBatch_freshnessViolationReturnsStaleRejected(t *testing.T) {
 	h := newHFWithDB(fake)
 
 	in := []byte(`{"consistency":"none","freshness":"2s","ops":[{"sql":"SELECT 1"}]}`)
-	out, err := h.DBQueryBatch(context.Background(), in)
+	out, err := h.DBQueryBatch(nsCtx(), in)
 	if err != nil {
 		t.Fatalf("a freshness violation must be a structured envelope, not a Go error: %v", err)
 	}
@@ -171,7 +171,7 @@ func TestDBQueryBatch_freshnessHappyPath(t *testing.T) {
 	h := newHFWithDB(fake)
 
 	in := []byte(`{"consistency":"none","freshness":"1s","ops":[{"sql":"SELECT 1"}]}`)
-	out, err := h.DBQueryBatch(context.Background(), in)
+	out, err := h.DBQueryBatch(nsCtx(), in)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -195,7 +195,7 @@ func TestDBQueryBatch_freshnessWithWeakRejectedAtHostBoundary(t *testing.T) {
 	h := newHFWithDB(fake)
 
 	in := []byte(`{"consistency":"weak","freshness":"2s","ops":[{"sql":"SELECT 1"}]}`)
-	if _, err := h.DBQueryBatch(context.Background(), in); err == nil {
+	if _, err := h.DBQueryBatch(nsCtx(), in); err == nil {
 		t.Fatal("freshness with consistency=weak must error at the host boundary")
 	}
 }

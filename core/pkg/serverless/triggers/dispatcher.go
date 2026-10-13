@@ -4,11 +4,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"sync"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/olric"
 	"github.com/DeBrosOfficial/network/pkg/pubsub"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"github.com/DeBrosOfficial/network/pkg/serverless/aggregator"
@@ -90,14 +90,12 @@ type topicLister interface {
 //     swarm key (PSK) separating each tenant's pubsub mesh. Documented
 //     in the security audit on bugboard #282; track as a separate ticket.
 //
-//  2. Trigger-depth loops via libp2p round-trip: maxTriggerDepth=5 is
-//     embedded in the PubSubEvent payload, but a triggered function that
-//     publishes back through `oh.PubSubPublish` re-enters this dispatcher
-//     via libp2p Subscribe with depth=0 (the depth field lives in the
-//     OUR envelope, not in the libp2p wire format). Loops are bounded
-//     only by the per-invocation timeout. WASM functions MUST self-limit
-//     by reading `event.trigger_depth` from their input. A future fix
-//     would encode depth in a libp2p header the dispatcher reads back.
+//  2. Trigger depth across the libp2p hop: the wire format carries only the
+//     payload, so a publish made from inside a triggered function re-enters
+//     this dispatcher through Subscribe with no depth. The host records the
+//     publishing invocation's depth beside the message (RecordPublishDepth,
+//     publish_depth.go) and the Subscribe handler reads it back, so a chain of
+//     republishes stops at maxTriggerDepth.
 //
 //  3. Wildcard patterns are not subscribed via libp2p (libp2p has no
 //     wildcard subscribe). Wildcard triggers only fire from HTTP-publish
@@ -106,7 +104,7 @@ type topicLister interface {
 type PubSubDispatcher struct {
 	store       *PubSubTriggerStore
 	invoker     *serverless.Invoker
-	olricClient olriclib.Client // may be nil (cache disabled)
+	olricClient func() olriclib.Client // may be nil (cache disabled); yields nil while Olric is down
 	aggregator  *aggregator.Aggregator
 	logger      *zap.Logger
 
@@ -140,6 +138,15 @@ type PubSubDispatcher struct {
 	// Bugboard #555. Always non-nil after NewPubSubDispatcher.
 	localDedup *localDedupCache
 
+	// depthLedger / depthStore carry the trigger depth of a message published
+	// by a function across the libp2p hop (publish_depth.go). depthLedger is
+	// always non-nil after NewPubSubDispatcher; depthStore is nil when the
+	// namespace has no Olric, leaving only same-gateway depth.
+	depthLedger *depthLedger
+	depthStore  depthStore
+	// depthMisses spares repeat deliveries of one message the shared read.
+	depthMisses *depthMissCache
+
 	// degradedDedupWarn rate-limits the "Olric dedup degraded" WARN so a
 	// misconfigured cluster doesn't flood the log on every publish.
 	// Bugboard #555.
@@ -160,11 +167,13 @@ const degradedDedupWarnInterval = 60 * time.Second
 func NewPubSubDispatcher(
 	store *PubSubTriggerStore,
 	invoker *serverless.Invoker,
-	olricClient olriclib.Client,
+	olricClient func() olriclib.Client,
 	ps dispatcherPubSub,
 	logger *zap.Logger,
 ) *PubSubDispatcher {
 	return &PubSubDispatcher{
+		depthLedger:    newDepthLedger(),
+		depthMisses:    newDepthMissCache(),
 		store:          store,
 		topicLister:    store, // defaults to the real store; tests override
 		invoker:        invoker,
@@ -285,8 +294,10 @@ func (d *PubSubDispatcher) Refresh(ctx context.Context) error {
 		ns, topic := s.Namespace, s.TopicPattern
 		handler := func(msgTopic string, data []byte) error {
 			// PEER_DISCOVERY_PING is filtered upstream in the Manager.
-			// data already excludes those.
-			d.Dispatch(context.Background(), ns, topic, data, 0)
+			// data already excludes those. A message arriving here may have
+			// been published by a triggered function; dispatch recovers the
+			// depth it recorded.
+			d.dispatch(context.Background(), ns, topic, data, 0, true)
 			return nil
 		}
 		if err := d.pubsub.Subscribe(ctx, topic, handler); err != nil {
@@ -345,6 +356,14 @@ func (d *PubSubDispatcher) Aggregator() *aggregator.Aggregator {
 // invokes matching functions asynchronously. Each invocation runs in its own
 // goroutine and does not block the caller.
 func (d *PubSubDispatcher) Dispatch(ctx context.Context, namespace, topic string, data []byte, depth int) {
+	d.dispatch(ctx, namespace, topic, data, depth, false)
+}
+
+// dispatch is Dispatch. fromWire is true for a message that arrived over
+// libp2p: its depth is then raised to the one the publishing function recorded
+// (publishedDepth), never lowered, so a republishing chain cannot restart at 0.
+// A publish through the HTTP hook is a client's and keeps the depth it was given.
+func (d *PubSubDispatcher) dispatch(ctx context.Context, namespace, topic string, data []byte, depth int, fromWire bool) {
 	if depth >= maxTriggerDepth {
 		d.logger.Warn("PubSub trigger depth limit reached, skipping dispatch",
 			zap.String("namespace", namespace),
@@ -354,14 +373,32 @@ func (d *PubSubDispatcher) Dispatch(ctx context.Context, namespace, topic string
 		return
 	}
 
+	// A message from the wire is dispatched at the depth the publishing
+	// function recorded, never lower. The depth is settled before the dedup
+	// claims because it is part of their key: a function that republishes
+	// the same bytes one level deeper is a new dispatch, not a duplicate of
+	// the one that ran it.
+	if fromWire {
+		if recorded := d.publishedDepth(ctx, namespace, topic, data); recorded > depth {
+			depth = recorded
+		}
+		if depth >= maxTriggerDepth {
+			d.logger.Warn("PubSub trigger depth limit reached, skipping dispatch",
+				zap.String("namespace", namespace),
+				zap.String("topic", topic),
+				zap.Int("depth", depth),
+			)
+			return
+		}
+	}
+
 	// Local once-per-publish dedup (bugboard #555). gossipsub can deliver
 	// the SAME publish to this node's subscribe handler more than once
 	// (self-delivery / fan-out), and the cross-node Olric claim below is a
 	// no-op when Olric is down. This in-process guard ensures a SINGLE node
-	// never invokes the same (namespace, topic, payload) twice, regardless
-	// of Olric health.
-	dedupKey := dispatchDedupKey(namespace, topic, data)
-	if !d.localDedup.claim(dedupKey) {
+	// never invokes the same (namespace, topic, payload, depth) twice,
+	// regardless of Olric health.
+	if !d.localDedup.claim(dispatchClaimKey(namespace, topic, data, depth)) {
 		d.logger.Debug("PubSub dispatch deduped (local duplicate on this node)",
 			zap.String("namespace", namespace),
 			zap.String("topic", topic))
@@ -370,10 +407,10 @@ func (d *PubSubDispatcher) Dispatch(ctx context.Context, namespace, topic string
 
 	// Cluster-wide once-per-publish dedup (bugboard #30). gossipsub
 	// delivers a publish to every subscribed gateway node; only the node
-	// that wins the Olric claim for this (namespace, topic, payload)
+	// that wins the Olric claim for this (namespace, topic, payload, depth)
 	// proceeds, so the trigger fires once cluster-wide instead of once
 	// per gateway node.
-	if !d.claimDispatch(ctx, namespace, topic, data) {
+	if !d.claimDispatch(ctx, namespace, topic, data, depth) {
 		d.logger.Debug("PubSub dispatch deduped (claimed by another node)",
 			zap.String("namespace", namespace),
 			zap.String("topic", topic))
@@ -411,7 +448,7 @@ func (d *PubSubDispatcher) Dispatch(ctx context.Context, namespace, topic string
 	)
 
 	var (
-		eventJSON []byte
+		eventJSON  []byte
 		marshalErr error
 	)
 
@@ -561,6 +598,8 @@ func (d *PubSubDispatcher) bufferEvent(match TriggerMatch, event PubSubEvent) {
 				Input:        payload,
 				TriggerType:  serverless.TriggerTypePubSub,
 				TriggerDepth: event.TriggerDepth, // event was built with depth+1 by the caller
+				// A registered trigger matching is the gateway's own work.
+				SystemOriginated: true,
 			}
 			if _, err := d.invoker.Invoke(ctx, req); err != nil {
 				d.logger.Warn("Aggregated PubSub invocation failed",
@@ -593,6 +632,17 @@ func dispatchDedupKey(namespace, topic string, data []byte) string {
 	return fmt.Sprintf("%s|%s|%x", namespace, topic, sum[:16])
 }
 
+// dispatchClaimKey is the key of the once-per-publish claims: the message's
+// dispatchDedupKey plus the depth it is dispatched at. A function that
+// republishes constant bytes to its own topic (a retry, a heartbeat) sends the
+// same message one level deeper each time; keyed on the bytes alone, the
+// second step was swallowed as a duplicate of the first and the chain stalled
+// at depth 2. Every gateway resolves the same depth for one message (the
+// publisher records it cluster-wide), so a true duplicate still collides.
+func dispatchClaimKey(namespace, topic string, data []byte, depth int) string {
+	return fmt.Sprintf("%s|d%d", dispatchDedupKey(namespace, topic, data), depth)
+}
+
 // claimDispatch returns true if THIS node should dispatch the given
 // (namespace, topic, payload) — i.e. it won the cluster-wide claim.
 // Bugboard #30.
@@ -605,21 +655,22 @@ func dispatchDedupKey(namespace, topic string, data []byte) string {
 // non-"key found" error) this returns true. Dedup is a de-duplication
 // optimization, not a correctness gate — a rare duplicate dispatch is
 // far better than silently dropping a wake-up across the whole cluster.
-func (d *PubSubDispatcher) claimDispatch(ctx context.Context, namespace, topic string, data []byte) bool {
-	if d.olricClient == nil {
+func (d *PubSubDispatcher) claimDispatch(ctx context.Context, namespace, topic string, data []byte, depth int) bool {
+	client := d.currentOlric()
+	if client == nil {
 		return true // no shared store → can't coordinate → fire
 	}
-	dm, err := d.olricClient.NewDMap(dispatchDedupDMap)
+	dm, err := client.NewDMap(dispatchDedupDMap)
 	if err != nil {
 		d.warnDedupDegraded("NewDMap failed", namespace, topic, err)
 		return true
 	}
-	key := dispatchDedupKey(namespace, topic, data)
+	key := dispatchClaimKey(namespace, topic, data, depth)
 	err = dm.Put(ctx, key, 1, olriclib.NX(), olriclib.EX(dispatchDedupTTL))
 	if err == nil {
 		return true // we claimed it → dispatch
 	}
-	if errors.Is(err, olriclib.ErrKeyFound) {
+	if olric.IsKeyFound(err) {
 		return false // another node already claimed it → skip
 	}
 	// Any other (transient) error: fail-open and fire rather than risk a
@@ -674,7 +725,6 @@ func (d *PubSubDispatcher) getMatches(ctx context.Context, namespace, topic stri
 	return d.store.GetByTopicAndNamespace(ctx, topic, namespace)
 }
 
-
 // invokeFunction invokes a single function for a trigger match.
 //
 // `handlerDepth` is the depth at which the INVOKED handler runs (the
@@ -691,6 +741,8 @@ func (d *PubSubDispatcher) invokeFunction(match TriggerMatch, eventJSON []byte, 
 		Input:        eventJSON,
 		TriggerType:  serverless.TriggerTypePubSub,
 		TriggerDepth: handlerDepth,
+		// A registered trigger matching is the gateway's own work.
+		SystemOriginated: true,
 	}
 
 	resp, err := d.invoker.Invoke(ctx, req)
@@ -712,4 +764,3 @@ func (d *PubSubDispatcher) invokeFunction(match TriggerMatch, eventJSON []byte, 
 		zap.Int64("duration_ms", resp.DurationMS),
 	)
 }
-

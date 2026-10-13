@@ -1,0 +1,37 @@
+direction: right
+
+src: "Event sources"
+src: {
+  httppub: "HTTP publish / batch\n/v1/pubsub/publish"
+  libp2p: "libp2p delivery on a\nconcrete subscribed topic"
+  fnpub: "function pubsub_publish\n(same gateway)"
+  plat: "platform events\n(WebRTC membership)"
+  clock: "wall clock"
+}
+
+disp: "PubSubDispatcher" {
+  dedup: "local claim (4096 keys, 30 s)\nthen Olric NX claim (30 s)"
+  match: "GLOB lookup in\nfunction_pubsub_triggers"
+  depth: "depth below 5"
+  agg: "Aggregator buffer\n(window, batch size)"
+  dedup -> match
+  depth -> dedup
+  match -> agg: "aggregation_window_ms > 0"
+}
+
+cron: "CronScheduler\npoll every 30 s, batch 100" {
+  due: "ListDue"
+  cas: "MarkRun compare-and-swap\non next_run_at"
+  due -> cas
+}
+
+inv: "Invoker.Invoke\nSystemOriginated = true"
+
+src.httppub -> disp.depth: "Dispatch(depth 0)"
+src.libp2p -> disp.depth: "dispatch(fromWire)"
+src.plat -> disp.depth: "Dispatch(depth 0)"
+src.fnpub -> disp.match: "wildcard rows only\n(DispatchLocalPublish)"
+src.clock -> cron.due
+disp.match -> inv: "one goroutine per match,\n60 s deadline"
+disp.agg -> inv: "one call per flush"
+cron.cas -> inv: "winner only"

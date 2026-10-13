@@ -11,6 +11,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
+	"github.com/DeBrosOfficial/network/pkg/sqlguard"
 )
 
 // dbQueryBatchTimeout caps the rqlite round-trip for a single
@@ -24,8 +25,11 @@ const dbQueryBatchTimeout = 10 * time.Second
 
 // DBQuery executes a SELECT query and returns JSON-encoded results.
 func (h *HostFunctions) DBQuery(ctx context.Context, query string, args []interface{}) ([]byte, error) {
-	if h.db == nil {
-		return nil, &serverless.HostFunctionError{Function: "db_query", Cause: serverless.ErrDatabaseUnavailable}
+	if err := h.checkDatabaseAccess(ctx, "db_query"); err != nil {
+		return nil, err
+	}
+	if err := sqlguard.Check(query); err != nil {
+		return nil, &serverless.HostFunctionError{Function: "db_query", Cause: err}
 	}
 
 	var results []map[string]interface{}
@@ -48,8 +52,11 @@ func (h *HostFunctions) DBQuery(ctx context.Context, query string, args []interf
 // migrate function silently dropped statements). For new code, prefer
 // DBExecuteV2 which returns a typed envelope.
 func (h *HostFunctions) DBExecute(ctx context.Context, query string, args []interface{}) (int64, error) {
-	if h.db == nil {
-		return 0, &serverless.HostFunctionError{Function: "db_execute", Cause: serverless.ErrDatabaseUnavailable}
+	if err := h.checkDatabaseAccess(ctx, "db_execute"); err != nil {
+		return 0, err
+	}
+	if err := sqlguard.Check(query); err != nil {
+		return 0, &serverless.HostFunctionError{Function: "db_execute", Cause: err}
 	}
 
 	result, err := h.db.Exec(ctx, query, args...)
@@ -66,6 +73,10 @@ type dbExecuteV2Result struct {
 	RowsAffected int64  `json:"rows_affected"`
 	LastInsertID int64  `json:"last_insert_id,omitempty"`
 	Error        string `json:"error,omitempty"`
+	// Code classifies Error — one of the rqlite.BatchCode* constants, e.g.
+	// CONSTRAINT_VIOLATION (never retry) or UNAVAILABLE (retry). Set whenever
+	// Error is (bugboard #267).
+	Code string `json:"code,omitempty"`
 }
 
 // DBExecuteV2 is the typed equivalent of DBExecute. Returns the same shape
@@ -75,17 +86,18 @@ type dbExecuteV2Result struct {
 // Returns a Go error only for host-side setup failures (no DB). SQL errors
 // are encoded in the JSON envelope's "error" field.
 func (h *HostFunctions) DBExecuteV2(ctx context.Context, query string, args []interface{}) ([]byte, error) {
-	if h.db == nil {
-		return nil, &serverless.HostFunctionError{
-			Function: "db_execute_v2",
-			Cause:    serverless.ErrDatabaseUnavailable,
-		}
+	if err := h.checkDatabaseAccess(ctx, "db_execute_v2"); err != nil {
+		return nil, err
+	}
+	if err := sqlguard.Check(query); err != nil {
+		return nil, &serverless.HostFunctionError{Function: "db_execute_v2", Cause: err}
 	}
 
 	out := dbExecuteV2Result{}
 	result, err := h.db.Exec(ctx, query, args...)
 	if err != nil {
 		out.Error = err.Error()
+		out.Code = rqlite.ClassifyBatchError(err)
 		buf, mErr := json.Marshal(out)
 		if mErr != nil {
 			return nil, &serverless.HostFunctionError{Function: "db_execute_v2", Cause: mErr}
@@ -107,21 +119,25 @@ func (h *HostFunctions) DBExecuteV2(ctx context.Context, query string, args []in
 type dbQueryV2Result struct {
 	Rows  []map[string]interface{} `json:"rows"`
 	Error string                   `json:"error,omitempty"`
+	// Code classifies Error — one of the rqlite.BatchCode* constants. Set
+	// whenever Error is (bugboard #267).
+	Code string `json:"code,omitempty"`
 }
 
 // DBQueryV2 is the typed equivalent of DBQuery. Distinguishes "empty
 // result set" from "query failed" via the "error" field.
 func (h *HostFunctions) DBQueryV2(ctx context.Context, query string, args []interface{}) ([]byte, error) {
-	if h.db == nil {
-		return nil, &serverless.HostFunctionError{
-			Function: "db_query_v2",
-			Cause:    serverless.ErrDatabaseUnavailable,
-		}
+	if err := h.checkDatabaseAccess(ctx, "db_query_v2"); err != nil {
+		return nil, err
+	}
+	if err := sqlguard.Check(query); err != nil {
+		return nil, &serverless.HostFunctionError{Function: "db_query_v2", Cause: err}
 	}
 
 	out := dbQueryV2Result{Rows: []map[string]interface{}{}}
 	if err := h.db.Query(ctx, &out.Rows, query, args...); err != nil {
 		out.Error = err.Error()
+		out.Code = rqlite.ClassifyBatchError(err)
 		// Reset rows to non-nil empty on error so callers get a stable shape.
 		out.Rows = []map[string]interface{}{}
 	}
@@ -144,8 +160,8 @@ type dbTransactionRequest struct {
 // Returns an error only for setup/validation problems. A rolled-back batch is
 // communicated via committed=false in the returned JSON; that's not a Go error.
 func (h *HostFunctions) DBTransaction(ctx context.Context, opsJSON []byte) ([]byte, error) {
-	if h.db == nil {
-		return nil, &serverless.HostFunctionError{Function: "db_transaction", Cause: serverless.ErrDatabaseUnavailable}
+	if err := h.checkDatabaseAccess(ctx, "db_transaction"); err != nil {
+		return nil, err
 	}
 	var req dbTransactionRequest
 	if err := json.Unmarshal(opsJSON, &req); err != nil {
@@ -167,12 +183,25 @@ func (h *HostFunctions) DBTransaction(ctx context.Context, opsJSON []byte) ([]by
 		}
 	}
 
+	if err := checkGuestOps("db_transaction", req.Ops); err != nil {
+		return nil, err
+	}
+
 	res, err := h.db.Batch(ctx, req.Ops)
 	// Always return the structured result, even on rollback — caller wants the
 	// per-op detail to know which op failed.
 	if res == nil {
 		// Unrecoverable setup failure (no native conn). Surface as Go error.
 		return nil, &serverless.HostFunctionError{Function: "db_transaction", Cause: err}
+	}
+	// A rollback attributable to a statement is described by that op's Results
+	// entry, and the caller reads `committed`. But a failure that reached no
+	// statement leaves every entry zero-valued, so committed=false would be the
+	// ONLY signal — indistinguishable from "op 0 failed" (bugboard #175).
+	// Guarantee the envelope always carries a reason when nothing else does.
+	if err != nil && res.Error == "" && !opResultsCarryError(res.Results) {
+		res.Error = err.Error()
+		res.Code = rqlite.ClassifyBatchError(err)
 	}
 	out, mErr := json.Marshal(res)
 	if mErr != nil {
@@ -182,9 +211,31 @@ func (h *HostFunctions) DBTransaction(ctx context.Context, opsJSON []byte) ([]by
 		}
 	}
 	// Rollback errors are encoded in the JSON; do NOT propagate as Go error.
-	// Only true setup/transport errors after the result was built warrant returning err.
-	_ = err // intentionally swallowed — committed=false carries the signal
+	// The caller inspects committed / failed_index / error instead.
 	return out, nil
+}
+
+// checkGuestOps applies the guest SQL guard to every op of a batched host
+// call, before anything runs. One helper for every batched call: the guard
+// was once missing from one of them (bugboard #425).
+func checkGuestOps(fn string, ops []rqlite.BatchOp) error {
+	for i, op := range ops {
+		if err := sqlguard.Check(op.SQL); err != nil {
+			return &serverless.HostFunctionError{Function: fn, Cause: fmt.Errorf("op %d: %w", i, err)}
+		}
+	}
+	return nil
+}
+
+// opResultsCarryError reports whether any op already explains the failure, so
+// the batch-level reason is only added when nothing else describes it.
+func opResultsCarryError(results []rqlite.OpResult) bool {
+	for _, r := range results {
+		if r.Error != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // dbQueryBatchRequest is the WASM-side shape for db_query_batch input.
@@ -312,6 +363,10 @@ type dbQueryBatchResult struct {
 	Results       []rqlite.OpResult `json:"results"`
 	StaleRejected bool              `json:"stale_rejected,omitempty"`
 	StaleDetail   string            `json:"stale_detail,omitempty"`
+	// Error / Code carry a batch-level failure (bugboard #175). Populated by
+	// the ABI wrapper's rejection envelope; empty on the success path.
+	Error string `json:"error,omitempty"`
+	Code  string `json:"code,omitempty"`
 }
 
 // DBQueryBatch runs N SELECTs in one round-trip via RQLite's /db/query
@@ -334,8 +389,8 @@ type dbQueryBatchResult struct {
 // leader): 10 sequential DBQuery host calls = ~3.5s; one DBQueryBatch
 // with 10 statements = ~340ms. 10× speedup.
 func (h *HostFunctions) DBQueryBatch(ctx context.Context, opsJSON []byte) ([]byte, error) {
-	if h.db == nil {
-		return nil, &serverless.HostFunctionError{Function: "db_query_batch", Cause: serverless.ErrDatabaseUnavailable}
+	if err := h.checkDatabaseAccess(ctx, "db_query_batch"); err != nil {
+		return nil, err
 	}
 	var req dbQueryBatchRequest
 	if err := json.Unmarshal(opsJSON, &req); err != nil {
@@ -361,6 +416,10 @@ func (h *HostFunctions) DBQueryBatch(ctx context.Context, opsJSON []byte) ([]byt
 	// ops from being silently dropped by the rqlite-side validator.
 	for i := range req.Ops {
 		req.Ops[i].Kind = rqlite.BatchOpQuery
+	}
+
+	if err := checkGuestOps("db_query_batch", req.Ops); err != nil {
+		return nil, err
 	}
 
 	// Explicit batch-level deadline. The caller's ctx already carries the
@@ -411,6 +470,12 @@ type execAndPublishResult struct {
 	Seq          int64             `json:"seq,omitempty"`
 	Published    bool              `json:"published,omitempty"`
 	PublishError string            `json:"publish_error,omitempty"`
+	// Error / Code carry a batch-level failure that belongs to no single op —
+	// a transport fault, a lost leader, an expired deadline (bugboard #175).
+	// Without them a batch that never reached a statement returned
+	// committed=false with nothing else set, which reads as "op 0 failed".
+	Error string `json:"error,omitempty"`
+	Code  string `json:"code,omitempty"`
 }
 
 // ExecAndPublish runs ops atomically (with a seq increment in the same batch)
@@ -427,11 +492,8 @@ type execAndPublishResult struct {
 func (h *HostFunctions) ExecAndPublish(
 	ctx context.Context, opsJSON []byte, topic string, dataTemplate []byte,
 ) ([]byte, error) {
-	if h.db == nil {
-		return nil, &serverless.HostFunctionError{
-			Function: "exec_and_publish",
-			Cause:    serverless.ErrDatabaseUnavailable,
-		}
+	if err := h.checkDatabaseAccess(ctx, "exec_and_publish"); err != nil {
+		return nil, err
 	}
 	if h.pubsub == nil {
 		return nil, &serverless.HostFunctionError{
@@ -446,18 +508,9 @@ func (h *HostFunctions) ExecAndPublish(
 		}
 	}
 
-	// Resolve namespace from invocation context — server-trusted.
-	// ctx-attached invCtx wins over singleton; see invocation_context.go.
-	ns := ""
-	if cur := h.currentInvocationContext(ctx); cur != nil {
-		ns = cur.Namespace
-	}
-	if ns == "" {
-		return nil, &serverless.HostFunctionError{
-			Function: "exec_and_publish",
-			Cause:    fmt.Errorf("no namespace in invocation context"),
-		}
-	}
+	// The namespace is the invocation's — server-trusted, and present:
+	// checkDatabaseAccess refused the call otherwise.
+	ns := h.currentInvocationContext(ctx).Namespace
 
 	var req dbTransactionRequest
 	if err := json.Unmarshal(opsJSON, &req); err != nil {
@@ -472,6 +525,12 @@ func (h *HostFunctions) ExecAndPublish(
 			Cause:    fmt.Errorf("too many ops: max %d", rqlite.MaxBatchOps),
 		}
 	}
+	// The same guard every other database host function applies, before any
+	// side effect: without it this was a way around sqlguard to the platform's
+	// auth tables (bugboard #425).
+	if err := checkGuestOps("exec_and_publish", req.Ops); err != nil {
+		return nil, err
+	}
 
 	// exec_and_publish reaches the same shared gossipsub publish path as
 	// pubsub_publish, so it must charge the same per-invocation publish budget
@@ -485,18 +544,27 @@ func (h *HostFunctions) ExecAndPublish(
 	}
 
 	batchRes, seq, batchErr := h.db.BatchWithSeq(ctx, ns, req.Ops)
-	out := execAndPublishResult{}
+	out := execAndPublishResult{Results: []rqlite.OpResult{}}
 	if batchRes != nil {
 		out.Results = batchRes.Results
 		out.Committed = batchRes.Committed
 		out.FailedIndex = batchRes.FailedIndex
+		out.Error = batchRes.Error
+		out.Code = batchRes.Code
 	}
 
 	// On rollback or pre-publish error, return without publishing.
 	if batchErr != nil || !out.Committed {
-		// On a true rollback batchErr may be non-nil; that's already encoded
-		// in the result. Don't surface as Go error — caller reads `committed`.
-		_ = batchErr
+		// A rollback attributable to a statement is already described by that
+		// op's Results entry, so the Go error adds nothing there. But a failure
+		// that reached no statement at all — transport, lost leader, deadline —
+		// leaves every Results entry zero-valued, and reporting only
+		// committed=false told the caller nothing about why (bugboard #175).
+		// Record the reason whenever nothing else carries it.
+		if batchErr != nil && out.Error == "" {
+			out.Error = batchErr.Error()
+			out.Code = rqlite.ClassifyBatchError(batchErr)
+		}
 		buf, mErr := json.Marshal(out)
 		if mErr != nil {
 			return nil, &serverless.HostFunctionError{Function: "exec_and_publish", Cause: mErr}

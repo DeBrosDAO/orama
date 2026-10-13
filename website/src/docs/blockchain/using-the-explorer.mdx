@@ -1,0 +1,71 @@
+# Using the explorer
+
+The explorer at [orama.network/explorer](/explorer) lets anyone read an Orama chain: its blocks, transactions, wallets, validators, epochs, supply, nodes, storage, Tor relays, tokens, NFTs, contracts, market and governance. It has no accounts and no demo data. Your browser reads a network's own gateway directly and shows what that gateway answers, in plain sentences.
+
+## Choosing a network
+
+Under the header, a strip has a **Network** selector and always shows the **chain id** of the network being read. It lists every network of the registry whose chain exists, and **Custom gateway…**, where you type the address of any gateway.
+
+- The default network (stagenet) keeps short addresses, `/explorer/tx/<hash>`; another network is named first, `/explorer/<network>/tx/<hash>`. A custom gateway is `/explorer/custom/…?gateway=https%3A%2F%2Fgateway.example.org`.
+- Choosing another network opens its front page, because a transaction or wallet of one chain does not exist on another.
+- A link that names a gateway Orama does not list asks you first, because opening it makes your browser call that server, whose operator decides every figure shown. The explorer sends no cookies or credentials to any gateway and marks such a network "Not in the Orama registry".
+- When a network is reset (a new chain from block 1) the explorer says so, and a link made on the old chain shows a page that explains it instead of a page that looks like the old one.
+
+## Finding something
+
+Press `/` or `Ctrl+K` (`⌘K` on a Mac), or use the search box, and paste a wallet address (`orama1…`), a 64-character transaction hash, or a block number. A name works too, such as a validator's: it is always shown beside the short address, so a look-alike name cannot pass for another wallet. `Esc` closes the box. A shielded address (`u1…`) is private by design and has nothing to look up.
+
+Every page has an address you can copy and share: the page and the network are in it. The **Trail** under the header lists the pages you followed since Home, so an investigation can be retraced; **Copy** makes one link that reopens the page with the whole trail.
+
+## What each page shows
+
+| Page | Address | Shows |
+|---|---|---|
+| Explore | `/explorer` | The chain at a glance: the last day's transactions, fees burned, supply, live activity, the newest blocks |
+| Block | `/explorer/block/<height>` | Proposer, who signed, gas, burn and the block's transactions, with the next and previous block |
+| Transaction | `/explorer/tx/<hash>` | What happened in a sentence, the result, the fee, who moved what, the messages and events |
+| Wallet | `/explorer/wallet/<address>` | Balance split into available, staked and unbonding, earnings, staking rewards, activity with filters, who it deals with |
+| Validators | `/explorer/validators` | The power hand-over, every validator's status, commission, stake and uptime, the Nakamoto coefficient, operators |
+| Validator | `/explorer/validator/<operator wallet>` | One validator: commission, bond, voting power, uptime and slashing per epoch, rewards |
+| Epochs, Epoch | `/explorer/epochs`, `/explorer/epoch/<n>` | Closed emission epochs: what was minted against the ceiling, what was paid, fees and burn, the epoch's validators |
+| Emission | `/explorer/emission` | The epoch in progress with a countdown, the halving countdown, the whole schedule |
+| Supply | `/explorer/economics` | Total, circulating, minted and burned supply, where it sits, trends per epoch |
+| Rewards | `/explorer/rewards` | What each epoch paid validators and delegators |
+| Nodes, Node | `/explorer/nodes`, `/explorer/node/<id>` | Every registered node: operator, roles, bonds, declared endpoints, region and capacity |
+| Storage | `/explorer/storage` | Storage deals, providers, the block archive and the settlement queue |
+| Tor | `/explorer/tor` | Registered relays with what the newest settled epoch paid each, the roles on the nodes, how relays are rewarded, the newest settled epoch |
+| Tokens, NFTs, Contracts, Market, Governance, Shielded pool | under **Browse**: `/explorer/tokens`, `/explorer/nfts`, `/explorer/contracts`, `/explorer/market`, `/explorer/governance`, `/explorer/shielded` | What each module holds, with a page for one token (`/explorer/token/<creator>/<name>`), NFT (`/explorer/nft/<asset id>`), collection (`/explorer/collection/<n>`), code (`/explorer/code/<id>`), contract (`/explorer/contract/<address>`), listing (`/explorer/listing/<n>`) and proposal (`/explorer/proposal/<n>`) |
+
+A message the explorer has no reading for (a third party's contract message) is shown by its type. Text written to the chain (names, memos, descriptions) is cleaned, cut to a safe length and shown as plain text, and a website a validator names is never a link.
+
+## When something does not load
+
+Every page has a loading, an error and an empty state, and each says what to do.
+
+- **"This node runs no chain indexer."** The gateway answered from a node that has none. Blocks, the current epoch and the head still load; the history that needs the index (transactions, epochs, supply, rewards) does not, and another node of the network may have it. Try again.
+- **"The chain could not be reached."** The message names the gateway and the three usual causes: it is down, its TLS certificate is not one your browser trusts (a staging certificate, for example), or it does not allow reads from this site. Open the gateway's `/v1/chain/status` in a new tab to tell them apart.
+- **A rate limit.** A gateway limits how fast one network address may read. A gateway with the current CORS rule answers the explorer's origin even when it refuses, so the page says "HTTP 429" and to wait a minute. An older gateway wrote that refusal without CORS headers, which makes the browser hide it: the page then says "The chain could not be reached", and its list of causes includes the rate limit. A person browsing is far inside the limits.
+- **How far behind is the history.** The home and rewards pages say how many blocks the indexed history is behind the chain, and say so loudly when the indexer is stuck.
+
+The block height in the header moves on its own: the gateway tells the page when a block arrives, so nothing is polled. A screen reader is not told about every block: the page announces only when the network's health or the indexer's state changes.
+
+## What is not on the chain
+
+The explorer shows what the chain records and says, on the page, what it does not. The main gaps:
+
+- **Private transfers.** A shielded transfer has no signer, receiver or amount on chain. Its page says what is public (the result, the fee, the block) and what is not. A wallet page covers public activity only: value in the shielded pool is in no balance.
+- **What operators declare.** A node's region, ASN and endpoints are the operator's word; the chain cannot check them. The chain keeps no software version and no uptime for a node.
+- **Lists the chain does not keep.** The chain has no list of collections, proposals, listings, frozen accounts or voters, a validator's delegators, or a base-fee history. Collections and proposals are found by number; a listing and a bid are opened by number; frozen status and a vote are asked about an account you name.
+- **What a contract answers.** The explorer shows what a contract stores, never runs one. An NFT's metadata document is not fetched: only its content id is on chain.
+- **Tor.** Validators' onion services, whether a relay is in the consensus and a relay's bandwidth are not on the chain.
+- **Repair** of storage deals happens off chain.
+
+A figure a page cannot read is left out, never shown as zero.
+
+## Keyboard and screen readers
+
+The first stop of the Tab order is **Skip to the page**, which jumps over the header. The sections are a labelled navigation landmark and mark the current page; menus close with `Esc` and give focus back; the search box is a list you move through with the arrow keys and `Enter`. The trend charts of the Supply and Emission pages each have a "View as a table" with the same numbers, and the small trend lines beside a figure (the home tile, a validator's voting power) sit next to a table or the figures themselves and are hidden from screen readers. The explorer is dark only, like the rest of the site.
+
+## Build on the same data
+
+The explorer uses no private interface. Every page reads the routes in the [Public chain read API](/docs/blockchain/chain-read-api), so a wallet, a dashboard or a bot can read the same chain the same way. How the pages read the chain and what the indexer keeps are in [Reading the chain](/docs/blockchain/reading-the-chain#the-explorer).

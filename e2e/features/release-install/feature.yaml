@@ -1,0 +1,29 @@
+# A fresh server joins the cluster from a published release instead of an
+# archive built here: the CLI fetches the release metadata from a repository
+# (served by the test on this machine's loopback), verifies it against a
+# generated root the test names, downloads the archive, and only then has the
+# operator's RootWallet sign it with that root in the manifest. A tampered
+# archive, a frozen timestamp, metadata under another root and an older
+# snapshot are each refused before anything reaches the server; the good
+# release joins it, and the node adopts the root. On the joined node,
+# `orama node trust add-root` refuses to replace the adopted root without
+# --replace, refuses a root that is not usable, and changes it with --replace.
+id: release-install
+title: Install from a published release under a TUF release root
+area: infrastructure
+subtasks: [2750]
+stage: 9
+destructive: true
+requires:
+  extra_nodes: 1
+  probe: false
+  chain: false
+covers:
+  cli:
+    - orama node setup
+    - orama node trust
+    - orama node trust add-root
+  claims:
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-node-setup: --release installs a published release: its metadata and archive verify against the root named by --release-root, and the operator's wallet signs the result"
+    - "docs/whitepaper/technical-reference/vol1/29-build-signing-and-release.md: a client refuses metadata under another root, an expired timestamp, an older snapshot and an archive whose hash differs from its target"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-node-trust-add-root: adopting a different root than the one adopted needs --replace, and a root that does not verify is refused"

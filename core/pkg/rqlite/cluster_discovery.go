@@ -13,6 +13,17 @@ import (
 	"go.uber.org/zap"
 )
 
+// defaultInactivityLimit is how long a peer stays in knownPeers after it stops
+// answering.
+//
+// It was 24 hours, which is a very long time to keep offering a dead machine to
+// every path that reads the peer list — orphan recovery re-adds it to raft,
+// peers.json includes it, voter arithmetic counts it. Two hours is still far
+// longer than a reboot, an upgrade or a network partition, and a peer that was
+// removed on purpose is now handled by its tombstone rather than by waiting out
+// this window.
+const defaultInactivityLimit = 2 * time.Hour
+
 // ClusterDiscoveryService bridges LibP2P discovery with RQLite cluster management
 type ClusterDiscoveryService struct {
 	host           host.Host
@@ -33,7 +44,7 @@ type ClusterDiscoveryService struct {
 	peerHealth      map[string]*PeerHealth                   // NodeID -> Health
 	lastUpdate      time.Time
 	updateInterval  time.Duration // 30 seconds
-	inactivityLimit time.Duration // 24 hours
+	inactivityLimit time.Duration // see defaultInactivityLimit
 
 	logger  *zap.Logger
 	mu      sync.RWMutex
@@ -59,7 +70,7 @@ func NewClusterDiscoveryService(
 		minClusterSize = rqliteManager.config.MinClusterSize
 	}
 
-	// Extract WireGuard IP from the raft address (e.g., "10.0.0.1" from "10.0.0.1:7001")
+	// Extract WireGuard IP from the raft address (e.g., "10.0.0.1" from "10.0.0.1:10101")
 	wgIP := ""
 	if host, _, err := net.SplitHostPort(raftAddress); err == nil {
 		wgIP = host
@@ -80,7 +91,7 @@ func NewClusterDiscoveryService(
 		knownPeers:      make(map[string]*discovery.RQLiteNodeMetadata),
 		peerHealth:      make(map[string]*PeerHealth),
 		updateInterval:  30 * time.Second,
-		inactivityLimit: 24 * time.Hour,
+		inactivityLimit: defaultInactivityLimit,
 		logger:          logger.With(zap.String("component", "cluster-discovery")),
 	}
 }

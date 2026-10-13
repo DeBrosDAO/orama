@@ -1,0 +1,83 @@
+# Consensus-determinism rules for the chain's state machine (SA8, bugboard 3394).
+#
+# Every validator runs the state machine on the same blocks and must reach the same app hash, so the
+# code that runs in DeliverTx, BeginBlock, EndBlock, the ante chain and InitGenesis may not depend on
+# anything that differs between machines or runs: map iteration order, the wall clock, floating
+# point, goroutine scheduling, random numbers. These rules flag each of those. The rules carry no
+# path filter (so the rule tests can run on their own files); `make -C chain semgrep` scopes the scan
+# to the state-machine packages: tests, generated code, CLI and off-chain daemons are out of scope.
+#
+# A finding is either fixed or suppressed on its line with
+#     // nosemgrep: <rule-id> -- <why this cannot change the app hash>
+# A suppression with no reason is a review failure (website/src/docs/contributor/testing.mdx, "CI").
+#
+# Run: `make -C chain semgrep`. The rules are tested against the annotated cases in
+# chain/.semgrep/consensus.go with `make -C chain semgrep-test`.
+#
+# The map rule relies on semgrep's type inference, which resolves a map only when its type is
+# visible in the same function or file. It is a net, not a proof.
+
+rules:
+  - id: consensus-map-iteration
+    languages: [go]
+    severity: ERROR
+    message: >-
+      Ranging over a map visits keys in a different order on every run. If the loop body writes
+      state, emits events, returns the first match or accumulates anything order-dependent, two
+      nodes diverge. Collect the keys, sort them, and range over the sorted slice. A loop whose
+      body only collects keys (to be sorted next) or whose result is order-independent (a sum of
+      integers, a set insert) is fine: suppress it with a reason.
+    pattern-either:
+      - pattern: |
+          for $K := range ($M : map[$KT]$VT) { ... }
+      - pattern: |
+          for $K, $V := range ($M : map[$KT]$VT) { ... }
+
+  - id: consensus-wall-clock
+    languages: [go]
+    severity: ERROR
+    message: >-
+      The local clock differs between validators. Block time is ctx.BlockTime() (the BFT time every
+      node agrees on); a duration since something is a difference of two block times. time.Now,
+      time.Since and time.Until in state-machine code give each node a different answer.
+    pattern-either:
+      - pattern: time.Now()
+      - pattern: time.Since(...)
+      - pattern: time.Until(...)
+      - pattern: time.Tick(...)
+      - pattern: time.After(...)
+      - pattern: time.Sleep(...)
+
+  - id: consensus-float
+    languages: [go]
+    severity: ERROR
+    message: >-
+      Floating point is not reproducible across CPU architectures and compiler versions (fused
+      multiply-add, x87 versus SSE, library math). Consensus arithmetic uses cosmossdk.io/math
+      (Int, LegacyDec) or integers.
+    pattern-either:
+      - pattern-regex: '(?m)^(?![ \t]*//)[^"\n]*\bfloat(32|64)\b'
+      - pattern: strconv.ParseFloat(...)
+      - pattern: strconv.FormatFloat(...)
+
+  - id: consensus-goroutine
+    languages: [go]
+    severity: ERROR
+    message: >-
+      A goroutine started in state-machine code runs on its own schedule: its writes and its
+      reads of shared state interleave differently on each node. Consensus code is
+      single-threaded. Background work belongs outside the state machine, and anything it
+      produces reaches the chain as a transaction.
+    pattern-either:
+      - pattern: go $F(...)
+      - pattern: go func(...) { ... }(...)
+
+  - id: consensus-random
+    languages: [go]
+    severity: ERROR
+    message: >-
+      Random numbers differ between nodes. math/rand and math/rand/v2 draw from a per-process
+      seed, and crypto/rand is entropy by design. If state-machine code needs a pseudo-random
+      choice it must derive it from agreed data (a block hash, a height, a stored seed) with a
+      keyed hash.
+    pattern-regex: '(?m)^[ \t]*(import[ \t]+)?([A-Za-z_.][A-Za-z0-9_]*[ \t]+)?"(math/rand|math/rand/v2|crypto/rand)"[ \t]*$'

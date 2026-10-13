@@ -54,6 +54,28 @@ test-e2e-production:
 	@echo "Running production-only E2E tests..."
 	go test -v -tags "e2e production" -timeout 15m ./e2e/production/...
 
+# Lifecycle harness (change-287). Drives a real 3-node cluster through the
+# orama CLI: reboot, kill a voter, join, decommission, rolling upgrade, DNS
+# with the index rqlite down.
+#
+# Build tag `lifecycle`, so `make test` never picks these up. Requires a
+# DISPOSABLE environment — these scenarios reboot nodes and destroy VMs.
+#
+#   ORAMA_LIFECYCLE_ENV=lifecycle make test-lifecycle
+#
+# Scenarios whose infrastructure hook is not configured SKIP rather than pass;
+# see website/src/docs/contributor/testing.mdx, "Lifecycle harness", for the hook variables.
+.PHONY: test-lifecycle
+test-lifecycle:
+	@if [ -z "$$ORAMA_LIFECYCLE_ENV" ]; then \
+		echo "❌ ORAMA_LIFECYCLE_ENV not set"; \
+		echo "Usage: ORAMA_LIFECYCLE_ENV=<disposable-env> make test-lifecycle"; \
+		echo "These scenarios reboot nodes and destroy VMs. Never point them at testnet or mainnet."; \
+		exit 1; \
+	fi
+	@echo "Running the lifecycle harness against $$ORAMA_LIFECYCLE_ENV..."
+	go test -v -tags lifecycle -timeout 120m ./e2e/lifecycle/...
+
 test-e2e-quick:
 	@echo "Running quick E2E smoke tests..."
 	go test -v -tags e2e -timeout 5m -run "TestStatic|TestHealth" ./e2e/...
@@ -61,7 +83,7 @@ test-e2e-quick:
 # Network - Distributed P2P Database System
 # Makefile for development and build tasks
 
-.PHONY: build clean test deps tidy fmt vet lint install-hooks push-devnet push-testnet rollout-devnet rollout-testnet release bump
+.PHONY: build clean test test-contracts docs deps tidy fmt vet lint install-hooks push-devnet push-testnet rollout-devnet rollout-testnet release bump
 
 # Single source of truth — repo-root VERSION file. Update with `make bump VER=X.Y.Z`
 # or by editing /VERSION directly. Release workflows verify this matches the tag.
@@ -77,19 +99,21 @@ build: deps
 	@mkdir -p bin
 	go build -ldflags "$(LDFLAGS)" -o bin/identity ./cmd/identity
 	go build -ldflags "$(LDFLAGS)" -o bin/orama-node ./cmd/node
-	go build -ldflags "$(LDFLAGS)" -o bin/orama ./cmd/cli/
+	go build -ldflags "$(LDFLAGS)" -o bin/orama-privhelper ./cmd/privhelper
+	go build -ldflags "$(LDFLAGS)" -o bin/orama ./cmd/orama/
 	# Inject gateway build metadata via pkg path variables
 	go build -ldflags "$(LDFLAGS) -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildVersion=$(VERSION)' -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildCommit=$(COMMIT)' -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildTime=$(DATE)'" -o bin/gateway ./cmd/gateway
 	go build -ldflags "$(LDFLAGS)" -o bin/sfu ./cmd/sfu
 	go build -ldflags "$(LDFLAGS)" -o bin/turn ./cmd/turn
 	go build -ldflags "$(LDFLAGS)" -o bin/orama-sni-router ./cmd/sni-router
+	go build -ldflags "$(LDFLAGS)" -o bin/pubsub ./cmd/pubsub
 	@echo "Build complete! Run ./bin/orama version"
 
 # Cross-compile CLI for Linux (only binary needed locally; VPS builds everything else from source)
 build-linux: deps
 	@echo "Cross-compiling CLI for linux/amd64 (version=$(VERSION))..."
 	@mkdir -p bin-linux
-	GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS_LINUX)" -trimpath -o bin-linux/orama ./cmd/cli/
+	GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS_LINUX)" -trimpath -o bin-linux/orama ./cmd/orama/
 	@echo "✓ CLI built at bin-linux/orama"
 	@echo ""
 	@echo "Prefer 'make build-archive' for full pre-built binary archive."
@@ -97,8 +121,8 @@ build-linux: deps
 # Build pre-compiled binary archive for deployment (all binaries + deps)
 build-archive: deps
 	@echo "Building binary archive (version=$(VERSION))..."
-	go build -ldflags "$(LDFLAGS)" -o bin/orama ./cmd/cli/
-	./bin/orama build --output /tmp/orama-$(VERSION)-linux-amd64.tar.gz
+	go build -ldflags "$(LDFLAGS)" -o bin/orama ./cmd/orama/
+	./bin/orama maint build --output /tmp/orama-$(VERSION)-linux-amd64.tar.gz
 
 # Install git hooks
 install-hooks:
@@ -118,30 +142,87 @@ clean:
 
 # Push binary archive to devnet nodes (fanout distribution)
 push-devnet:
-	./bin/orama node push --env devnet
+	./bin/orama maint push --env devnet
 
 # Push binary archive to testnet nodes (fanout distribution)
 push-testnet:
-	./bin/orama node push --env testnet
+	./bin/orama maint push --env testnet
 
 # Full rollout to devnet (build + push + rolling upgrade)
 rollout-devnet:
-	./bin/orama node rollout --env devnet --yes
+	./bin/orama maint rollout --env devnet --yes
 
 # Full rollout to testnet (build + push + rolling upgrade)
 rollout-testnet:
-	./bin/orama node rollout --env testnet --yes
+	./bin/orama maint rollout --env testnet --yes
 
 # Bump the repo-root VERSION file and sync sdk/package.json.
-# Usage: make bump VER=0.122.9
+# Regenerate the whitepaper CLI reference (appendix D) from the cobra command tree.
+#
+# The reference is not written by hand, so command documentation cannot drift
+# from the code. `go test ./cmd/orama` fails when the file and the tree disagree.
+docs:
+	go test -count=1 ./cmd/orama -run TestCLIReference -update-cli-reference
+
+# Rewrite the embedded network registry (pkg/netregistry/embedded) from the
+# repository's networks/ directory. Go cannot embed a file outside the module, so
+# the binary carries a build copy of each network's manifest, release root and Tor network file;
+# `go test ./pkg/netregistry` fails when the copy and networks/ differ.
+.PHONY: sync-networks
+sync-networks:
+	find pkg/netregistry/embedded -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} +
+	@for dir in ../networks/*/; do \
+		[ -d "$$dir" ] || continue; \
+		name=$$(basename "$$dir"); \
+		mkdir -p "pkg/netregistry/embedded/$$name"; \
+		cp "$$dir/manifest.json" "$$dir/release-root.json" "pkg/netregistry/embedded/$$name/"; \
+		[ ! -f "$$dir/tor-network.json" ] || cp "$$dir/tor-network.json" "pkg/netregistry/embedded/$$name/"; \
+	done
+
+# The run-your-own-cluster guide (website/src/docs/operator/run-your-own-cluster.mdx) executed step by
+# step against machines you provide. It installs Orama on real servers, so it
+# never runs from `make test`: see website/src/docs/contributor/testing.mdx, "Cluster guide e2e".
+.PHONY: e2e-cluster
+e2e-cluster:
+	@if [ -z "$$E2E_CLUSTER_BASE_DOMAIN" ]; then \
+		echo "E2E_CLUSTER_BASE_DOMAIN is not set."; \
+		echo "  full run:  E2E_CLUSTER_IPS=ip1,ip2,ip3 E2E_CLUSTER_BASE_DOMAIN=<domain> E2E_CLUSTER_RELEASE=<version> E2E_CLUSTER_RELEASE_REPO=<url> E2E_CLUSTER_RELEASE_ROOT=<root.json> make e2e-cluster   (or E2E_CLUSTER_ARCHIVE=<orama maint build archive> instead of the three RELEASE ones)"; \
+		echo "  use-only:  E2E_CLUSTER_MODE=use-only E2E_CLUSTER_ENV=sandbox E2E_CLUSTER_BASE_DOMAIN=<sandbox domain> make e2e-cluster"; \
+		echo "  see website/src/docs/contributor/testing.mdx, Cluster guide e2e"; \
+		exit 2; \
+	fi
+	@mkdir -p bin
+	go build -ldflags "$(LDFLAGS)" -o bin/orama ./cmd/orama/
+	E2E_CLUSTER_ORAMA="$${E2E_CLUSTER_ORAMA:-$(CURDIR)/bin/orama}" \
+		go test -count=1 -v -tags e2e_cluster -timeout 100m -run TestRunYourOwnClusterGuide ./e2e/clusterguide/...
+
+# The co-located network namespace layout (core/pkg/globalnetns) built for real
+# on this Linux machine. Needs root, iproute2 and nftables; it never runs on
+# darwin. See website/src/docs/blockchain/run-a-global-node.mdx, "Sharing a machine with a cluster node".
+.PHONY: test-netns
+test-netns:
+	go test -count=1 -v -tags netns_integration ./pkg/globalnetns/...
+
+# Contract tests against the fixtures in ../contracts.
+#
+# -count=1 is required: the fixtures live above this Go module, so the test
+# cache does not see them change and would report a stale pass.
+test-contracts:
+	go test -count=1 -run Contract ./...
+
+# Usage: make bump VER=0.3.1
 bump:
 	@if [ -z "$(VER)" ]; then \
 		echo "Usage: make bump VER=X.Y.Z"; exit 1; \
 	fi
 	@echo "$(VER)" > ../VERSION
+	@printf '%s\n' "$(VER)" > pkg/version/version.txt
 	@cd ../sdk && npm version $(VER) --no-git-tag-version > /dev/null
-	@echo "Bumped VERSION and sdk/package.json to $(VER)"
-	@echo "Next: git add ../VERSION ../sdk/package.json && git commit -m 'release: $(VER)'"
+	@cd ../sdk-vault && npm version $(VER) --no-git-tag-version > /dev/null
+	@echo "Bumped VERSION, pkg/version/version.txt, sdk/package.json and sdk-vault/package.json to $(VER)"
+	@echo "Next: re-verify the Technical Reference against $(VER) and stamp it; make whitepaper-check fails until you do"
+	@echo "      (docs/whitepaper/technical-reference/README.md, Releasing)"
+	@echo "Then: git add ../VERSION pkg/version/version.txt ../sdk/package.json ../sdk-vault/package.json ../docs/whitepaper/technical-reference && git commit -m 'release: $(VER)'"
 
 # Interactive release workflow (tag + push)
 release:
@@ -154,7 +235,7 @@ health:
 		echo "Usage: make health ENV=devnet|testnet"; \
 		exit 1; \
 	fi
-	./bin/orama monitor report --env $(ENV)
+	./bin/orama status report --env $(ENV)
 
 # Help
 help:

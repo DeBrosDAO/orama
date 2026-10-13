@@ -1,0 +1,33 @@
+direction: right
+
+files: "Files on a node" {
+  cs: "secrets/cluster-secret" {shape: cylinder}
+  nk: "secrets/node-key.pem" {shape: cylinder}
+  ik: "data/identity.key" {shape: cylinder}
+}
+
+reads: "Can read the cluster secret" {
+  node: "orama-node\n(whole orama directory)"
+  idx: "index gateway\n(all of secrets/, read-only)"
+  nsgw: "every namespace gateway\n(cluster-secret and encryption-root only;\nruns tenant WASM)"
+  ipfs: "IPFS unit\n(all of secrets/, read-only)"
+  other: "vault guardian, SNI router, host TURN\n(same account, no secrets/ sandbox)"
+}
+
+blind: "Cannot read it" {
+  a: "rqlite, olric, pubsub, IPFS Cluster,\nnamespace TURN, namespace Caddy, IPFS GC\n(secrets/ inaccessible)"
+  b: "SFU, CoreDNS\n(own account, /opt/orama hidden)"
+  c: "deployed apps\n(DynamicUser, /opt/orama hidden)"
+}
+
+files.cs -> reads.node
+files.cs -> reads.idx
+files.cs -> reads.nsgw
+files.cs -> reads.ipfs
+files.cs -> reads.other
+files.nk -> reads.node: "also"
+files.nk -> reads.idx: "also"
+files.ik -> reads.nsgw: "also (not hidden)"
+files.cs -> blind.a: "not visible"
+files.cs -> blind.b: "not visible"
+files.cs -> blind.c: "not visible"

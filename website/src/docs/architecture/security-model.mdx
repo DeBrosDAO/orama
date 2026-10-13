@@ -1,0 +1,99 @@
+# Security model
+
+This page explains what Orama protects, how, and where the protection stops. It is the page to read before you decide what to put on a cluster, or whether to run a node.
+
+The rule of the document is the same as the rule of the project: it says what the code does today. The gaps are listed as plainly as the properties.
+
+## Who trusts whom
+
+```text
+ your users ---- wallet signature ----> gateway (your namespace)
+ your app   ---- scoped key/token  ---> gateway
+ node A     ---- WireGuard + MACs  ---> node B       (all nodes hold the cluster secret)
+ operator   ---- RootWallet agent  ---> nodes         (signed archives, SSH keys from the vault)
+ release    ---- signature         ---> node          (nodes install only what a trusted signer signed)
+```
+
+Three trust anchors matter:
+
+1. **The wallet.** A user, a namespace owner and a cluster operator are all wallets. No server holds their key.
+2. **The cluster secret.** Every node of a cluster holds it, so any node can sign coordination calls for any other. A compromised node is a compromised cluster in the ways listed under "What a compromised node can do".
+3. **The archive signer.** Whoever signs the build archive decides what code runs on every node.
+
+## Network isolation
+
+- **All inter-node traffic uses a WireGuard mesh** (`10.0.0.0/24`). Public IPs are used only for SSH, DNS, external HTTPS and the mesh handshake itself. If WireGuard is down the cluster is partitioned.
+- **The firewall** admits only 22, 53 (nameservers), 80, 443 and 51820/udp, plus TURN ports when WebRTC is on. The mesh is admitted on the mesh interface (`ufw allow in on wg0 from 10.0.0.0/24`), not by source address, so a packet whose source *claims* the overlay is not admitted on another interface. Every rule Orama adds is tagged `orama` and Orama removes only tagged rules.
+- **IPv6 is disabled system-wide**, so a service bound to `0.0.0.0` cannot be reached over an interface with no firewall rules.
+- **Listeners are on the overlay, not every interface.** Namespace gateways, RQLite, Olric, pub/sub, the Kubo API and IPFS Cluster all bind loopback or the WireGuard address. The CIDR is `10.0.0.0/24` in every component; other tenants on shared VPS networks cannot bypass the firewall with an overlapping `10.x` range.
+- **Local control planes are not open to every local process.** Caddy's admin API is a `0600` unix socket in its own runtime directory (the default `localhost:2019` let any local process load a config that proxies anything anywhere). The pub/sub API is a unix socket that admits only the gateways' user through `SO_PEERCRED`.
+- **Multicast name resolution is off** (`LLMNR=no`, `MulticastDNS=no`).
+- **No route registers a WireGuard peer on the strength of the cluster secret.** The `/v1/internal/wg/peer`, `/peers` and `/peer/remove` endpoints took the secret itself as a bearer credential with no audience, nonce or body binding. They were deleted, not re-authenticated: a peer row is written only by the invite-gated join and the OramaOS enrolment.
+
+## Authentication and authorization
+
+Two identities exist: a wallet (a person) and a key (a program). Nothing else authenticates: no password, no session cookie, no sign-up. The model is on [Sign-in and sessions](/docs/developer/sign-in), [Devices](/docs/developer/devices) and [Access control](/docs/developer/access-control). The important properties:
+
+- A sign-in signs a message that names the gateway's domain, the namespace, a single-use nonce and a five-minute expiry. A signature collected by another site does not verify here, and a captured signature cannot be replayed.
+- Access tokens last 15 minutes, signed by the gateway's own Ed25519 key. A namespace gateway's key is bound to its namespace, so one tenant's gateway cannot mint a token for another. Refresh tokens are stored only as hashes and rotate with replay detection. Revoking a key, a token, a session or a device takes effect within about ten seconds on every gateway through a replicated revocation list that fails closed.
+- A credential's power is read from the grant on every request, not from the token. That includes a deployed app's own workload token: a narrowed or revoked grant applies within the grant cache's ten seconds, an app can be granted only `runtime` or `reader` and never the control plane, and a token whose subject names one namespace while its claim names another is refused wherever it is verified, not only on renewal. A route with no declared policy cannot be registered.
+- API keys are stored only as HMACs, expire (90 days by default, a year at most), do not name their namespace, and carry a checksum so a leaked one is recognisable offline.
+- A browser-shippable key holds the data plane only. Storage and WebRTC refuse a key on its own and accept a logged-in user or an app's own workload token, and the anonymity proxy and tunnel stay a person's.
+- The audit trail records sign-ins, key and grant changes, namespace, deployment, function and secret changes and operator actions, kept 90 days. The actor is never a credential.
+
+## Tenant isolation
+
+- **Each namespace is its own cluster**: its own database, cache and gateway processes, not a prefix on shared tables.
+- **Platform state is kept out of the tenant's database.** Keys, grants, sessions, signing keys and the audit trail live in the cluster registry, which tenant SQL cannot name. A SQL filter closes the direct path in depth ([Databases](/docs/developer/databases#what-tenant-sql-may-not-do)).
+- **Functions** run in wazero with no sockets, files or system calls; every capability is an explicit host function. Memory is limited per module (1 to 256 MB, 64 by default), time per call (1 to 60 s), and concurrency per process and per namespace. Outbound HTTP is checked on the socket for every address and redirect, so loopback, private, link-local, carrier-grade NAT and multicast destinations are refused. A function reaches only its own namespace's database, and the cluster gateway gives no function a database at all.
+- **Deployments** run as their own unprivileged, dynamically allocated user under `ProtectSystem=strict`, `NoNewPrivileges` and memory, CPU and task limits, blocked from private address ranges (they cannot reach the mesh), with the application directory read-only and only their own deployment directory visible. A Node.js app's `npm install` runs in a separate sandboxed oneshot with `--ignore-scripts` and registry dependencies only. The environment reaches the process through a file only systemd can read.
+- **SQLite files** are `0600` in `0700` directories, opened with `ATTACH` disabled.
+- **Shared IPFS content is reference counted** across namespaces. One pin exists per CID; an unpin removes it only when the caller's release leaves no reference, so one tenant cannot delete content another still needs. `GET /v1/storage/status/<cid>` answers only for a CID the namespace references, so it cannot be used to test what other tenants store.
+
+## Process isolation
+
+- Services run as an unprivileged `orama` user under systemd sandboxing; CoreDNS and the SFU have accounts of their own so `ProtectProc=invisible` hides them from each other; the Tor client runs as `debian-tor`, denied every private address range so it can never reach the mesh. `/opt/orama/bin` is `root:orama` mode 0750: the daemons can execute binaries but not replace them.
+- Root actions go through one privileged helper (`orama-privhelper`), which is socket-activated and exposes a fixed allow-list of operations.
+- **Memory hygiene.** Secret-bearing units have `MemorySwapMax=0`; install turns swap off, disables suid core dumps, discards core dumps (`kernel.core_pattern` to `/bin/false`), stops and masks apport, and sets `kernel.yama.ptrace_scope=1` so a process attaches only to its own descendants. `orama status` raises a warning if any of this drifts. `mlock` is deliberately not used: it does not survive `execve`, so it would buy nothing against a RAM snapshot.
+
+## Secrets at rest
+
+TURN secrets, function secrets, push credentials, deployment environment variables and agent tokens are encrypted with AES-256-GCM under a versioned key hierarchy rooted in the *encryption root*, which starts as a copy of the cluster secret. `orama maint operator rotate-secrets --rotate` replaces the root and re-encrypts. A deployment's environment is also sealed to its namespace and deployment id (the `enc:v2:` envelope), so a ciphertext copied onto another deployment's row does not open there; a new cluster writes that form from its first row, and an upgraded cluster switches to it when an operator runs `rotate-secrets` after every gateway is upgraded. Private blobs are encrypted before they are added to IPFS. Certificates are sealed in the shared store. More on [Secrets and keys](/docs/architecture/secrets-and-keys).
+
+## Supply chain
+
+Build archives are signed with a RootWallet key (an EIP-191 signature over a domain-separated message that includes the manifest hash), and a node installs one only if the signer is in its trust anchor. Every file is listed in the signed manifest. Builds are reproducible: two `orama maint build` runs of one commit give the same archive byte for byte, so several signers can rebuild and compare hashes before signing, and CI publishes each release's archive unsigned and holds no key.
+
+A cluster can also adopt a **TUF release root**. Releases are then fetched from a static HTTPS repository and trusted only when the release signers' metadata names their hash, through `stable` and `nightly` channel roles that are trusted for their own paths only. A client refuses metadata below a role's threshold, an expired timestamp, a snapshot older than the newest it accepted (rollback) and a target whose bytes differ. Nodes can follow a channel by themselves with the auto-update agent: `notify` is the default, `auto` installs inside a maintenance window one node at a time behind a health gate, rolls back and marks the release bad for the cluster if it fails, and is never applied to a machine that runs the chain. The agent installs only what the root's signers signed. See [Release and rollout](/docs/contributor/deployment#releases-tuf-and-auto-update).
+
+The chain binary (`oramad`) is staged with TUF verification at staging time (`orama maint global stage-oramad`), and cosmovisor never downloads a binary. See [Build and sign](/docs/operator/build-and-sign). Not covered: on the archive-signer path a signature proves who built an archive, not that it is the newest, so a rollback to an older signed build is allowed; and the global-node binaries (`oramad`, `orama-global`) are not verified against a signature at install, the operator is the check.
+
+## OramaOS
+
+Ubuntu nodes are trusted: their operators have root and SSH, and their disks are not encrypted. OramaOS is the answer: a read-only SquashFS root, no shell, no SSH, a LUKS2 data partition whose key is split by Shamir's scheme across peer vault guardians (threshold `K = max(2, floor(N/3))`), per-service Linux namespaces and seccomp, A/B signed updates with rollback after three failed boots, and management only through the gateway API over WireGuard. It is **built but has never been booted on a live network**, and integrity verification (dm-verity) is compiled but not wired into boot, the syscall filter only logs, and the first node's key has no escrow. See [OramaOS](/docs/operator/orama-os).
+
+## What a compromised node can do
+
+Every node is a member of the registry's Raft group, holds the RQLite credentials and the cluster secret. A compromised node can therefore still write cluster state and sign coordination calls for any other node. Per-node Ed25519 identity (node registration and heartbeats are signed by a key only that node holds, enrolled against its libp2p identity, revoked on removal) narrows what a stolen *disk* gives; it does not confine a *running* compromised node to its own rows, because that needs the node to stop being a member of the cluster that holds them, which is a topology change.
+
+## What this does not defend against
+
+- **A RAM snapshot** of a running node, including a hypervisor or hosting-provider snapshot, and anything that reads the memory the gateway holds while it combines vault shares.
+- **Ubuntu node operators and provider access.** Zero operator access and disk encryption apply to OramaOS only. Ubuntu disk encryption is a design ([Disk encryption and reboot](/docs/operator/orama-os#disk-encryption-and-reboot)).
+- **dm-verity at boot** (hashes may exist in the OramaOS image; boot does not enforce them).
+- **A captured disk snapshot of a node.** Your application data in RQLite is plaintext. The secrets the platform stores (function secrets, push credentials, deployment environments) are encrypted, but under a key derived from the cluster secret, which sits on the same node, so a snapshot of an Ubuntu node exposes the cluster's shared secrets.
+- **Immediate erasure.** A SQL `DELETE` is a Raft log entry; the original `INSERT` stays in the log until size-driven compaction. IPFS content is reclaimed by garbage collection every six hours, or at once with `?immediate=true`.
+- **ntfy** has no auth file: listening on loopback is the control.
+- **Olric memberlist encryption**: the version in use has no `encryptionKey`; WireGuard is the control.
+- **WireGuard key rotation** and **cluster-secret rotation** need a maintenance window and have no tooling yet.
+- **Some internal services trust the mesh** (media signalling, gossip) without per-peer authentication.
+- **TURN credentials are namespace-wide** and cannot be revoked per user.
+- **A hostile node operator who is a member of a namespace's three nodes** can read that namespace's data. This is why operator admission is by invitation until OramaOS runs.
+
+## Chain-specific limits
+
+The Orama L1 has its own declared limits, for example that a contract holding ORAMA can issue a public IOU for it, and that the bootstrap committee decides before lambda reaches 1. See [What the chain is](/docs/blockchain/what-it-is), [Contracts](/docs/blockchain/contracts) and the [security disclosure policy](/docs/architecture/disclosure).
+
+## Self-audit
+
+Orama audits itself and publishes what it finds. Earlier reviews that treated the hosting provider as the adversary produced ninety findings; audits of stability (35 items) and of authentication and authorization (29 items) followed. Most items are implemented in code; the remaining ones are concentrated in OramaOS and the vault. **An independent external security audit has not happened yet** and is part of the roadmap.

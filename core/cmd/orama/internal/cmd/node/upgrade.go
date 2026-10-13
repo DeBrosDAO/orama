@@ -1,0 +1,84 @@
+package node
+
+import (
+	"fmt"
+
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/production/upgrade"
+	"github.com/DeBrosOfficial/network/pkg/rollout"
+	"github.com/spf13/cobra"
+)
+
+var upgradeFlags upgrade.Flags
+
+// upgradeAnyoneClient is set only when --anyone-client reaches the new binary
+// through the post-swap re-exec; see upgradeReexecAnyoneClientFlag.
+var upgradeAnyoneClient bool
+
+// upgradeReplacedNotice is what the remote mode says: `orama upgrade` rolls the
+// signed release of the network's channel, and `orama maint rollout` a build of
+// your own.
+const upgradeReplacedNotice = "Note: the remote mode of `orama node upgrade` (--env) is replaced by `orama upgrade`, which rolls the newest signed release of your network's channel; " +
+	"`orama maint rollout` rolls a build of your own."
+
+var upgradeCmd = &cobra.Command{
+	Use:   "upgrade",
+	Short: "Upgrade existing installation (requires sudo)",
+	Long: `Upgrade the Orama node binary and optionally restart services.
+Uses rolling restart with quorum safety to ensure zero downtime.
+
+Run on a node, with sudo, this upgrades that node. Run from your machine with
+--env it rolls the nodes of an environment one at a time from the build already
+staged on them: that remote mode is replaced by 'orama upgrade' (the newest signed
+release of your network's channel) and 'orama maint rollout' (a build of your own),
+and prints a notice.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if upgradeFlags.Env != "" {
+			fmt.Fprintln(cmd.ErrOrStderr(), upgradeReplacedNotice)
+		}
+		if err := checkUpgradeAnyoneClient(upgradeAnyoneClient, upgradeFlags.ReexecedAfterBinarySwap); err != nil {
+			return err
+		}
+		// Nameserver is a pointer so the orchestrator can tell "not given"
+		// (keep the saved preference) from an explicit --nameserver=false.
+		if cmd.Flags().Changed("nameserver") {
+			v, err := cmd.Flags().GetBool("nameserver")
+			if err != nil {
+				return err
+			}
+			upgradeFlags.Nameserver = &v
+		}
+		if err := upgradeFlags.Resolve(); err != nil {
+			return err
+		}
+		return upgrade.Run(&upgradeFlags)
+	},
+}
+
+func init() {
+	upgradeCmd.SetFlagErrorFunc(explainRemovedFlags)
+	f := upgradeCmd.Flags()
+	f.BoolVar(&upgradeFlags.Force, "force", false, "Reconfigure all settings")
+	f.BoolVar(&upgradeFlags.RestartServices, "restart", false, "Automatically restart services after upgrade")
+	f.BoolVar(&upgradeFlags.SkipChecks, "skip-checks", false, "Skip minimum resource checks (disk, RAM, CPU)")
+	f.StringVar(&upgradeFlags.Env, "env", "", "Target environment for remote rolling upgrade (devnet, testnet)")
+	f.StringVar(&upgradeFlags.NodeFilter, "node", "", "Upgrade a single node IP only")
+	f.BoolVar(&upgradeFlags.Yes, "yes", false, "Execute the rolling upgrade plan (without it the plan is printed and nothing is restarted)")
+	f.IntVar(&upgradeFlags.Delay, "delay", int(rollout.GateBudget.Seconds()),
+		"Seconds a node has to rejoin the cluster after its upgrade before the rollout stops")
+	f.Bool("nameserver", false, "Make this node a nameserver (uses saved preference if not specified)")
+	f.StringVar(&upgradeFlags.PublicIP, "public-ip", "",
+		"This node's public IP, recorded as node.public_ip (default: the recorded one, else the source address of the default route)")
+
+	f.StringVar(&upgradeFlags.ACMECA, "acme-ca", "",
+		"ACME directory this node's TLS certificates come from, recorded in node.yaml: letsencrypt (production), letsencrypt-staging or an https URL (default: the recorded one)")
+
+	// Set by the orchestrator when it re-execs itself after swapping the
+	// binary; not something an operator ever passes.
+	f.BoolVar(&upgradeFlags.ReexecedAfterBinarySwap, "reexeced-after-binary-swap", false, "")
+	_ = f.MarkHidden("reexeced-after-binary-swap")
+
+	// Accepted only from the post-swap re-exec; checkUpgradeAnyoneClient
+	// refuses it from an operator.
+	f.BoolVar(&upgradeAnyoneClient, upgradeReexecAnyoneClientFlag, false, "")
+	_ = f.MarkHidden(upgradeReexecAnyoneClientFlag)
+}

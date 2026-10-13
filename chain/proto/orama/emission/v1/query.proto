@@ -1,0 +1,108 @@
+syntax = "proto3";
+package orama.emission.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/emission/types";
+
+import "google/api/annotations.proto";
+import "gogoproto/gogo.proto";
+import "orama/emission/v1/emission.proto";
+
+// Query defines the gRPC querier service for x/emission. There is no Msg
+// service: this module ships queries only.
+service Query {
+  rpc Params(QueryParamsRequest) returns (QueryParamsResponse) {
+    option (google.api.http).get = "/orama/emission/v1/params";
+  }
+  rpc CurrentEpoch(QueryCurrentEpochRequest) returns (QueryCurrentEpochResponse) {
+    option (google.api.http).get = "/orama/emission/v1/current-epoch";
+  }
+  rpc ScheduleAt(QueryScheduleAtRequest) returns (QueryScheduleAtResponse) {
+    option (google.api.http).get = "/orama/emission/v1/schedule-at/{epoch}";
+  }
+  rpc CumulativeMinted(QueryCumulativeMintedRequest) returns (QueryCumulativeMintedResponse) {
+    option (google.api.http).get = "/orama/emission/v1/cumulative-minted";
+  }
+  rpc SupplyCapSoFar(QuerySupplyCapSoFarRequest) returns (QuerySupplyCapSoFarResponse) {
+    option (google.api.http).get = "/orama/emission/v1/supply-cap-so-far/{epoch}";
+  }
+  rpc Invariants(QueryInvariantsRequest) returns (QueryInvariantsResponse) {
+    option (google.api.http).get = "/orama/emission/v1/invariants";
+  }
+}
+
+message QueryParamsRequest {}
+
+message QueryParamsResponse {
+  Params params = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryCurrentEpochRequest {}
+
+message QueryCurrentEpochResponse {
+  EpochState epoch_state = 1 [(gogoproto.nullable) = false];
+}
+
+// QueryScheduleAtRequest asks for the schedule (maximum per-epoch mint and
+// its split) at a given epoch number.
+message QueryScheduleAtRequest {
+  uint64 epoch = 1;
+}
+
+message QueryScheduleAtResponse {
+  uint64 epoch = 1;
+  string max_mintable = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  string validator_share = 3 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  string storage_ceiling = 4 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  string relay_ceiling = 5 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  string development_ceiling = 6 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+}
+
+message QueryCumulativeMintedRequest {}
+
+message QueryCumulativeMintedResponse {
+  string cumulative_minted = 1 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  string cumulative_burned = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+}
+
+// QuerySupplyCapSoFarRequest asks for the maximum cumulative supply the
+// schedule allows up to and including the given epoch (the schedule's
+// maximum, not necessarily what was actually minted).
+message QuerySupplyCapSoFarRequest {
+  uint64 epoch = 1;
+}
+
+message QuerySupplyCapSoFarResponse {
+  string supply_cap = 1 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+}
+
+message QueryInvariantsRequest {}
+
+message QueryInvariantsResponse {
+  bool minted_within_schedule = 1;
+  bool supply_matches_minted = 2;
+  string detail = 3;
+}

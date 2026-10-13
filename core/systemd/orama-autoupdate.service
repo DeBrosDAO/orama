@@ -1,0 +1,49 @@
+[Unit]
+Description=Orama auto-update: look for a newer release on the cluster's channel and act on it
+Documentation=https://github.com/DeBrosOfficial/network
+After=network-online.target orama-node.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Root, not the orama account: an install swaps the release under /opt/orama
+# (root's alone) and runs `orama node upgrade`, which restarts this node's
+# services. The agent decides nothing the cluster's policy has not allowed: it
+# does nothing unless the cluster stored a release repository and this node
+# adopted a release root (docs/whitepaper/technical-reference/vol1/29-build-signing-and-release.md, "Auto-update").
+WorkingDirectory=/opt/orama
+ExecStart=/opt/orama/bin/orama node autoupdate run
+# An install waits for the node to rejoin the cluster, and may roll back and
+# wait again. An hour is far past that; past it, something hung.
+TimeoutStartSec=1h
+Nice=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=orama-autoupdate
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+# Confinement that leaves the run what it does as root: it swaps /opt/orama,
+# writes /etc/orama and /var/lib/orama-autoupdate, runs `orama node upgrade
+# --restart` (systemctl over D-Bus, apt, ufw, wg and iptables) and reads the
+# registry over the overlay.
+# ProtectHome hides /home, /root and /run/user. The upgrade reads nothing there:
+# it works under /opt/orama, /etc, /var/lib and /usr, and the service accounts
+# it runs tools as have their homes under /opt/orama (installers/runas.go), not
+# in /home. The operator's ~/.orama (environments.json, credentials.json) and
+# their ssh keys belong to the CLI run from a workstation, not to this node.
+ProtectHome=yes
+ProtectControlGroups=yes
+LockPersonality=yes
+# Deliberately not RestrictSUIDSGID: `orama node upgrade --restart` runs apt-get
+# and dpkg, and dpkg sets the setuid and setgid bits of the files of the
+# packages that carry them (passwd and mount, for example). The setting denies
+# exactly that, so an upgrade that updates such a package would fail half way.
+# AF_NETLINK is for ufw, iptables and wg, which the upgrade runs to reconcile
+# the firewall and the WireGuard mesh.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+# Deliberately not set, because `orama node upgrade` does what they forbid:
+# ProtectKernelTunables (it runs `sysctl -w` and `sysctl -p`: pkg/install/
+# firewall.go), ProtectSystem (it writes /opt/orama, /etc, /usr/local/bin and
+# the package database), and SystemCallFilter, which the upgrade's apt, dpkg and
+# ufw would have to be proven against on a node first.

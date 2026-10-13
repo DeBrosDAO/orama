@@ -1,0 +1,20 @@
+direction: right
+
+orbk: "ORBK file (outer)" {
+  h: "ORBK | version 1"
+  box: "NaCl anonymous box\n(ephemeral Curve25519 key, XSalsa20-Poly1305)\nopened only by the owner's private key" {
+    ornp: "ORNP frame" {
+      a: "ORNP | version 1 | header length (uint32 BE)"
+      b: "header JSON: namespace, pins, stored_bytes,\nrqlite_size, rqlite_sha256, secrets (plaintext values)"
+      c: "raw SQLite file (/db/backup output)"
+    }
+  }
+}
+
+ornr: "ORNR frame (request, never stored)" {
+  a: "ORNR | version 1 | header length"
+  b: "header JSON: same fields; each secret sealed\nto the destination restore key and bound to\nnamespace, table, column, ids"
+  c: "raw SQLite file"
+}
+
+orbk.box.ornp -> ornr: "owner's machine rewraps\nsecrets, keeps the database"

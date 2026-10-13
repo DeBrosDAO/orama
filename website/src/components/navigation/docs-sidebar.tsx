@@ -1,13 +1,13 @@
-import { useState, useCallback } from "react";
+import { Fragment, useState, useCallback } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
-import { Search, Menu, X, ChevronDown, Code2, Server, GitBranch, Check } from "lucide-react";
+import { Search, Menu, X, ChevronDown, Code2, Server, GitBranch, Blocks, Check, Compass, ShieldCheck, EyeOff, Wallet } from "lucide-react";
 import {
   PERSONA_DOCS,
   PERSONA_FIRST_SLUG,
 } from "../../data/docs-navigation";
 import type { DocLink } from "../../data/docs-navigation";
-import type { Persona } from "../../types/persona";
+import { isPersona, type Persona } from "../../types/persona";
 import { cn } from "../../lib/utils";
 import { SearchDialog } from "../ui/search-dialog";
 
@@ -21,15 +21,19 @@ const PERSONAS: {
   icon: typeof Code2;
   desc: string;
 }[] = [
-  { key: "developer", label: "Developers", icon: Code2, desc: "SDK, CLI, and API docs" },
-  { key: "operator", label: "Operators", icon: Server, desc: "Node setup and monitoring" },
+  { key: "start", label: "Start here", icon: Compass, desc: "What Orama is and where to begin" },
+  { key: "developer", label: "Developers", icon: Code2, desc: "Build apps: SDK, CLI, and API" },
+  { key: "operator", label: "Operators", icon: Server, desc: "Install and run a cluster" },
+  { key: "architecture", label: "Architecture & security", icon: ShieldCheck, desc: "How it works and why it is safe" },
+  { key: "blockchain", label: "Blockchain", icon: Blocks, desc: "The Orama ledger, token, and validators" },
+  { key: "privacy", label: "Privacy network", icon: EyeOff, desc: "Tor, relayed fetch, stealth TURN, VPN" },
+  { key: "rootwallet", label: "RootWallet", icon: Wallet, desc: "The wallet and agent that sign you in" },
   { key: "contributor", label: "Contributors", icon: GitBranch, desc: "Source code and tooling" },
 ];
 
 function getPersonaFromPath(pathname: string): Persona {
-  if (pathname.startsWith("/docs/operator")) return "operator";
-  if (pathname.startsWith("/docs/contributor")) return "contributor";
-  return "developer";
+  const section = pathname.replace(/^\/docs\/?/, "").split("/")[0];
+  return isPersona(section) ? section : "start";
 }
 
 /* -------------------------------------------------------------------------- */
@@ -211,13 +215,24 @@ function SidebarContent({ onLinkClick }: { onLinkClick?: () => void }) {
         {/* Links */}
         <nav className="flex-1 overflow-y-auto px-2 py-3">
           <ul className="flex flex-col gap-0.5">
-            {links.map((link) => (
-              <NavLink
-                key={link.slug}
-                link={link}
-                isActive={pathname === `/docs/${link.slug}`}
-                onClick={onLinkClick}
-              />
+            {links.map((link, i) => (
+              <Fragment key={link.slug}>
+                {link.group && link.group !== links[i - 1]?.group && (
+                  <li
+                    className={cn(
+                      "px-3 pb-1 font-mono text-[10px] uppercase tracking-wider text-muted/60",
+                      i === 0 ? "pt-1" : "pt-4",
+                    )}
+                  >
+                    {link.group}
+                  </li>
+                )}
+                <NavLink
+                  link={link}
+                  isActive={pathname === `/docs/${link.slug}`}
+                  onClick={onLinkClick}
+                />
+              </Fragment>
             ))}
           </ul>
         </nav>

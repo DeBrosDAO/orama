@@ -1,0 +1,138 @@
+{
+  "description": "Shielded address vectors: Bech32m (BIP-350) of the 43 raw Orchard address bytes with HRP oramas. Read by the Rust, Go and TypeScript codecs. Regenerate with generate.py.",
+  "hrp": "oramas",
+  "raw_length": 43,
+  "encoded_length": 82,
+  "valid": [
+    {
+      "raw": "e3c70b2a3907f408fe802771fb07824ec6e826bf3d7c7586fe62f2e04cdbad32678fb37171a2fd1cbfb02e",
+      "address": "oramas1u0rsk23eql6q3l5qyaclkpuzfmrwsf4l8478tph7vtewqnxm45ex0ranw9c69lguh7czufckn7s"
+    },
+    {
+      "raw": "e41c7421c043f46a1085f2db758482ca3e2ce6f92203c38c975c0e0b7a46bd41d53039e8cd08aa52556fba",
+      "address": "oramas1usw8ggwqg06x5yy97tdhtpyzeglzeeheygpu8ryhts8qk7jxh4qa2vpearxs32jj24hm5jvqqa9"
+    },
+    {
+      "raw": "d8ec0785593fc8a0ba249590ee4f7fa75f0df50f530c432cf2ac5d8247689e9a24f6b1d5591e4f81df4136",
+      "address": "oramas1mrkq0p2e8ly2pw3yjkgwunml5a0smag02vxyxt8j43wcy3mgn6dzfa4364v3unupmaqnv2ezfds"
+    },
+    {
+      "raw": "1cba3fd0a5e227fd187a827dd57463c5553ff9fb8df3ad87a05708c77ad5cf9c150c9ee0967d7ab4939133",
+      "address": "oramas1rjarl599ugnl6xr6sf7a2arrc42nl70m3he6mpaq2uyvw7k4e7wp2ry7uzt86745jwgnxfy5taa"
+    },
+    {
+      "raw": "f5b33274449414421aaa09f92ab5cc6bf40ad6bcd44692d104fea1c2cae28049168b25e16a68fb814eb6a0",
+      "address": "oramas17kenyazyjs2yyx42p8uj4dwvd06q444u63rf95gyl6su9jhzspy3dze9u94x37upf6m2qfxzd8w"
+    },
+    {
+      "raw": "0eedeb0e1cd51247dfa610b945f8c23b1a3e6abad7e3dd1e77d63f9d346f2feded623037dcc47d6e38828c",
+      "address": "oramas1pmk7krsu65fy0haxzzu5t7xz8vdru6466l3a68nh6cle6dr09lk76c3sxlwvgltw8zpgc7ywlxw"
+    },
+    {
+      "raw": "388ac129a66b400fb774a4d22f7bd87b6c1e0b739fb77270937cbd524b5f71a95d8f3db7bf20f70d72980b",
+      "address": "oramas18z9vz2dxddqqldm55nfz777c0dkpuzmnn7mhyuyn0j74yj6lwx54mreak7ljpacdw2vqkaeglsy"
+    },
+    {
+      "raw": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "address": "oramas1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq4yl995"
+    },
+    {
+      "raw": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "address": "oramas1llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll7p0pd72"
+    }
+  ],
+  "accept": [
+    {
+      "why": "all capitals",
+      "raw": "e3c70b2a3907f408fe802771fb07824ec6e826bf3d7c7586fe62f2e04cdbad32678fb37171a2fd1cbfb02e",
+      "address": "ORAMAS1U0RSK23EQL6Q3L5QYACLKPUZFMRWSF4L8478TPH7VTEWQNXM45EX0RANW9C69LGUH7CZUFCKN7S"
+    },
+    {
+      "why": "all capitals, another address",
+      "raw": "e41c7421c043f46a1085f2db758482ca3e2ce6f92203c38c975c0e0b7a46bd41d53039e8cd08aa52556fba",
+      "address": "ORAMAS1USW8GGWQG06X5YY97TDHTPYZEGLZEEHEYGPU8RYHTS8QK7JXH4QA2VPEARXS32JJ24HM5JVQQA9"
+    }
+  ],
+  "invalid": [
+    {
+      "why": "one data character changed",
+      "address": "oramas1u0rsk23eqlmq3l5qyaclkpuzfmrwsf4l8478tph7vtewqnxm45ex0ranw9c69lguh7czufckn7s",
+      "error": "bad_checksum"
+    },
+    {
+      "why": "the last checksum character changed",
+      "address": "oramas1u0rsk23eql6q3l5qyaclkpuzfmrwsf4l8478tph7vtewqnxm45ex0ranw9c69lguh7czufckn73",
+      "error": "bad_checksum"
+    },
+    {
+      "why": "the original Bech32 checksum",
+      "address": "oramas1u0rsk23eql6q3l5qyaclkpuzfmrwsf4l8478tph7vtewqnxm45ex0ranw9c69lguh7czuuyxlmj",
+      "error": "bad_checksum"
+    },
+    {
+      "why": "mixed case",
+      "address": "oramas1u0rsk23eql6q3L5QYACLKPUZFMRWSF4L8478TPH7VTEWQNXM45EX0RANW9C69LGUH7CZUFCKN7S",
+      "error": "mixed_case"
+    },
+    {
+      "why": "no separator",
+      "address": "oramasqu0rsk23eql6q3l5qyaclkpuzfmrwsf4l8478tph7vtewqnxm45ex0ranw9c69lguh7czufckn7s",
+      "error": "no_separator"
+    },
+    {
+      "why": "empty",
+      "address": "",
+      "error": "no_separator"
+    },
+    {
+      "why": "another human-readable part, valid checksum",
+      "address": "orama1u0rsk23eql6q3l5qyaclkpuzfmrwsf4l8478tph7vtewqnxm45ex0ranw9c69lguh7czugwsk55",
+      "error": "wrong_prefix"
+    },
+    {
+      "why": "a transparent account address prefix",
+      "address": "orama1u0rsk23eql6q3l5qyaclkpuzfmrwsf4l7rnyz8",
+      "error": "wrong_prefix"
+    },
+    {
+      "why": "no human-readable part",
+      "address": "1u0rsk23eql6q3l5qyaclkpuzfmrwsf4l8478tph7vtewqnxm45ex0ranw9c69lguh7czufckn7s",
+      "error": "wrong_prefix"
+    },
+    {
+      "why": "a character outside the alphabet",
+      "address": "oramas1u0rsk23eql6q3l5qyaclkpubfmrwsf4l8478tph7vtewqnxm45ex0ranw9c69lguh7czufckn7s",
+      "error": "bad_character"
+    },
+    {
+      "why": "a space",
+      "address": "oramas1u0rsk23eql6q3l5qyaclkpu fmrwsf4l8478tph7vtewqnxm45ex0ranw9c69lguh7czufckn7s",
+      "error": "bad_character"
+    },
+    {
+      "why": "42 bytes, valid checksum",
+      "address": "oramas1u0rsk23eql6q3l5qyaclkpuzfmrwsf4l8478tph7vtewqnxm45ex0ranw9c69lguh7cq2s5p3q",
+      "error": "wrong_length"
+    },
+    {
+      "why": "44 bytes, valid checksum",
+      "address": "oramas1u0rsk23eql6q3l5qyaclkpuzfmrwsf4l8478tph7vtewqnxm45ex0ranw9c69lguh7czuqqvdem3r",
+      "error": "wrong_length"
+    },
+    {
+      "why": "one character short",
+      "address": "oramas1u0rsk23eql6q3l5qyaclkpuzfmrwsf4l8478tph7vtewqnxm45ex0ranw9c69lguh7czufckn7",
+      "error": "wrong_length"
+    },
+    {
+      "why": "one character long",
+      "address": "oramas1u0rsk23eql6q3l5qyaclkpuzfmrwsf4l8478tph7vtewqnxm45ex0ranw9c69lguh7czufckn7sq",
+      "error": "wrong_length"
+    },
+    {
+      "why": "a spare padding bit set, valid checksum",
+      "address": "oramas1u0rsk23eql6q3l5qyaclkpuzfmrwsf4l8478tph7vtewqnxm45ex0ranw9c69lguh7cza5wzxrz",
+      "error": "bad_padding"
+    }
+  ]
+}

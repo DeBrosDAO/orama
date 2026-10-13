@@ -1,0 +1,38 @@
+# Performance baselines of the release, recorded as evidence in the run's
+# artifact dir (perf/baseline.json plus one file per metric): latency p50,
+# p95, p99 and throughput of the gateway health route, database exec and
+# query, cache put and get, pubsub publish, storage upload and get, function
+# cold and warm invoke, and the time to deploy an app, provision a namespace
+# and answer a DNS query. Each metric has a generous upper bound; with
+# E2E_BASELINE_FILE (a previous run's perf/baseline.json) a p95 or throughput
+# more than E2E_PERF_REGRESSION_PCT percent (default 25) worse fails.
+# Destructive only so that it runs alone after the stage's other packages:
+# a baseline measured next to other load is noise.
+id: perf
+title: Performance baselines per release
+area: quality
+subtasks: [2865]
+stage: 9
+destructive: true
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  routes:
+    - /v1/health
+    - /v1/version
+    - /v1/rqlite/create-table
+    - /v1/rqlite/exec
+    - /v1/rqlite/query
+    - /v1/cache/put
+    - /v1/cache/get
+    - /v1/pubsub/publish
+    - /v1/storage/upload
+    - /v1/storage/get/
+    - /v1/functions/
+  cli:
+    - orama deploy static
+    - orama function deploy
+  claims:
+    - "plans/e2e-fleet.md: performance baselines are recorded per release and compared with the previous one"

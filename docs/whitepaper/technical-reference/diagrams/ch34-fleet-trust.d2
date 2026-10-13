@@ -1,0 +1,28 @@
+direction: right
+
+inf: "infisical run\nHCLOUD_TOKEN, CF_API_TOKEN, CF_ZONE" 
+
+runner: "e2e-fleet run / test" {
+  seal: "re-executes itself;\nsecrets cross exec in an\ninherited pipe (E2E_SEALED_FD)"
+}
+
+broker: "broker child (own process group)" {
+  b: "unix socket 0600 in a 0700 dir\nDNS TXT under the run's subdomain,\nextra servers (max 3), eval clusters"
+}
+
+feat: "feature package processes\n(go test -tags e2e_fleet)" {
+  env: "environment allowlist, no secrets,\nHOME = empty .feature-home"
+}
+
+cli: "orama CLI under test" {
+  c: "isolated HOME, throwaway\nRootWallet agent socket,\nORAMA_E2E=1"
+}
+
+fleet: "run fleet (3 servers)" {shape: cylinder}
+
+inf -> runner.seal: "environment"
+runner.seal -> broker.b: "fd 3 (never argv or environ)"
+feat.env -> broker.b: "E2E_BROKER_SOCK"
+feat.env -> cli.c: "allowlisted environment"
+feat.env -> fleet: "HTTPS pinned to the run CA,\nSSH with the run key, pinned host keys"
+cli.c -> fleet: "HTTPS, SSH"

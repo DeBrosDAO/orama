@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/DeBrosOfficial/network/pkg/privhelper"
 	"io"
 	"log"
 	"net/http"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -117,7 +117,8 @@ func (h *Handler) HandleNodeLogs(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleNodeLeave handles POST /v1/node/leave — graceful node departure.
-// Orchestrates: stop services → redistribute Shamir shares → remove WG peer.
+// Stops services on the leaving node and removes it from the WireGuard mesh.
+// Shamir redistribution is not implemented (guardian clustering is unwired).
 func (h *Handler) HandleNodeLeave(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -150,16 +151,16 @@ func (h *Handler) HandleNodeLeave(w http.ResponseWriter, r *http.Request) {
 
 	h.logger.Info("node leave requested", zap.String("wg_ip", wgIP))
 
-	// Step 1: Tell the agent to stop services
-	_, _, err := h.proxyToAgent(wgIP, "POST", "/v1/agent/command",
+	ctx := r.Context()
+
+	_, status, err := h.proxyToAgent(wgIP, "POST", "/v1/agent/command",
 		[]byte(`{"action":"stop"}`))
 	if err != nil {
 		h.logger.Warn("failed to stop services on leaving node", zap.Error(err))
-		// Continue — node may already be down
+	} else if status >= 400 {
+		h.logger.Warn("leaving node refused stop", zap.Int("status", status))
 	}
 
-	// Step 2: Remove WG peer from database
-	ctx := r.Context()
 	if _, err := h.rqliteClient.Exec(ctx,
 		"DELETE FROM wireguard_peers WHERE wg_ip = ?", wgIP); err != nil {
 		h.logger.Error("failed to remove WG peer from database", zap.Error(err))
@@ -167,14 +168,6 @@ func (h *Handler) HandleNodeLeave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Step 3: Remove from local WireGuard interface
-	// Get the peer's public key first
-	var rows []struct {
-		PublicKey string `db:"public_key"`
-	}
-	_ = h.rqliteClient.Query(ctx, &rows,
-		"SELECT public_key FROM wireguard_peers WHERE wg_ip = ?", wgIP)
-	// Peer already deleted above, but try to remove from wg0 anyway
 	h.removeWGPeerLocally(wgIP)
 
 	h.logger.Info("node removed from cluster", zap.String("wg_ip", wgIP))
@@ -186,12 +179,23 @@ func (h *Handler) HandleNodeLeave(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// proxyToAgent sends an HTTP request to the OramaOS agent over WireGuard.
+// proxyToAgent sends an HTTP request to the OramaOS agent over WireGuard,
+// carrying the credential that node minted for this gateway at enrollment.
+//
+// Being on the mesh is not the credential: every namespace's services are on
+// that mesh, and one of them being compromised must not mean every node's
+// services can be restarted. A node with no stored token cannot be commanded,
+// and this says so rather than sending a request the agent will refuse.
 func (h *Handler) proxyToAgent(wgIP, method, path string, body []byte) ([]byte, int, error) {
 	url := fmt.Sprintf("http://%s:9998%s", wgIP, path)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
+
+	token, err := h.AgentToken(ctx, nodeIDForOverlayIP(wgIP))
+	if err != nil {
+		return nil, 0, err
+	}
 
 	var reqBody io.Reader
 	if body != nil {
@@ -202,6 +206,7 @@ func (h *Handler) proxyToAgent(wgIP, method, path string, body []byte) ([]byte, 
 	if err != nil {
 		return nil, 0, err
 	}
+	req.Header.Set("Authorization", "Bearer "+token)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -251,22 +256,23 @@ func (h *Handler) nodeIDToWGIP(ctx context.Context, nodeID string) (string, erro
 	return rows[0].WGIP, nil
 }
 
-// removeWGPeerLocally removes a peer from the local wg0 interface by its allowed IP.
+// removeWGPeerLocally removes the peer holding wgIP from wg0 and wg0.conf,
+// through orama-privhelper. It used to run `wg show`/`wg set` directly, which
+// the unprivileged gateway cannot, and matched the address with
+// strings.Contains, so removing 10.0.0.1 also removed 10.0.0.12.
 func (h *Handler) removeWGPeerLocally(wgIP string) {
-	// Find peer public key by allowed IP
-	out, err := exec.Command("wg", "show", "wg0", "dump").Output()
-	if err != nil {
-		log.Printf("failed to get wg dump: %v", err)
+	if err := privhelper.RemoveWireGuardPeer(wgIP + "/32"); err != nil {
+		log.Printf("failed to remove WG peer %s: %v", wgIP, err)
 		return
 	}
+	log.Printf("removed WG peer %s", wgIP)
+}
 
-	for _, line := range strings.Split(string(out), "\n") {
-		fields := strings.Split(line, "\t")
-		if len(fields) >= 4 && strings.Contains(fields[3], wgIP) {
-			pubKey := fields[0]
-			exec.Command("wg", "set", "wg0", "peer", pubKey, "remove").Run()
-			log.Printf("removed WG peer %s (%s)", pubKey[:8]+"...", wgIP)
-			return
-		}
-	}
+// nodeIDForOverlayIP is the node id an enrolled OramaOS node was given.
+//
+// HandleEnroll builds it as "node-<overlay ip>", and the agent token is stored
+// against it, so the proxy has to spell it the same way. Phase 1 replaces both
+// with a real node principal.
+func nodeIDForOverlayIP(wgIP string) string {
+	return "node-" + wgIP
 }

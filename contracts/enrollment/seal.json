@@ -1,0 +1,13 @@
+{
+  "what": "The enrollment seal, as both the gateway and the OramaOS agent must compute it.",
+  "why": "The gateway (core) and the agent (os/agent) are separate Go modules and cannot import each other, so each has its own copy of the seal. This vector is the only thing stopping them drifting: change one and that side's test fails against this file.",
+  "algorithm": {
+    "kdf": "HKDF-SHA256, no salt, info = purpose, 32-byte output",
+    "purpose": "orama-enrollment-seal-v1",
+    "cipher": "AES-256-GCM",
+    "encoding": "base64(nonce || ciphertext || tag)"
+  },
+  "code": "a1b2c3d4e5f60718293a",
+  "derivedKeyHex": "976100a197b185882e962b389a5c06af7fae9c9f83d8cbfdbca7e3845a7f3bdf",
+  "plaintext": "{\"cluster_secret\":\"the-cluster-secret\",\"node_id\":\"node-10.0.0.4\"}"
+}

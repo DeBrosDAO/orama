@@ -1,0 +1,18 @@
+shape: sequence_diagram
+
+c: "client (SDK)"
+g: "namespace gateway\nroute policy, auth"
+h: "rqlite.HTTPGateway"
+s: "sqlguard.Check"
+q: "namespace RQLite\n(leader)"
+
+c -> g: "POST /v1/rqlite/query | exec | transaction"
+g -> g: "credential, db:write, live grant"
+g -> h: "dispatch"
+h -> h: "decode body (4 MiB cap)\n413 / 400"
+h -> s: "each statement as built"
+s -> h: "ok or ErrNotAllowed"
+h -> c: "403 SQL_NOT_ALLOWED\n(nothing ran)"
+h -> q: "query: level=weak\nexec: one write\ntransaction: Batch, one request"
+q -> h: "rows / rows_affected /\nper-op results"
+h -> c: "200 | 409 rollback + failed_index |\n503 retryable | 500"

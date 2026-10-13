@@ -1,0 +1,650 @@
+{
+  "meta": {
+    "environment": "e2e-ab12",
+    "collected_at": "2026-09-29T10:00:00Z",
+    "duration_seconds": 1.5,
+    "node_count": 4,
+    "healthy_count": 3,
+    "failed_count": 1
+  },
+  "summary": {
+    "rqlite_leader": "1.1.1.1",
+    "rqlite_quorum": "ok",
+    "wg_mesh_status": "ok",
+    "service_health": "ok",
+    "critical_alerts": 0,
+    "warning_alerts": 1,
+    "verdict": {
+      "state": "degraded",
+      "headline": "Degraded: API Gateway, Database (RQLite), Cache (Olric), Storage (IPFS), Secrets Vault, Private Network (WireGuard)",
+      "critical": 0,
+      "warning": 1,
+      "info": 0,
+      "nodes_healthy": 3,
+      "nodes_total": 4
+    }
+  },
+  "components": [
+    {
+      "id": "gateway",
+      "name": "API Gateway",
+      "state": "degraded",
+      "healthy": 3,
+      "total": 4,
+      "summary": "3 of 4 nodes healthy"
+    },
+    {
+      "id": "database",
+      "name": "Database (RQLite)",
+      "state": "degraded",
+      "healthy": 3,
+      "total": 4,
+      "summary": "3 of 4 nodes healthy"
+    },
+    {
+      "id": "cache",
+      "name": "Cache (Olric)",
+      "state": "degraded",
+      "healthy": 3,
+      "total": 4,
+      "summary": "3 of 4 nodes healthy"
+    },
+    {
+      "id": "storage",
+      "name": "Storage (IPFS)",
+      "state": "degraded",
+      "healthy": 3,
+      "total": 4,
+      "summary": "3 of 4 nodes healthy"
+    },
+    {
+      "id": "vault",
+      "name": "Secrets Vault",
+      "state": "degraded",
+      "healthy": 3,
+      "total": 4,
+      "summary": "3 of 4 nodes healthy"
+    },
+    {
+      "id": "dns",
+      "name": "DNS \u0026 TLS",
+      "state": "operational",
+      "healthy": 3,
+      "total": 3,
+      "summary": "All 3 nodes healthy"
+    },
+    {
+      "id": "mesh",
+      "name": "Private Network (WireGuard)",
+      "state": "degraded",
+      "healthy": 3,
+      "total": 4,
+      "summary": "3 of 4 nodes healthy"
+    },
+    {
+      "id": "chain",
+      "name": "Orama L1 Chain",
+      "state": "operational",
+      "healthy": 3,
+      "total": 3,
+      "summary": "All 3 nodes healthy"
+    }
+  ],
+  "alerts": [
+    {
+      "severity": "warning",
+      "subsystem": "system",
+      "node": "2.2.2.2",
+      "message": "disk 80% full"
+    }
+  ],
+  "nodes": [
+    {
+      "host": "1.1.1.1",
+      "role": "nameserver-ns1",
+      "status": "ok",
+      "report": {
+        "timestamp": "2026-09-29T10:00:00Z",
+        "hostname": "node-1",
+        "public_ip": "1.1.1.1",
+        "wireguard_ip": "10.0.0.1",
+        "version": "0.300.0",
+        "collect_ms": 0,
+        "system": {
+          "uptime_seconds": 3600,
+          "uptime_since": "",
+          "cpu_count": 4,
+          "load_avg_1": 0,
+          "load_avg_5": 0,
+          "load_avg_15": 0,
+          "mem_total_mb": 8000,
+          "mem_used_mb": 2000,
+          "mem_free_mb": 0,
+          "mem_available_mb": 0,
+          "mem_use_pct": 0,
+          "swap_total_mb": 0,
+          "swap_used_mb": 0,
+          "disk_total_gb": "",
+          "disk_used_gb": "",
+          "disk_avail_gb": "",
+          "disk_use_pct": 30,
+          "inode_use_pct": 0,
+          "oom_kills": 0,
+          "kernel_version": "6.8.0",
+          "time_unix": 1790676000,
+          "cpu_steal_pct": 0,
+          "pressure_cpu_pct": 0,
+          "pressure_io_pct": 0,
+          "pressure_mem_pct": 0
+        },
+        "services": {
+          "services": [
+            {
+              "name": "orama-node",
+              "active_state": "active",
+              "sub_state": "",
+              "enabled": true,
+              "n_restarts": 1,
+              "active_since_sec": 0,
+              "memory_current_mb": 0,
+              "cpu_usage_nsec": 0,
+              "main_pid": 0,
+              "restart_loop_risk": false
+            }
+          ]
+        },
+        "rqlite": {
+          "responsive": true,
+          "ready": true,
+          "strong_read": false,
+          "raft_state": "Leader",
+          "leader_addr": "10.0.0.1:7001",
+          "leader_id": "10.0.0.1:7001",
+          "node_id": "10.0.0.1:7001",
+          "num_peers": 2,
+          "voter": true
+        },
+        "olric": {
+          "service_active": true,
+          "memberlist_up": true,
+          "process_mem_mb": 0,
+          "restart_count": 0,
+          "log_errors_1h": 0,
+          "log_suspects_1h": 0,
+          "log_flapping_1h": 0
+        },
+        "ipfs": {
+          "daemon_active": true,
+          "cluster_active": true,
+          "swarm_peer_count": 0,
+          "cluster_peer_count": 0,
+          "cluster_errors": 0,
+          "repo_size_bytes": 0,
+          "repo_max_bytes": 0,
+          "repo_use_pct": 0,
+          "has_swarm_key": false,
+          "bootstrap_empty": false
+        },
+        "vault": {
+          "service_active": true,
+          "responsive": true,
+          "process_mem_mb": 0,
+          "restart_count": 0,
+          "log_errors_1h": 0
+        },
+        "gateway": {
+          "responsive": true,
+          "http_status": 200,
+          "version": "0.300.0"
+        },
+        "wireguard": {
+          "interface_up": true,
+          "service_active": true,
+          "wg_ip": "10.0.0.1",
+          "peer_count": 2,
+          "config_exists": false,
+          "peers": [
+            {
+              "public_key": "",
+              "allowed_ips": "10.0.0.2/32",
+              "latest_handshake": 1,
+              "handshake_age_sec": 5,
+              "transfer_rx_bytes": 0,
+              "transfer_tx_bytes": 0
+            },
+            {
+              "public_key": "",
+              "allowed_ips": "10.0.0.3/32",
+              "latest_handshake": 1,
+              "handshake_age_sec": 5,
+              "transfer_rx_bytes": 0,
+              "transfer_tx_bytes": 0
+            }
+          ]
+        },
+        "dns": {
+          "coredns_active": true,
+          "caddy_active": true,
+          "port_53_bound": false,
+          "port_80_bound": false,
+          "port_443_bound": false,
+          "coredns_mem_mb": 0,
+          "coredns_restarts": 0,
+          "log_errors_5m": 0,
+          "corefile_exists": false,
+          "soa_resolves": true,
+          "ns_resolves": true,
+          "ns_record_count": 0,
+          "wildcard_resolves": false,
+          "base_a_resolves": false,
+          "base_tls_days_left": 80,
+          "wild_tls_days_left": 0
+        },
+        "network": {
+          "internet_reachable": true,
+          "default_route": true,
+          "wg_route_exists": true,
+          "tcp_established": 0,
+          "tcp_time_wait": 0,
+          "tcp_retrans_pct": 0,
+          "listening_ports": [
+            {
+              "port": 443,
+              "proto": "tcp",
+              "process": "caddy"
+            }
+          ],
+          "ufw_active": true,
+          "ufw_rules": [
+            "443/tcp ALLOW Anywhere"
+          ]
+        },
+        "processes": null,
+        "chain": {
+          "service_active": true,
+          "responsive": true,
+          "chain_id": "orama-devnet-e2e-ab12",
+          "node_version": "0.1.0",
+          "latest_height": 1200,
+          "latest_block_time": "2026-09-29T10:00:00Z",
+          "block_age_sec": 2,
+          "avg_block_time_sec": 0,
+          "catching_up": false,
+          "peers": 2,
+          "mempool_txs": 0,
+          "is_validator": true,
+          "voting_power": 10,
+          "total_voting_power": 0
+        }
+      },
+      "report_age_sec": 4
+    },
+    {
+      "host": "2.2.2.2",
+      "role": "nameserver-ns2",
+      "status": "ok",
+      "report": {
+        "timestamp": "2026-09-29T10:00:00Z",
+        "hostname": "node-2",
+        "public_ip": "2.2.2.2",
+        "wireguard_ip": "10.0.0.2",
+        "version": "0.300.0",
+        "collect_ms": 0,
+        "system": {
+          "uptime_seconds": 3600,
+          "uptime_since": "",
+          "cpu_count": 4,
+          "load_avg_1": 0,
+          "load_avg_5": 0,
+          "load_avg_15": 0,
+          "mem_total_mb": 8000,
+          "mem_used_mb": 2000,
+          "mem_free_mb": 0,
+          "mem_available_mb": 0,
+          "mem_use_pct": 0,
+          "swap_total_mb": 0,
+          "swap_used_mb": 0,
+          "disk_total_gb": "",
+          "disk_used_gb": "",
+          "disk_avail_gb": "",
+          "disk_use_pct": 30,
+          "inode_use_pct": 0,
+          "oom_kills": 0,
+          "kernel_version": "6.8.0",
+          "time_unix": 1790676000,
+          "cpu_steal_pct": 0,
+          "pressure_cpu_pct": 0,
+          "pressure_io_pct": 0,
+          "pressure_mem_pct": 0
+        },
+        "services": {
+          "services": [
+            {
+              "name": "orama-node",
+              "active_state": "active",
+              "sub_state": "",
+              "enabled": true,
+              "n_restarts": 1,
+              "active_since_sec": 0,
+              "memory_current_mb": 0,
+              "cpu_usage_nsec": 0,
+              "main_pid": 0,
+              "restart_loop_risk": false
+            }
+          ]
+        },
+        "rqlite": {
+          "responsive": true,
+          "ready": true,
+          "strong_read": false,
+          "raft_state": "Follower",
+          "leader_addr": "10.0.0.1:7001",
+          "leader_id": "10.0.0.1:7001",
+          "node_id": "10.0.0.2:7001",
+          "num_peers": 2,
+          "voter": true
+        },
+        "olric": {
+          "service_active": true,
+          "memberlist_up": true,
+          "process_mem_mb": 0,
+          "restart_count": 0,
+          "log_errors_1h": 0,
+          "log_suspects_1h": 0,
+          "log_flapping_1h": 0
+        },
+        "ipfs": {
+          "daemon_active": true,
+          "cluster_active": true,
+          "swarm_peer_count": 0,
+          "cluster_peer_count": 0,
+          "cluster_errors": 0,
+          "repo_size_bytes": 0,
+          "repo_max_bytes": 0,
+          "repo_use_pct": 0,
+          "has_swarm_key": false,
+          "bootstrap_empty": false
+        },
+        "vault": {
+          "service_active": true,
+          "responsive": true,
+          "process_mem_mb": 0,
+          "restart_count": 0,
+          "log_errors_1h": 0
+        },
+        "gateway": {
+          "responsive": true,
+          "http_status": 200,
+          "version": "0.300.0"
+        },
+        "wireguard": {
+          "interface_up": true,
+          "service_active": true,
+          "wg_ip": "10.0.0.2",
+          "peer_count": 2,
+          "config_exists": false,
+          "peers": [
+            {
+              "public_key": "",
+              "allowed_ips": "10.0.0.1/32",
+              "latest_handshake": 1,
+              "handshake_age_sec": 5,
+              "transfer_rx_bytes": 0,
+              "transfer_tx_bytes": 0
+            },
+            {
+              "public_key": "",
+              "allowed_ips": "10.0.0.3/32",
+              "latest_handshake": 1,
+              "handshake_age_sec": 5,
+              "transfer_rx_bytes": 0,
+              "transfer_tx_bytes": 0
+            }
+          ]
+        },
+        "dns": {
+          "coredns_active": true,
+          "caddy_active": true,
+          "port_53_bound": false,
+          "port_80_bound": false,
+          "port_443_bound": false,
+          "coredns_mem_mb": 0,
+          "coredns_restarts": 0,
+          "log_errors_5m": 0,
+          "corefile_exists": false,
+          "soa_resolves": true,
+          "ns_resolves": true,
+          "ns_record_count": 0,
+          "wildcard_resolves": false,
+          "base_a_resolves": false,
+          "base_tls_days_left": 80,
+          "wild_tls_days_left": 0
+        },
+        "network": {
+          "internet_reachable": true,
+          "default_route": true,
+          "wg_route_exists": true,
+          "tcp_established": 0,
+          "tcp_time_wait": 0,
+          "tcp_retrans_pct": 0,
+          "listening_ports": [
+            {
+              "port": 443,
+              "proto": "tcp",
+              "process": "caddy"
+            }
+          ],
+          "ufw_active": true,
+          "ufw_rules": [
+            "443/tcp ALLOW Anywhere"
+          ]
+        },
+        "processes": null,
+        "chain": {
+          "service_active": true,
+          "responsive": true,
+          "chain_id": "orama-devnet-e2e-ab12",
+          "node_version": "0.1.0",
+          "latest_height": 1200,
+          "latest_block_time": "2026-09-29T10:00:00Z",
+          "block_age_sec": 2,
+          "avg_block_time_sec": 0,
+          "catching_up": false,
+          "peers": 2,
+          "mempool_txs": 0,
+          "is_validator": true,
+          "voting_power": 10,
+          "total_voting_power": 0
+        }
+      },
+      "report_age_sec": 4
+    },
+    {
+      "host": "3.3.3.3",
+      "role": "nameserver-ns3",
+      "status": "ok",
+      "report": {
+        "timestamp": "2026-09-29T10:00:00Z",
+        "hostname": "node-3",
+        "public_ip": "3.3.3.3",
+        "wireguard_ip": "10.0.0.3",
+        "version": "0.300.0",
+        "collect_ms": 0,
+        "system": {
+          "uptime_seconds": 3600,
+          "uptime_since": "",
+          "cpu_count": 4,
+          "load_avg_1": 0,
+          "load_avg_5": 0,
+          "load_avg_15": 0,
+          "mem_total_mb": 8000,
+          "mem_used_mb": 2000,
+          "mem_free_mb": 0,
+          "mem_available_mb": 0,
+          "mem_use_pct": 0,
+          "swap_total_mb": 0,
+          "swap_used_mb": 0,
+          "disk_total_gb": "",
+          "disk_used_gb": "",
+          "disk_avail_gb": "",
+          "disk_use_pct": 30,
+          "inode_use_pct": 0,
+          "oom_kills": 0,
+          "kernel_version": "6.8.0",
+          "time_unix": 1790676000,
+          "cpu_steal_pct": 0,
+          "pressure_cpu_pct": 0,
+          "pressure_io_pct": 0,
+          "pressure_mem_pct": 0
+        },
+        "services": {
+          "services": [
+            {
+              "name": "orama-node",
+              "active_state": "active",
+              "sub_state": "",
+              "enabled": true,
+              "n_restarts": 1,
+              "active_since_sec": 0,
+              "memory_current_mb": 0,
+              "cpu_usage_nsec": 0,
+              "main_pid": 0,
+              "restart_loop_risk": false
+            }
+          ]
+        },
+        "rqlite": {
+          "responsive": true,
+          "ready": true,
+          "strong_read": false,
+          "raft_state": "Follower",
+          "leader_addr": "10.0.0.1:7001",
+          "leader_id": "10.0.0.1:7001",
+          "node_id": "10.0.0.3:7001",
+          "num_peers": 2,
+          "voter": true
+        },
+        "olric": {
+          "service_active": true,
+          "memberlist_up": true,
+          "process_mem_mb": 0,
+          "restart_count": 0,
+          "log_errors_1h": 0,
+          "log_suspects_1h": 0,
+          "log_flapping_1h": 0
+        },
+        "ipfs": {
+          "daemon_active": true,
+          "cluster_active": true,
+          "swarm_peer_count": 0,
+          "cluster_peer_count": 0,
+          "cluster_errors": 0,
+          "repo_size_bytes": 0,
+          "repo_max_bytes": 0,
+          "repo_use_pct": 0,
+          "has_swarm_key": false,
+          "bootstrap_empty": false
+        },
+        "vault": {
+          "service_active": true,
+          "responsive": true,
+          "process_mem_mb": 0,
+          "restart_count": 0,
+          "log_errors_1h": 0
+        },
+        "gateway": {
+          "responsive": true,
+          "http_status": 200,
+          "version": "0.300.0"
+        },
+        "wireguard": {
+          "interface_up": true,
+          "service_active": true,
+          "wg_ip": "10.0.0.3",
+          "peer_count": 2,
+          "config_exists": false,
+          "peers": [
+            {
+              "public_key": "",
+              "allowed_ips": "10.0.0.1/32",
+              "latest_handshake": 1,
+              "handshake_age_sec": 5,
+              "transfer_rx_bytes": 0,
+              "transfer_tx_bytes": 0
+            },
+            {
+              "public_key": "",
+              "allowed_ips": "10.0.0.2/32",
+              "latest_handshake": 1,
+              "handshake_age_sec": 5,
+              "transfer_rx_bytes": 0,
+              "transfer_tx_bytes": 0
+            }
+          ]
+        },
+        "dns": {
+          "coredns_active": true,
+          "caddy_active": true,
+          "port_53_bound": false,
+          "port_80_bound": false,
+          "port_443_bound": false,
+          "coredns_mem_mb": 0,
+          "coredns_restarts": 0,
+          "log_errors_5m": 0,
+          "corefile_exists": false,
+          "soa_resolves": true,
+          "ns_resolves": true,
+          "ns_record_count": 0,
+          "wildcard_resolves": false,
+          "base_a_resolves": false,
+          "base_tls_days_left": 80,
+          "wild_tls_days_left": 0
+        },
+        "network": {
+          "internet_reachable": true,
+          "default_route": true,
+          "wg_route_exists": true,
+          "tcp_established": 0,
+          "tcp_time_wait": 0,
+          "tcp_retrans_pct": 0,
+          "listening_ports": [
+            {
+              "port": 443,
+              "proto": "tcp",
+              "process": "caddy"
+            }
+          ],
+          "ufw_active": true,
+          "ufw_rules": [
+            "443/tcp ALLOW Anywhere"
+          ]
+        },
+        "processes": null,
+        "chain": {
+          "service_active": true,
+          "responsive": true,
+          "chain_id": "orama-devnet-e2e-ab12",
+          "node_version": "0.1.0",
+          "latest_height": 1200,
+          "latest_block_time": "2026-09-29T10:00:00Z",
+          "block_age_sec": 2,
+          "avg_block_time_sec": 0,
+          "catching_up": false,
+          "peers": 2,
+          "mempool_txs": 0,
+          "is_validator": true,
+          "voting_power": 10,
+          "total_voting_power": 0
+        }
+      },
+      "report_age_sec": 4
+    },
+    {
+      "host": "4.4.4.4",
+      "role": "node",
+      "status": "unreachable",
+      "error": "dial tcp 4.4.4.4:443: i/o timeout",
+      "report_age_sec": 0
+    }
+  ]
+}

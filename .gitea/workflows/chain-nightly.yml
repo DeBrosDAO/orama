@@ -1,0 +1,181 @@
+# Heavy checks of the chain that do not belong on every pull request (chain self-audit, SA8,
+# bugboard 3394): mutation testing of the money modules, nilaway, Miri and AddressSanitizer over
+# the Orchard FFI crate, and the long fuzz runs (SA2, bugboard 3388). The per-pull-request checks are in ci.yml; every command here is a target of
+# chain/ci.mk. A red nightly run is a finding to read, not noise.
+
+name: chain-nightly
+
+on:
+  schedule:
+    - cron: "30 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chain-nightly-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # A surviving mutant is a change to the money code that no test notices. One job per module so a
+  # slow one does not hide the others; MUTATION_EFFICACY in chain/ci.mk is the gate.
+  mutation:
+    name: Mutation testing (${{ matrix.package }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - x/emission/keeper
+          - x/emission/types
+          - x/fees/keeper
+          - x/power/keeper
+          - x/power/types
+          - x/storage/keeper
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: "1.27.2"
+          cache-dependency-path: chain/go.sum
+
+      - name: Mutate ${{ matrix.package }}
+        run: make -C chain mutation MUTATION_PACKAGES=${{ matrix.package }}
+
+      - name: Keep the report
+        if: always()
+        uses: actions/upload-artifact@ff15f0306b3f739f7b6fd43fb5d26cd321bd4de5 # v3.2.1
+        with:
+          name: mutation-${{ strategy.job-index }}
+          path: chain/build/mutation-*.json
+          if-no-files-found: ignore
+
+  # Nil-flow analysis. It reports a nil that a caller could pass, with no notion of the invariants
+  # that rule it out (a map key just inserted, a slice indexed inside its own range), so the report is
+  # read by a person; the job fails only if nilaway itself cannot run.
+  nilaway:
+    name: nilaway report
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: "1.27.2"
+          cache-dependency-path: chain/go.sum
+
+      - name: nilaway
+        run: make -C chain nilaway
+
+      - name: Keep the report
+        if: always()
+        uses: actions/upload-artifact@ff15f0306b3f739f7b6fd43fb5d26cd321bd4de5 # v3.2.1
+        with:
+          name: nilaway
+          path: chain/build/nilaway.txt
+          if-no-files-found: ignore
+
+  # The Go fuzz targets (SA2, bugboard 3388) for FUZZ_TIME_LONG each, one job per module. The pull
+  # request job (ci.yml, chain-fuzz) gives each a few seconds; this one gives the budget that finds
+  # what a few seconds do not. A failing input is uploaded and stays in the package's testdata/fuzz/
+  # of the run, so commit it with the fix: a plain `go test` then replays it for good.
+  fuzz-go:
+    name: Fuzz (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [chain, core]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: "1.27.2"
+          cache-dependency-path: |
+            chain/go.sum
+            core/go.sum
+
+      - name: Rust toolchain
+        run: |
+          toolchain="$(make -s -C chain print-RUST_TOOLCHAIN)"
+          rustup toolchain install "$toolchain" --profile minimal
+          rustup default "$toolchain"
+
+      - name: Fuzz ${{ matrix.module }}
+        run: make -C chain fuzz-long-${{ matrix.module }}
+
+      - name: Keep the inputs that failed
+        if: failure()
+        uses: actions/upload-artifact@ff15f0306b3f739f7b6fd43fb5d26cd321bd4de5 # v3.2.1
+        with:
+          name: fuzz-crashers-${{ matrix.module }}
+          path: chain/build/fuzz-crashers
+          if-no-files-found: ignore
+
+  # The four cargo-fuzz targets over the Orchard verifier crates: the C ABI verify entry, the tree
+  # append entry, the verifier process's stdin frame parser, and the framing check of the
+  # out-of-process verifier against the library's. Dated nightly Rust (RUST_NIGHTLY in chain/ci.mk).
+  fuzz-rust:
+    name: Fuzz (Orchard crates, cargo-fuzz)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: "1.27.2"
+          cache-dependency-path: chain/go.sum
+
+      - name: cargo-fuzz and the nightly toolchain
+        run: make -C chain rust-fuzz-tools
+
+      - name: cargo fuzz
+        run: make -C chain rust-fuzz
+
+      - name: Keep the inputs that crashed
+        if: failure()
+        uses: actions/upload-artifact@ff15f0306b3f739f7b6fd43fb5d26cd321bd4de5 # v3.2.1
+        with:
+          name: cargo-fuzz-artifacts
+          path: |
+            chain/x/shielded/orchardffi/fuzz/artifacts
+            chain/x/shielded/orchardverifier-bin/fuzz/artifacts
+          if-no-files-found: ignore
+
+  # Miri (undefined behaviour in the unsafe FFI surface) and AddressSanitizer (the whole crate test
+  # suite, real proof vectors included) over the Rust Orchard verifier library.
+  rust-sanitizers:
+    name: Orchard FFI under Miri and AddressSanitizer
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: "1.27.2"
+          cache-dependency-path: chain/go.sum
+
+      - name: Nightly Rust with Miri and rust-src
+        run: |
+          nightly="$(make -s -C chain print-RUST_NIGHTLY)"
+          rustup toolchain install "$nightly" --profile minimal --component miri,rust-src
+          cargo "+$nightly" miri setup
+
+      - name: Miri
+        run: make -C chain rust-miri
+
+      - name: AddressSanitizer
+        run: make -C chain rust-asan

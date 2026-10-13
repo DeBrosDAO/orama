@@ -1,0 +1,256 @@
+# Reading the chain
+
+There are four ways to read the chain: the `orama chain` command, the gateway's read-only proxy, the TypeScript SDK, and `oramad` itself on a node. Writing is separate: transactions are built by `orama global`, `orama storage` and `orama cluster`, and signed by RootWallet. See [Wallet clients](#wallet-clients-and-transactions).
+
+## The gateway proxy: `/v1/chain/`
+
+Every gateway can serve a read-only proxy to a chain node. It is an open route (no credential). The reference for developers who call it from outside, with every bound, the cache headers, the rate limits, CORS and the error codes, is [Public chain read API](/docs/blockchain/chain-read-api). Upstream addresses come from `ORAMA_CHAIN_RPC_URL`, `ORAMA_CHAIN_REST_URL` and `ORAMA_CHAIN_INDEX_URL`; they default to the loopback of the node, or to the global network namespace address `198.18.0.2` on a co-located node.
+
+| Route | What it returns |
+|---|---|
+| `status` | CometBFT status: network id, latest block, sync state |
+| `block`, `blocks` | A block, or up to 20 |
+| `tx` | A transaction (404 with `Retry-After: 2` until it is in a block and indexed) |
+| `validators` | The CometBFT validator set |
+| `supply/norama` | Total supply |
+| `staking/pool` | Staking pool |
+| `staking/validators` | The staking validator list (REST, fixed page size, no query) |
+| `head/stream` | The chain's head as server-sent events (see [Following the head](#following-the-head)) |
+| `index/status`, `index/stats`, `index/blocks/{h}`, `index/txs/{hash}` | The chain indexer |
+| `index/home` | Everything the explorer's home page shows in one read: the indexer's position and lag, the newest blocks and transactions, 48 hourly counts, and the epoch in progress, the supply and the base fee at the chain's tip. A snapshot is reused for two seconds while the index stays at the same block (then it is built again), and readers who arrive during a build wait for it, so a crowd costs one build. |
+| `index/blocks`, `index/txs` | A page of blocks (without their transaction hashes) or of transactions, newest first. `index/txs` and the account list below also take `filter`: `all`, `failed`, `transfers`, `staking` or `storage`. |
+| `index/accounts/{addr}`, `index/accounts/{addr}/txs` | An address's summary and its transactions (`page`, `limit`, `filter`) |
+| `index/accounts/{addr}/rewards`, `index/epochs/{n}/rewards`, `index/validators/{operator}/rewards` | What x/power credited an account, paid each validator in a closed epoch, and paid one validator epoch by epoch |
+| `index/cnft/assets/{id}`, `index/cnft/owners/{addr}/assets` | Compressed NFT ownership |
+| `index/epochs`, `index/epochs/{n}`, `index/epochs/{n}/validators` | Closed emission epochs (minted, burned, fees, rewards credited) and each epoch's validators |
+| `index/supply` | The supply breakdown (total, minted, burned, bonded, unbonding, earnings pools, storage escrow, circulating), one point per epoch |
+| `index/validators`, `index/validators/{operator}`, `index/validators/{operator}/epochs`, `…/slashes`, `…/jails` | Validators with their voting power, uptime, slashes and jail periods |
+| `index/stats/hourly`, `index/stats/daily`, `index/stats/weekly` | Transaction statistics beyond the 48 hourly buckets of `index/stats` |
+| `query/{package.Service}/{Method}` | Any allowed module query, and the wallet queries below |
+| `simulate`, `broadcast` (POST) | Price and submit a signed transaction for a wallet with no node of its own |
+
+Limits that protect the node differ by route. The other routes copy a healthy upstream body unchanged up to 8 MiB (the largest is one block), and `blocks` spans at most 20 blocks (a `max_height` at most 19 above `min_height`). The `query/…` route adds its own: a `data` or `json` parameter of at most 4 KiB, `height` only within the last 100 blocks, at most 16 queries at once (the rest get 503 with `Retry-After`), responses up to 4 MiB, and a separate bucket of 120 requests per minute with a burst of 30 per address (IPv6 per /64). The node's `query-gas-limit` (2,000,000) bounds the cost of a single query. `simulate` and `broadcast` take a signed `TxRaw` of at most 1 MiB and have their own in-flight and rate limits.
+
+**Caching.** A successful `index/…` answer says how long it may be kept, and the gateway passes it on (only these two forms, up to an hour; anything else is `no-store`). What depends on the head is `Cache-Control: public, max-age=2`, about a block. A block, a transaction by hash and a closed epoch's row, validators and rewards cannot change and are `public, max-age=600`: ten minutes, not longer, because a network that starts again keeps its heights and epoch numbers. A refusal, a miss and every other chain route are `no-store`. The explorer lets the browser's own cache follow these headers. `index/…` reads have a bucket of their own per client network (1,200 a minute, burst 240; well above what browsing makes) beside the general one, and at most 32 are in flight on a gateway (the rest get `503` with `Retry-After: 2`), because a page deep in a list makes the indexer skip the rows before it. `head/stream` has a bucket of 12 opens a minute (burst 6) and each client network may hold four open at once.
+
+`query/…` serves an allow-list of query methods. Every module's `Invariants` query, the houses `Tiers` query and the shielded `Pools` query are withheld.
+
+### List queries
+
+Three queries list what a module holds, so a client does not have to know the ids: `orama.nodes.v1.Query/Nodes` (every registered node, in node id order), `orama.storage.v1.Query/Deals` (deals in id order; `"reverse":true` lists the newest first) and `orama.relay.v1.Query/Relays` (every relay, in RSA fingerprint order). Two more x/relay lists are asked about one thing and page the same way: `orama.relay.v1.Query/OperatorRelays` (`{"operator":"orama1..."}`: that operator's relays, each with its last payout) and `orama.relay.v1.Query/RelayPayouts` (`{"epoch":"12"}`: what one settled epoch paid each relay). Each takes `json={"pagination":{"limit":100,"key":"<next_key of the page before>"}}`. A page holds at most 100 entries: the gateway answers 400 for a `limit` above 100, and the chain clamps it too. The chain refuses `pagination.offset` (it would skip keys one by one) and counts no total; the answer's `pagination.next_key` is empty on the last page. A node whose chain binary predates these queries cannot answer them.
+
+### Wallet queries
+
+A wallet with no node of its own reads one address through the same `query/…` route. It serves 15 cosmos-sdk and wasmd methods and refuses the rest (so bank's whole-chain supply and staking's validator list are not reachable this way):
+
+| Service | Methods |
+|---|---|
+| `cosmos.bank.v1beta1.Query` | `Balance`, `AllBalances`, `SpendableBalances` |
+| `cosmos.auth.v1beta1.Query` | `Account` (a typed account: `@type` names it, for example `/cosmos.auth.v1beta1.BaseAccount`), `AccountInfo` |
+| `cosmos.staking.v1beta1.Query` | `Delegation`, `DelegatorDelegations`, `UnbondingDelegation`, `DelegatorUnbondingDelegations`, `Validator`, `Pool`, `Params` |
+| `cosmos.distribution.v1beta1.Query` | `DelegationRewards`, `DelegationTotalRewards` |
+| `cosmwasm.wasm.v1.Query` | `ContractInfo` (an address that is not a contract is a 404) |
+
+Numbers that need 64 bits are JSON strings: an account's `account_number` and `sequence` are read as `uint64`, never as a JavaScript `number`. An account number is not a counter: the chain derives it from a hash when the account is created, with the top bit set, so it is always between 2^63 and 2^64-1. Keep it as a string or a BigInt, and sign with the exact value.
+
+The list methods need `pagination.limit` (1 to 100) on every page, the first included. The explorer's wallet page uses `AllBalances`, `DelegatorDelegations` and `DelegatorUnbondingDelegations` here; the duplicate REST routes for them are gone, and only the staking validator list stays REST.
+
+### Explorer queries
+
+The explorer's token and contract pages read eight more cosmos-sdk and wasmd methods through the same route. A paginated one takes `pagination.limit` up to 100 and pages by `pagination.key`, the `next_key` of the answer.
+
+| Service | Methods |
+|---|---|
+| `cosmos.bank.v1beta1.Query` | `TotalSupply` (every denom with its supply, in denom order), `DenomOwners` (the accounts that hold one denom) |
+| `cosmwasm.wasm.v1.Query` | `Codes`, `CodeInfo`, `ContractsByCode`, `ContractsByCreator`, `ContractHistory`, `AllContractState` |
+
+`SmartContractState` is not served: it runs the contract, so its cost is the contract's and wasmd does not mark it as safe for a public query. `Code` is not served either, since it answers the whole wasm binary. wasmd refuses `offset` and `count_total`, so its lists page by key only. A code id that is not stored (`CodeInfo`) and an address that is no contract (`AllContractState`) are a 404, as `ContractInfo` is.
+
+### Simulate and broadcast
+
+Both routes take `Content-Type: application/json` and `{"tx_bytes":"<base64 TxRaw>"}`.
+
+**Simulate** runs the transaction without keeping anything and answers 200 `{"gas_wanted":"…","gas_used":"…","fee":{"denom":"norama","amount":"…"},"base_fee":"…"}`. `gas_used` is what it consumed. `gas_wanted` is the gas limit the transaction declares (0 if it declares none), so a wallet can see a limit that is below `gas_used`. The chain simulates with an unlimited gas meter, so the figure it reports itself is always 18446744073709551615 (2^64-1); the gateway does not pass that on. Both gas figures, like every 64-bit integer the proxy answers, are decimal strings: read them into a `BigInt`, never a JavaScript `number`.
+
+**Broadcast** submits the transaction with `broadcast_tx_sync` and answers once the node's mempool has checked it, not when it is in a block. The field to keep is `tx_hash` (upper-case hex). Poll `tx?hash=` until the transaction is in a block (404 with `Retry-After` until then).
+
+| Case | Status | Body |
+|---|---|---|
+| Simulate ran | 200 | `{gas_wanted, gas_used, fee, base_fee}` |
+| Simulate: the chain refused | 422 | `{"code":6,"codespace":"sdk","log":"…"}` (the query's wrapper code; the reason is in `log`) |
+| Broadcast: accepted by the mempool | 200 | `{"code":0,"codespace":"","log":"","tx_hash":"…"}` |
+| Broadcast: `CheckTx` refused | 422 | `{"code":N,"codespace":"…","log":"…","tx_hash":"…"}` with the transaction's own code (13 insufficient fee, 32 sequence mismatch) |
+| Broadcast: the mempool already has these bytes | 422 | the same shape, code 19, codespace `sdk`, log `tx already in mempool cache`, and the hash |
+| Broadcast: the mempool is full | 503 | text, `Retry-After: 2` |
+| The chain is unreachable or does not answer within 10 seconds | 502 | text `chain unreachable` |
+| Too many in flight | 503 | text, `Retry-After: 2` |
+| Rate limited | 429 | the `RATE_LIMITED` envelope, `Retry-After: 10` |
+
+A refusal is a 422 with a JSON `code`, `codespace` and `log` on both routes, and only a refusal is shaped that way; every other failure is a plain-text body. The `log` is sanitised. An accepted broadcast is in one node's mempool, not in a block, so it can still be dropped. A 502 after a timeout does not say the transaction was not taken: send the same bytes again, and if the mempool has them the answer is the code 19 refusal with the hash.
+
+Reads are live. The proxy keeps no copy of a read, and every answer is `Cache-Control: no-store` except the successful `index/…` ones described under Caching above; a `status` comes from the node of the gateway that took the request, and its `sync_info.latest_block_time` and `catching_up` say how fresh that node is.
+
+## `orama chain`
+
+```bash
+orama chain status
+orama chain validator
+orama chain balance orama1…  --node http://127.0.0.1:31003
+orama chain earnings orama1…
+orama chain node <node-id>
+orama chain deal <deal-id>
+orama chain query orama.nodes.v1.Query/Node '{"node_id":"node-1"}'
+orama chain query --list
+```
+
+Three read paths exist and each command uses one: `--gateway` (default: the active environment's gateway), `--node` (a node's Cosmos REST API, for accounts, bank balances and staking validators) and `--rpc` (a node's CometBFT RPC, which also reaches the Orama modules, which answer gRPC only, through `abci_query`). `orama chain balance` still reads through `--node`'s REST API; the gateway's wallet queries serve the same balance to a wallet that has no node.
+
+`orama chain faucet <recipient>` funds an account on a test network. It signs on a node over SSH with that node's test operator key and refuses any chain id that is not exactly `orama-[<name>-]stagenet-<id>`, `orama-[<name>-]devnet-<id>` or `orama-[<name>-]localnet-<id>`. Full flags: [`orama chain`](/docs/developer/cli/chain).
+
+Someone with no node of the network is funded through a gateway instead: `POST /v1/chain/faucet` on a gateway that was given a faucet key.
+
+```bash
+curl -sS -X POST https://<gateway>/v1/chain/faucet \
+  -H 'Content-Type: application/json' \
+  -d '{"recipient":"orama1…","amount":"100000000000"}'
+```
+
+The amount is norama, a decimal string, and optional (100 ORAMA). The answer is `{"tx_hash","amount","height"}` once the drip is in a block. A refusal is `{"error","message"}` with one of these errors: `bad_recipient` (400), `bad_amount` (400, over the network's maximum drip), `cooldown` (429, one drip per recipient per day by default), `allowance_spent` (429, 20,000 ORAMA a day per client network and 200,000 ORAMA a day per gateway; a client network is the address the node's reverse proxy saw the caller connect from, which the gateway believes only when the request carries the secret that proxy proves itself with, never a name the caller writes in `X-Forwarded-For`; a process on the node is one client however it names itself), `epoch_cap` (503), `faucet_disabled` (403), `busy` and `unavailable` (503), `pending` (504, being made or sent and not yet in a block: look at the balance of the recipient). A gateway with no faucet key answers 404. `orama setup` uses this route on a network whose manifest says it has a faucet. Operators who run it: [Run a faucet](/docs/operator/global-nodes#run-a-faucet).
+
+## The TypeScript SDK
+
+`@orama-network/orama/chain` builds `SIGN_MODE_DIRECT` transactions and reads module state. See [SDK reference](/docs/developer/sdk-reference#the-chain-module) and the relay queries (`relayParams`, `relayReporters`, `relay`, `operatorRelays`, `relayPayouts`, `relayEpochResult`).
+
+## `oramad` on a node
+
+```bash
+oramad query emission current-epoch     --node tcp://127.0.0.1:31001
+oramad query emission cumulative-minted --node tcp://127.0.0.1:31001
+oramad query emission invariants        --node tcp://127.0.0.1:31001
+oramad query power lambda               --node tcp://127.0.0.1:31001
+oramad query power bootstrap-committee  --node tcp://127.0.0.1:31001
+oramad query fees base-fee              --node tcp://127.0.0.1:31001
+oramad query fees earnings <address>    --node tcp://127.0.0.1:31001
+```
+
+Every module has an `invariants` query. They return false if the module's accounting is off (supply identity, deposits, escrow). Operators run them as health checks; the stagenet script runs them on every node. The chain also runs them itself (the supply identity at the end of every block, the module ledgers once per `min_blocks_per_epoch` blocks) and halts at the first block that breaks one, so a false answer here means the chain has already stopped or the query ran on a node that is behind.
+
+## The chain indexer
+
+`orama-global indexer` (loopback port 31015) indexes blocks, transactions, per-address transactions and cNFT assets into a Pebble database. It feeds the `index/…` routes.
+
+A market settle and a cNFT compress consume a record the message does not carry (the listing and the winning bid, the decompressed asset), so the chain reports it in a `market_settle` and a `cnft_compress` event, and the indexer takes it from the event of the same transaction. A listing created, or an asset decompressed, before the index began is therefore indexed when it is settled or compressed, even on a node that pruned the state it was created in. Settles and compresses from before the chain emitted those events carry none: the indexer reads the state before the block for them, as it did before, and stops with `state_pruned` if the node no longer has it. The indexer records the first height at which it saw either event, and from then on a settle or compress without its event stops the indexer instead of being read from state.
+
+It also keeps aggregates for the explorer, computed once as each block is indexed and never per request:
+
+- One row per closed emission epoch: its first and last block and time, what was minted (validator and delegator share, storage and relay services, development, faucet) and burned during it, the fees collected, burned and distributed, and what the closing block credited to earnings accounts. Each figure is the chain's own, taken from its running totals at the epoch's closing height or from the closing block's events.
+- The supply breakdown at each epoch's end: total supply, minted and burned to date, bonded, unbonding, the earnings pools, the storage escrow, what other protocol accounts hold, and the circulating remainder.
+- Each validator's voting power, signed and missed blocks, slashes and jail periods per epoch.
+- Transaction statistics by hour, day and week.
+- What each epoch paid each validator and delegator, from the closing block's `power_validator_reward` and `power_delegator_reward` events: per validator the amount, the commission, the operator's share (commission included) and the delegators' share, and per account what it was credited. The index checks the events against the bank transfers x/power made in the same block and stops the block rather than show a payout that does not add up. An epoch that closed before the chain emitted the events is `"rewards_recorded": false`: its reward routes say so and list nothing, and its totals are never shown as zero.
+
+The indexer closes an epoch at the block that carries x/emission's `emission_epoch_closed` event, not at a block it worked out from the closing thresholds, so a change to those params during a stretch of blocks whose state the node had pruned does not move an epoch's start or end. Epochs that closed under a chain binary without the event are placed by the thresholds the epoch began under.
+
+Every list is paged like the others (`page` up to 1000, `limit` up to 100, newest first). The five lists that grow with the chain or that one account can make long, `index/txs`, `index/accounts/{addr}/txs`, `index/blocks`, `index/accounts/{addr}/rewards` and `index/cnft/owners/{addr}/assets`, are paged by position instead: a full page carries `next_cursor`, and `cursor=<next_cursor>` on the same route returns the rows after it (older for the first four, the next asset ids for an owner's assets), so a page deep in the list costs what the first does and a row that arrives meanwhile moves nothing. A cursor is URL-safe base64 (`A-Z a-z 0-9 - _`) and is only ever one the indexer issued: 16 characters on the transaction and block lists (a block height and a position in the block), 59 on an owner's assets (the asset's id, tree and leaf) and 39 to 580 on an account's rewards (an epoch and a validator operator address), and a list refuses another list's cursor. `page` on those five lists stops at 10 and cannot be combined with `cursor`. The explorer follows cursors for a wallet's activity and rewards, the recent blocks, an owner's NFTs and the shielded pool's transactions. The first epoch an index tracks is marked `partial` when the index began inside it. The chain does not expose the split of service mints between storage and relay, so the index does not show it.
+
+The lists are read off indexes the follower writes as it goes, so a page costs the page: the transaction lists have one index per filter (a transaction is in `failed` when the chain refused it and in `transfers`, `staking` or `storage` for each kind of message it carries; the message kinds are the explorer's categories), the block list is addressed by height, and `index/home` is reused for two seconds while the index stays at one block, and shared by the readers who arrive during a build. The index has layout version 5, which added the shielded actions and subtree roots a wallet scans (version 4 added the rewards); an index of version 4 or earlier is moved aside by the upgrade and a new one is built ([upgrade notes](/docs/operator/upgrade-notes#the-chain-indexer-starts-a-new-index-when-its-layout-changed-global-nodes)).
+
+### Epochs the index could not read
+
+The chain's nodes keep only their last 100 states (they prune every 10 blocks), and the aggregates are read from state. An indexer that starts on a chain older than that, or is stopped or behind while an epoch closes, finds the state gone. It never fills in a number it could not read:
+
+- **An epoch row with `"unavailable": true`** closed while the node no longer kept its state. It has its first and last block and time, an `unavailable_reason`, and none of the figures (`minted_total`, `burned` and the rest are absent, not zero). It has no supply point, and `/epochs/{n}/validators` is an empty list for it.
+- **The epoch after one is unavailable too, when it is the next close the node still has state for.** Its change in the chain's totals would also contain the unavailable epoch before it, so the index does not show it; its supply point and its validators are exact, because they are the state of that height. The epochs after it are exact again.
+- **`/validators` answers the newest epoch that has validators**, and each row names its `epoch`, so an unavailable epoch at the tip does not empty the page.
+- **`/status` has `aggregates_from`**, the first block the aggregates cover. It is the index's first block unless the node had pruned the state of the blocks before it, in which case the earlier blocks, transactions and accounts are indexed and the epochs that closed before `aggregates_from` are not in the list.
+- **`/status` has `stuck` while the indexer cannot go on**: the block it cannot index (`height`), whether it is a state the node pruned (`state_pruned`), when it began and how many passes failed. It is absent when the indexer works. Neither `/status` nor `index/home` carries the error of the failing pass, which can name the node's addresses: they say that the indexer is stuck and where, and the explorer shows a reason only for a pruned state, in its own words. The error is the operator's: on the node, `curl http://127.0.0.1:31015/index/v1/operator/status` answers the same status with `reason`, the gateway proxies no `operator/` route, and `orama status` shows it.
+
+To have every epoch with figures, run the indexer from the start of the chain against a node that keeps all state (a node whose `pruning` is `nothing`), or leave the indexer running: it keeps up with the chain and loses nothing.
+
+## The explorer
+
+A short guide for readers is [Using the explorer](/docs/blockchain/using-the-explorer); what follows is how it works. The routes it reads are the [Public chain read API](/docs/blockchain/chain-read-api).
+
+The site has an explorer page at `/explorer` (Home, Block, Transaction, Wallet, Validators, Validator, Epochs, Epoch, Emission, Supply, Rewards, Nodes, Node, Storage and Tor views, and under the **Browse** menu Tokens, NFTs, Contracts, Market, Governance and the Shielded pool, each with its detail pages). It reads the chain only through the gateway routes above, and has no demo data: when the proxy or the indexer is down a page shows an error box and nothing else. The transaction, block, wallet and epoch pages need the chain indexer on the node the gateway reads. A node that runs none answers the index routes `503` with "this node runs no chain indexer", and the explorer then says so in plain words instead of showing an error box; the current epoch and the emission schedule come from chain queries and still load.
+
+The page is static and `orama.network` has no chain behind it, so your browser calls a network's own gateway directly: `https://stagenet.orama.network/v1/chain/...`. `orama.network` does not proxy `/v1/`; a request for it there answers `404` with a JSON body that says where the API is. Each gateway answers the explorer's origin, exactly `https://orama.network`, on `GET` (and the preflight for it) under `/v1/chain/` and nowhere else, so a gateway that has not been upgraded to a version with that rule shows the explorer "The chain could not be reached." with the gateway's name and the usual causes (it is down, its TLS certificate is not trusted by the browser, or it does not allow reads from this site). So does a gateway older than the change that applies the CORS rule before the rate limiter, when it rate-limits the reader: that refusal carried no CORS headers and the browser hid it. A current gateway answers the explorer's origin on a 429 too, and the explorer says "HTTP 429" and to wait. A script cannot tell these apart, so the message lists them and tells the reader to open the gateway's `/v1/chain/status` in a tab. The reads are the same open routes and limits as any other client's, counted per reader's address (an IPv6 reader per /64) and never per website. A page served from the network's own base domain, or from `localhost` while you develop, is allowed by the gateway's general rule.
+
+### Choosing a network
+
+A strip under the header has a **Network** selector and always shows the **chain id** of the network being read. The selector lists every network of the registry whose chain has been created (the manifests the site publishes at `https://orama.network/networks/<name>/manifest.json`; a network that is only announced has no chain and is not listed), and **Custom gateway…**.
+
+- **URLs.** The default network (stagenet) keeps the short URLs, `/explorer/tx/<hash>`, so every link made before the selector still opens. Any other network is named first: `/explorer/<network>/tx/<hash>`. A custom gateway is `/explorer/custom/...?gateway=https%3A%2F%2Fgateway.example.org`; the gateway rides on every link inside it. Choosing another network opens its front page, because a transaction, wallet or block of one chain does not exist on another.
+- **Where the gateway comes from.** A manifest has no gateway field; the explorer derives it from the seeds. A created network's seeds are the nameservers `ns1.<domain>` … `nsN.<domain>` of its cluster, and the gateway of that cluster answers at `https://<domain>`: stagenet's seeds give `https://stagenet.orama.network`. Seeds of another shape name gateways themselves (the CLI asks the faucet at `https://<seed>`), so the first seed is used.
+- **Custom gateway.** The address is checked before anything is requested from it: `https`, or `http` for `localhost` and `127.0.0.1`, an origin with no path, query or credentials. A link that names a custom gateway first asks you whether to read from it, because that would make your browser call a server Orama's registry does not vouch for; typing the address into the selector is the agreement. The explorer sends no cookies or credentials to any gateway, and marks a custom network "Not in the Orama registry". The gateway still has to allow the explorer's origin, which only Orama gateways do.
+- **Reset.** A reset gives a network a new chain id and starts it at block 1 (`networks/README.md`). The explorer compares three chain ids: the one the registry lists, the one the gateway reports, and the one in the page's URL (`?chain=`, which the explorer adds to the address bar once the gateway has answered, so a copied link says which chain it was made on). When the registry and the gateway disagree, a banner says "This network has been reset" and names both; what is shown is the chain the gateway reports. When a link was made on a different chain than the one the gateway serves, the page it names is not shown at all: a "This network has been reset" page names both chain ids and links to the current chain.
+
+### Epochs and emission in the explorer
+
+`/explorer/epochs` lists the closed emission epochs, newest first, twenty to a page (`?page=2` in the address, so a page can be shared), with a box to go to an epoch by number. `/explorer/epoch/<n>` is one epoch from the index: when it started and closed (block and time), what was minted, split into validators and delegators, storage and relay **combined** (the chain keeps one running total for both), development and, on a test network, the faucet, each beside the ceiling the schedule allowed for that category at the 60/25/10/5 genesis split; what x/power credited to earnings accounts and bonded into committee members' stakes; the fees collected, burned and distributed; the burn; and the validators of that epoch with power, uptime, slashes and status. An epoch the index has no row for says why: it is the one in progress, it has not started, or it closed before the index began. The first epoch an index tracks is marked **partial**, and its minted, burned and fee figures cover only the blocks the index saw.
+
+An epoch the index could not read (see [Epochs the index could not read](#epochs-the-index-could-not-read)) is shown as **not available** everywhere it appears, with the reason the indexer gives. In the Epochs list its minted, burned and fee cells say "not available"; its page shows when it started and closed, the reason, the payout split if the indexer kept one, and its validators if it has any, and no minted, fee or burn card. Rewards lists it with a "not available" mark. It is never counted as zero: the minted-against-ceiling comparison leaves it out and says how many it left out, and the charts (burn per epoch, supply, minted against the ceiling) leave a gap where it would be. A row the gateway sends that is both unavailable and carries a figure, or that is not unavailable and lacks one, is a read error and not shown.
+
+`/explorer/emission` shows the epoch in progress with a countdown, the halving countdown, the split of this epoch's ceiling, what was actually minted against the ceiling over the newest thirty closed epochs (partial epochs are left out of the comparison) and since the chain began, and the whole schedule. The countdown reads x/emission's current epoch and its parameters: an epoch closes when both the minimum time and the minimum block count have passed, so the page shows both and the slower one sets the progress bar. The halving date is "no sooner than", because an epoch also waits for its block count and a halt does not make up missed epochs. The schedule is the chain's own, fixed in code: five brackets of 730 epochs whose ceiling is 14,848, 7,424, 3,712, 1,856 and 928 ORAMA per epoch, then a flat 274 ORAMA per epoch from epoch 3,651 with no end. The step from 928 to 274 is not a halving, and the page does not call it one. The development share is minted only when a governance-approved spend claims it, and storage and relay only when a storage payment or relay report claims them, so the comparison with the ceiling is "minted so far", not "owed".
+
+`/explorer/economics` (Supply in the menu) reads the supply breakdown the index keeps for each closed epoch. It shows, as of the newest closed epoch, the total supply, the circulating supply, what has been minted since the chain began (with the genesis supply it started from) and burned, and a table and bar of where the supply sits: circulating, staked (bonded to validators), unbonding, the earnings pools, the storage escrow and the other protocol module accounts, which add up to the total. Under it are four trends over the newest 100 closed epochs (total supply, circulating, staked, cumulative burn) and the burn of each epoch as bars; every chart has its numbers in a table under it. The current base fee comes from a chain query. **There is no base-fee history**: the gateway's chain query serves a value only for the latest blocks and the index stores no per-block fee, so the page shows the value now and says so rather than drawing a series; the per-epoch burn is the record the index does keep. All amounts are exact `norama` integers shown as ORAMA, truncated and never rounded.
+
+### Rewards in the explorer
+
+`/explorer/rewards` lists the closed epochs with what each paid validators and delegators, split into the validators' commission, the operators' own cut (what an operator earned as a delegator of its own validator, and the flooring remainder) and the delegators' share, each as a share of the total, and the part staked straight into founding-committee validators. Open an epoch to see what each validator was paid in it. A validator's page lists its newest closed epochs the same way, with a total over the recorded ones, and a wallet's page shows its **earnings** and the **staking rewards** credited to it.
+
+- **Not recorded is not zero.** An epoch that closed before the chain reported who was paid is marked "not recorded" wherever its figure would be, and adds nothing to a total. An epoch that paid nothing is shown as zeros. A wallet's rewards say from which epoch they are recorded.
+- **Earnings.** The earnings balance is read live from x/fees (`orama.fees.v1.Query/Earnings`). Every protocol payout (validator rewards, storage and relay payments, fees) is credited to the account's earnings first, and the account moves it to its public balance with a withdraw transaction; it is not in the balance the wallet page shows above it.
+- **Commission and the delegators' share.** The operator takes its commission rate off the top, and the rest is shared by stake, the operator's own stake included, so the operators' own cut is not commission. The numbers add up: the operator's share plus the delegators' share is what the validator was paid.
+- **Delegators.** An account that delegates is credited per epoch and validator and sees each credit on its page. The number of delegators a validator has is still not shown.
+
+### Following the head
+
+The explorer does not ask for the head: it listens. `GET /v1/chain/head/stream` is server-sent events. The gateway reads the node's status once a second for all its readers, and tells each open page `event: head` with `{"height","time","chain_id"}` when the height moves or the chain id changes (a network that started again has a lower height), and `event: unavailable` once when the node cannot be read. A stream opens with the current head. It needs no indexer, so a node that runs none still shows a moving block height. A stream ends after 100 seconds and the browser's `EventSource` reconnects by itself; one gateway holds at most 1,024 (more get `503` with `Retry-After`), and one client network may open 12 a minute and hold four at once. If the gateway refuses a stream, the browser does not retry it by itself; the explorer opens it again after a wait that doubles from 5 to 60 seconds, and says so meanwhile. A browser with no `EventSource` is told so; the explorer does not fall back to asking for the status on a timer. The home page says how far the indexed history is behind the chain (the index's cursor against the tip), and says so loudly when the indexer is stuck.
+### Tokens, NFTs, contracts, the market and governance
+
+The **Browse** menu opens six pages that read the chain's own modules. None has demo data, each has a loading, an error and an empty state, and where the chain keeps no list the page says so instead of showing less than the chain has. Every page of this group is per network like the rest (`/explorer/<network>/tokens`).
+
+- **Tokens** (`/explorer/tokens`, `/explorer/token/<creator>/<name>`). The list is the bank's denoms (`TotalSupply`) of the form `factory/<creator>/<name>`, in denom order, 20 a page with "Show more". A token's page is x/token's record (name, symbol, description, the capabilities it still holds, whether it may enter the shielded pool, its supply, the metadata deposit), its holders from `DenomOwners` (in address order, because the bank cannot rank them; a balance inside the shielded pool belongs to no address and is not counted), and a box that asks `Frozen` about an account you name, because the chain lists no frozen accounts. Supplies are whole units of the token: a token record has no decimals.
+- **NFTs** (`/explorer/nfts`, `/explorer/nfts/<owner>`, `/explorer/nft/<asset id>`, `/explorer/collection/<n>`). Collections are numbered from 1 and are never deleted, and the chain has no list of them, so the page finds the newest by asking whether collection 1, 2, 4, 8 … exists and then halving the gap, and shows ten at a time, newest first (`?from=<n>` for older ones). An owner's NFTs and an asset come from the chain indexer. An asset id can have several records, because the chain does not make ids unique across mints; the asset page shows each, with its tree (depth, capacity, leaves written) and the content ids recorded for the tree (`Tree`, `Snapshots`). The chain stores only the content id of an NFT's metadata: the explorer shows it and does not fetch the document. The chain does not list a collection's trees or assets, so a collection's page says so.
+- **Contracts** (`/explorer/contracts`, `/explorer/code/<id>`, `/explorer/contract/<address>`). The stored codes (`Codes`), a code's instances (`ContractsByCode`), and a contract's record (`ContractInfo`), history with the instantiate and migrate messages as text (`ContractHistory`) and raw storage (`AllContractState`; a key or value that is printable text is shown as text, anything else as hex or by its size). The explorer never runs a contract, so it shows what a contract stores, not what it answers. An address that is not a contract lists the contracts it instantiated (`ContractsByCreator`).
+- **Market** (`/explorer/market`, `/explorer/listing/<n>`). x/market has `Listing` and `Bid` lookups and no list, and deletes a listing when it settles or is cancelled, so a listing is opened by its number, and a bid is looked up by its number on its listing's page (bids are numbered across the whole market).
+- **Governance** (`/explorer/governance`, `/explorer/proposal/<n>`). Proposals are numbered from 1 and are never deleted, so they are found the way collections are. A proposal shows its kind and what it would do, the timeline (voting, veto window, timelock) and both houses' tallies; a box asks `Vote` for an address you name, because the chain lists no voters. The page also shows x/houses' parameters and what enacted proposals have set (`Params`, `Enacted`).
+
+Each of these pages also shows "Recent ... activity": the part of the newest 100 transactions that carries the module's messages. That is a window, not a history, and the card says so; the chain keeps no list of its own, and the indexer does not index transactions by message type.
+
+### Public and private transactions
+
+Sending ORAMA is public unless the sender chooses the shielded pool ([Shielded pool](/docs/blockchain/shielded)). The explorer shows each kind for what the chain exposes and nothing more.
+
+- A public transfer (`MsgSend`) shows its sender, receiver and amount in full, with a `Public` mark on the transaction page.
+- A private transfer (`MsgShieldedTransfer`) has no signer, receiver or amount on chain. Its page and its rows in every list carry a `Private` badge, and an "On chain / Not on chain" card says what is public (its result, the number of actions in its bundle, the fee it paid from the pool, the block and the time) and what is not. The fee is the `amount` of the `shielded_bundle` event the module emits, the bundle's value balance, and the details panel shows it as "paid from the shielded pool", not as a zero burn. No "where the money went" picture is drawn for it.
+- A shield, a shield of earnings and an unshield are the public edge of the pool. The signer and the amount that crossed are public (the same event), and the card says what is not: who will own the value inside the pool, which notes paid for an unshield and who funded them.
+- A wallet page says it shows public activity only: value in the pool belongs to no address, so it is in no balance and a private transfer is in no activity list.
+- The **Shielded pool** page (`/explorer/shielded`) shows what the chain exposes of the pool as a whole: what its module account holds (the pool plus any unshields waiting in the queue; the gateway withholds `Pools`, the query that would split them), the size of its note tree and its nullifier count (`TreeState`), its parameters (`Params`), and the transactions that named the pool's account, from the chain indexer: every shield, shield of earnings and unshield, and every private transfer, since each burns its fee from the pool. The page's shield and unshield volume is the total of the 20 transactions on it: the index keeps no running total. The turnstile (the pool never pays out more than went in) is a rule of the module that the page states; it is not a figure the page measures.
+
+### Validators
+
+The Validators page (`/explorer/validators`) shows the hand-over, the Nakamoto coefficient, every validator and the operators. A validator's own page is `/explorer/validator/<operator wallet>`, the `orama1…` address of its operator (the wallet page of a validator operator links to it). Every figure comes from the chain or the chain indexer; a figure the chain does not expose is left out and the page says so.
+
+- **Power hand-over.** λ, the committee's and the community's share of voting power, and the two figures λ is built from: bonded stake against the stake at which λ reaches 1 (`bootstrap_exit_stake`), and the epoch against the epoch by which it reaches 1 whatever is staked (`bootstrap_deadline_epochs`). λ is the larger of the two terms and never falls. The chain does not expose the terms themselves, or whether the validator-count gate that holds λ at or below `pre_gate_lambda_cap` has been met, so neither is shown as a figure. These come from x/power's `Lambda` and `Params`, the staking pool and the emission epoch.
+- **Each validator.** Status, jailed state, committee or community, voting power, commission (rate, maximum rate, maximum daily change, when it last changed), ORAMA bonded in total, and the operator's self-bond (the operator wallet's own delegation to it) with the rest as "from other delegators". These come from the staking module's validator record and a delegation query. Names, websites and descriptions are written by the validator: they are cleaned, cut, and shown as plain text, a website never as a link.
+- **Uptime, missed blocks, slashing, jail, voting-power history.** From the chain indexer's per-validator routes (`/v1/chain/index/validators/<operator>/epochs`, `/slashes`, `/jails`): signed and missed blocks, uptime, slashes (reason, height, burned amount), jail periods, and CometBFT voting power per closed epoch (a trend line and a table; the integer units rows compare in, not a share of the total, which the page shows for today only). The epoch still open is not counted. When the node a gateway reached runs no indexer, these sections say so and show the error, and the rest of the page still shows.
+- **Operators and the cap.** x/power caps an operator's stake summed over all its validators. A validator's operator is read with `ValidatorPower` (a validator with no registered node binding its consensus key shares one `unlinked` operator and one cap), so the page reads the operator of the largest 24 active validators (a load must stay inside the gateway's burst of 30 module queries), six queries at a time, shares the result with every validator's page for 30 seconds, and says how many smaller ones it did not group. The cap in force (`current_cap_bps`), the two cap values and the validator count at which it steps down come from `Lambda` and `Params`. The cap applies to the stake-backed part of power (λ of it); the committee's seats carry the rest, so an operator's combined share can be above the cap.
+- **Rewards.** What the validator was paid in each of its newest closed epochs, split into commission, its own cut and its delegators' (see [Rewards in the explorer](#rewards-in-the-explorer)); an earlier epoch is marked not recorded.
+- **Not shown.** The number of delegators (the gateway serves no validator-delegations query).
+
+Every message the chain registers is shown as a plain sentence and labelled fields: the Orama modules (nodes, storage, archive, relay, tokens, compressed NFTs, market, houses, fees, the faucet and shielded messages) and the standard bank, staking, distribution, slashing, fee-grant, upgrade, evidence and CosmWasm messages. A failed transaction reads "tried to ...". A sentence says only what the message says: a CosmWasm call names the contract, its entry point and the funds sent, not what the contract did, and a shielded message's sentence says only that it was submitted and the size of its proof bundle (the transaction page adds what the module's event makes public, below). A message type the explorer has no decoder for (a third party's) is shown by its type URL. Text written to the chain, such as names, labels and memos, is cleaned, cut to a bounded length and shown as plain text.
+
+### Nodes, storage and Tor
+
+These pages show the network's global layer from the chain's own records. They use the list queries above and a few point queries, and each section has its own loading, error and empty state, so one failed read does not blank the page. A figure the chain does not keep is not shown; each page has a "Not on the chain" box that says which.
+
+- **Nodes** (`/explorer/nodes`). Every node x/nodes holds, whatever its status: how many are live, how many operators run them, how many networks (ASNs) they declare and how much is bonded, what the nodes run (validator, storage provider, Tor relay, Tor exit, directory authority, archiver, read from each node's `roles`), how the live nodes spread over the ASNs, and a table you can filter by role. A node's page, `/explorer/node/<id>`, shows its operator and hot key, the bond on each role against that role's minimum, bond that is on its way out, its declared endpoints, region and ASN, and for a storage node its declared and reserved capacity. **The ASN, region and endpoints are what the operator declared; the chain cannot check them.** Endpoints are text, never links. Where the network's gateway is known the page links the network's public status page (`/status`). The chain does not record a node's software version or whether it is up now, and the page says so.
+- **Storage** (`/explorer/storage`). The newest hundred storage deals (kind, state, replicas, price per epoch, length in epochs, client; filter by kind or for the ones the protocol made), with the number of deals made so far taken from the highest deal id. Opening a deal reads its replicas, one `Slot` query each (at most twelve): the provider, the state (active, evicted, released), the challenges missed in a row and the size. The storage providers are the live nodes with the storage role, with their declared capacity, how much of it deals have reserved and their bond. The block archive card shows the last archived height, the retain height, the retain lag (how far the archive holds pruning back from where the retention window alone would put it), the number of complete ranges not archived yet, and for the oldest four of them whether they are archived, decided on a bundle, collecting attestations (against the quorum of three archivers and three deals the chain fixes) or not attested at all. The settlement card shows the queue of payments and penalties waiting for a block. **Repair is not listed**: a deal can name a repair delegate that copies a surviving replica to a new provider, but that happens off chain and the chain keeps no record of it; what you can read is each replica's state.
+- **Tor** (`/explorer/tor`). The relays x/relay holds (RSA fingerprint, node, operator, IPv4 /16, whether the operator declares it an exit, jailed, and what the newest settled epoch paid it, from `RelayPayouts`, gross of the operator's 90/5/5 split), the nodes that hold the relay, exit and directory-authority roles (and those with a relay role that registered no relay, which earn no relay reward), the reward rules (reporters needed, minimum uptime, exit multiplier, caps), the reporters, and what the newest epoch past its report window settled (x/relay settles epoch e in the first block of e+2, so that is the epoch two before the current one; an epoch nobody reported on has no settlement). **Not on the chain**: the validators' onion services (kept in the network's Tor network file), whether a relay is in the consensus (the relay's own machine works that out and reports it to its operator's monitoring) and a relay's bandwidth (reporters submit it each epoch and the chain deletes each report when the epoch settles, keeping only the epoch's totals).
+
+A list the chain holds more of than the explorer reads (five pages of 100 nodes or relays, one page of deals) is marked as cut, and the figures then cover what was read.
+
+## Wallet clients and transactions
+
+Transactions are signed with `SIGN_MODE_DIRECT` using the RootWallet agent: `orama global`, `orama storage` and `orama cluster` ask the agent's `/v1/orama/tx/sign` endpoint, which decodes the transaction itself, shows it in an approval window, and refuses anything it cannot decode. See [The agent](/docs/rootwallet/agent). Add `--onion <addr.onion>` to submit through Tor ([Tor](/docs/privacy/tor)). Reads do not go through Tor yet. A wallet that cannot use Tor or reach a validator submits through the gateway's `POST /v1/chain/broadcast` instead.

@@ -1,0 +1,19 @@
+shape: sequence_diagram
+
+n: "new device (holds key K2)"
+g: "gateway"
+r: "registry RQLite"
+o: "active device (holds key K1)"
+
+n -> g: "POST /v1/auth/device {namespace, device_key K2}\nor sign-in under approval policy -> 202"
+g -> r: "INSERT device_authorizations\n(device_key = K2, subject if wallet named it)"
+g -> n: "device_code, user_code"
+n -> n: "shows the user code"
+o -> g: "POST /v1/auth/devices/approve\nBearer (did = K1), user_code, device_proof"
+g -> r: "RequireActiveDevice(K1); verify proof (action approve,\nbinding = user code); spend proof id in nonces"
+g -> r: "UPDATE approved_at, subject = K1's account,\napproved_by_device = K1"
+g -> o: "200 approved"
+n -> g: "POST /v1/auth/device/token\ndevice_code, device_proof (action claim)"
+g -> r: "verify K2 proof; K1 still active?\nEnrolDevice(K2, active); UPDATE claimed_at"
+g -> r: "INSERT refresh_tokens (device_id = K2, dv1_ token)"
+g -> n: "200 access_token (did = K2), refresh_token, device_id"

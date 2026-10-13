@@ -1,0 +1,26 @@
+# What a release is, checked without changing the fleet: the HEAD archive
+# verifies on its own (operator signature, every file in the signed manifest,
+# linux/amd64, every shipped binary, the CLI's version), every node runs the
+# binaries its signed manifest lists, the version agrees everywhere, and the
+# auto-update decision table (notify by default, auto only when healthy,
+# newer and in the window; TUF failures, downgrades and bad releases refused).
+id: release-checks
+title: Release artifacts and auto-update decisions
+area: infrastructure
+subtasks: [2843]
+stage: 10
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  cli:
+    - orama maint node autoupdate
+    - orama version
+  routes:
+    - /v1/version
+  claims:
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-maint-build: the manifest carries checksums of every file and is signed with the operator's RootWallet"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-maint-node-autoupdate: notify is the default; auto installs only when healthy, newer and in the window"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-maint-node-autoupdate: a TUF failure, a downgrade or a release marked bad is refused; a validator is never auto"

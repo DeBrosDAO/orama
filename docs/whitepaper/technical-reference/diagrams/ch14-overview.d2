@@ -1,0 +1,29 @@
+direction: down
+
+creds: "Credentials a request can carry" {
+  direction: right
+  wallet: "wallet JWT\nsub = address"
+  key: "API key or the JWT\nexchanged from it"
+  app: "workload token\nsub = app:ns/name"
+  none: "no credential\n(open routes)"
+}
+
+table: "gatewayRoutes\nroute_policy.go" {shape: cylinder}
+
+gw: "Gateway middleware chain (index and namespace gateways run the same code)" {
+  direction: right
+  policy: "route policy\nTable.For(request)"
+  authn: "authMiddleware\nwho is this\n(chapter 13)"
+  authz: "authorizationMiddleware\nnamespace, live grant"
+  scope: "scopeMiddleware\npermissions, domain gate,\ntoken requirement"
+  handler: "handler\nAuthorizeResource\non the object"
+  policy -> authn -> authz -> scope -> handler
+}
+
+reg: "Cluster registry RQLite\nprincipals, grants, api_keys,\naudit_events (level=weak reads)" {shape: cylinder}
+
+creds -> gw.policy: "request"
+table -> gw.policy: "Access, Domain, Action,\nOwnership, Token"
+gw.authn -> reg: "key row"
+gw.authz -> reg: "GrantIn"
+gw.handler -> reg: "audit events"

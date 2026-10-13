@@ -15,7 +15,7 @@ import (
 // staleGateFor builds a gate whose injected check always returns the given
 // freshness verdict, with a long ttl so the first verdict sticks.
 func staleGateFor(fresh bool) *followerFreshnessGate {
-	return newFollowerFreshnessGate(9999, func(int) (bool, string, error) {
+	return newFollowerFreshnessGate(Endpoint{}, func(Endpoint) (bool, string, error) {
 		return fresh, "test", nil
 	}, time.Hour)
 }

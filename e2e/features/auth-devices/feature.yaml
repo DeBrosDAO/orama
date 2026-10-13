@@ -1,0 +1,50 @@
+# Devices and sessions: the RFC 8628 device login (pending, slow_down,
+# denied, expired, single collect) approved by a real wallet and by the CLI,
+# device enrolment (Ed25519, ES256 raw and DER, thumbprints, dual signatures,
+# every key-validation refusal, small-order keys, tombstones), device proofs,
+# revocation reaching every public and namespace gateway, sessions listed and
+# ended, the optional/required/approval session policy with its sweep,
+# exemptions, pending devices, seedless linking and operator recovery, and
+# token-opened sockets closed with 4403 on every kind of revocation.
+id: auth-devices
+title: Device login, device-bound sessions, session policy and socket revocation
+area: auth
+subtasks: [2827]
+stage: 3
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  cli:
+    - orama auth approve
+    - orama auth login
+    - orama auth sessions
+    - orama auth sessions revoke
+  routes:
+    - /v1/auth/device
+    - /v1/auth/device/approve
+    - /v1/auth/device/token
+    - /v1/auth/devices
+    - /v1/auth/devices/
+    - /v1/auth/sessions
+    - /v1/auth/sessions/
+    - /v1/namespace/devices
+    - /v1/namespace/devices/
+    - /v1/namespace/session-policy
+    - /v1/pubsub/ws
+  claims:
+    - "docs/whitepaper/technical-reference/vol1/13-identity.md#machines-with-no-wallet: pending, slow_down, access_denied, expired after ten minutes; the device code collects a session exactly once"
+    - "docs/whitepaper/technical-reference/vol1/13-identity.md#machines-with-no-wallet: approving costs a fresh wallet signature; the user code alone is worthless"
+    - "docs/whitepaper/technical-reference/vol1/13-identity.md#devices: ES256 (raw r||s and DER) and Ed25519 device keys; the device id is the RFC 7638 thumbprint"
+    - "docs/whitepaper/technical-reference/vol1/13-identity.md#signing-in-with-a-device: a device-bound sign-in is handed no API key; the lobby binds no device"
+    - "docs/whitepaper/technical-reference/vol1/13-identity.md#signing-in-with-a-device: a revoked device is a tombstone; a small-order Ed25519 key is refused; a key belongs to one account"
+    - "docs/whitepaper/technical-reference/vol1/13-identity.md#linking-a-device-from-a-device: a device proof is fresh (60s), single use, for one action on one credential; a refused refresh spends nothing"
+    - "docs/whitepaper/technical-reference/vol1/13-identity.md#revoking-a-device: revoking a device ends its tokens on every gateway within ten seconds; the other devices stay signed in"
+    - "docs/whitepaper/technical-reference/vol1/13-identity.md#sign-in-policy: sessions never return a refresh token; ending one refuses its access tokens within ten seconds"
+    - "docs/whitepaper/technical-reference/vol1/13-identity.md#linking-a-device-from-a-device: required refuses unbound end users (DEVICE_REQUIRED), sweeps their sign-in keys and exempts owner/admin/developer"
+    - "docs/whitepaper/technical-reference/vol1/13-identity.md#linking-a-device-from-a-device: approval pends a second device (202) until an active device approves; a wallet cannot approve a device link"
+    - "docs/whitepaper/technical-reference/vol1/13-identity.md#linking-a-device-from-a-device: seedless linking takes the approver's account; a revoked approver's link cannot be collected"
+    - "docs/whitepaper/technical-reference/vol1/13-identity.md#revoking-a-device: a namespace operator lists and revokes an account's devices; the next device enrols as the first"
+    - "docs/whitepaper/technical-reference/vol1/13-identity.md#open-websockets: a token-opened socket closes with 4403 within ten seconds of logout, session end or device revocation; a key-opened socket is not re-checked"

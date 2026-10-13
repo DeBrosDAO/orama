@@ -1,0 +1,23 @@
+direction: right
+
+deal: "Deal status" {
+  open: "OPEN"
+  active: "ACTIVE"
+  expired: "EXPIRED"
+  refunded: "REFUNDED"
+  open -> active: "first slot accepted"
+  open -> refunded: "no slot placeable on the first pass"
+  open -> expired: "end_epoch reached, queue drained"
+  active -> expired: "end_epoch reached, queue drained"
+}
+
+slot: "Slot status" {
+  un: "UNASSIGNED\n(piece commitment kept)"
+  asg: "ASSIGNED\n(node bound, waiting)"
+  act: "ACTIVE\n(accepted, challenged)"
+  un -> asg: "assignDue picks a node\nin the block after the trigger"
+  asg -> act: "MsgAcceptDeal within\naccept_window_blocks"
+  asg -> un: "MsgDeclineDeal, or window lapses\n(operator excluded for the slot)"
+  act -> un: "evicted at miss_threshold,\nMsgReleaseReplica, capacity trim\n(operator excluded for the slot)"
+  act -> un: "deal expires"
+}

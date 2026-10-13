@@ -1,0 +1,57 @@
+# Wallets and accounts
+
+## Creating and importing
+
+**Create.** Every surface generates a 12-word BIP-39 phrase. You must confirm words before the wallet is written: three random words on the CLI, a verify-phrase step on desktop and mobile. (The SDK can make 24 words; the apps and CLI always make 12.)
+
+**Import.** Desktop accepts 12, 15, 18, 21 or 24 words and tells you which word is wrong and where. The CLI accepts a pasted one-line phrase. Mobile has login and import-password screens.
+
+**Import a single private key.** All surfaces can import one key for one chain (EVM, Solana, Bitcoin WIF). An imported key is *not* covered by your phrase, so back it up separately, and the agent cannot sign with imported accounts.
+
+**Password.** New passwords need at least 12 characters, at least 4 distinct characters, no run of 6 or more consecutive characters, and no common patterns. This applies when you choose or change a password, not when you unlock, so older 8-character wallets still open.
+
+## Lock, unlock and sessions
+
+| Surface | How it locks |
+|---|---|
+| Desktop | Unlocking lasts a fixed 30 minutes, sliding. There is no timeout setting. Closing the window hides the app to the tray; the tray has Unlock, Lock, Open Wallet and Quit |
+| Mobile | Auto-lock: Immediately, 1, 5 (default), 15 or 30 minutes, applied on idle and on return from background. Locking wipes the wallet and vault keys from memory |
+| CLI | `rw unlock [--ttl 1-1440]` (default 30 minutes) caches the phrase encrypted, with the key in the OS keychain (macOS `security`, Linux `secret-tool`). `rw lock` ends it. Without a session each command asks for the password; scripts can use `ROOTWALLET_PASSWORD` |
+
+**Biometrics and PIN.** Desktop has Touch ID (macOS only: the wallet password sits in the login Keychain and Touch ID gates getting it) and an optional 6-digit PIN. Mobile has Face ID, Touch ID or Android biometrics plus an optional PIN. The PIN gates app entry only: actions that touch key material ask for the wallet password again. After 5 wrong PIN tries a lockout starts at 30 seconds and doubles to 15 minutes. Nothing is wiped.
+
+**Several wallets.** Desktop and mobile hold several local wallets (the select-account screen; Settings, Log out). The CLI has one active wallet per home directory, with HD accounts under it.
+
+## Accounts
+
+A wallet has numbered accounts. Each account has addresses on every chain, derived from the same phrase.
+
+| Chain | Path | Address |
+|---|---|---|
+| EVM | `m/44'/60'/0'/0/N` | `0x…` |
+| Solana | `m/44'/501'/N'/0'` | base58 |
+| Bitcoin | `m/84'/0'/N'/c/i` (native SegWit) | `bc1…` |
+| ORAMA | `m/44'/118'/0'/0/N` | `orama1…` |
+
+```bash
+rw accounts                       # list
+rw account create                 # add an account
+rw account switch 1
+rw account rename 1 "savings"
+rw account delete 1               # archives it; "rw account restore" brings it back
+rw address --chain solana
+```
+
+**Export a private key.** Always password-gated. On desktop the key hides again after 60 seconds or when the window loses focus. A Bitcoin HD account exports as an `xprv`.
+
+**Recovery phrase.** Desktop and mobile: Settings, Reveal recovery phrase (password required). On desktop the clipboard clears itself after 30 seconds. CLI: `rw export` prints it, and refuses to write to a non-terminal unless `RW_ALLOW_INSECURE_EXPORT=1`.
+
+## Supported chains
+
+Core registry: Ethereum, Polygon, BNB Chain, Arbitrum One, Optimism and Base; testnets Sepolia, Polygon Amoy and Base Sepolia; Solana (mainnet, devnet, testnet); Bitcoin (mainnet, testnet, signet); and the ORAMA stagenet.
+
+The apps' Network page offers: Ethereum, Arbitrum, Polygon, Optimism, Base, Sepolia, the three Solana clusters, the three Bitcoin networks, and ORAMA. BNB Chain and Polygon Amoy are available in the CLI (`rw network list`), the core library and the SDK, but cannot be switched on in the desktop or mobile app. Mobile enables Ethereum, Solana and Bitcoin by default. Mobile also supports a custom RPC endpoint, checked once when saved.
+
+## Deleting
+
+Desktop: Settings, Danger zone, Delete wallet. Mobile: Settings, Delete data, or "Reset wallet" on the lock screen (deletes only the active wallet). Deleting removes the keystore and vault from the device. Without your phrase there is no way back.

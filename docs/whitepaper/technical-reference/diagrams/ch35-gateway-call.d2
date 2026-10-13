@@ -1,0 +1,25 @@
+direction: down
+
+req: "shared.Request(method, path, body)" {shape: oval}
+url: "GatewayURL(override)\n1 --gateway flag\n2 ORAMA_API_URL, ORAMA_GATEWAY_URL, ORAMA_GATEWAY\n3 active environment in environments.json\n4 else ErrNoGateway"
+tok: "AuthToken(url)" 
+envtok: "ORAMA_TOKEN set?" {shape: diamond}
+bfe: "auth.BearerFromEnv\nJWT sent as is, key exchanged once"
+store: "credentials.json default credential\nfor that exact URL"
+miss: "none: clierr.Auth\nexit 3, run orama auth login" {shape: oval}
+bearer: "auth.Bearer: live access token,\nelse refresh, else exchange key\n(chapter 13)"
+call: "HTTP with Bearer\n30 s timeout, 8 MiB response cap"
+status: "non-2xx: StatusError(status, message)\nexit 1 unless the package classifies it" {shape: oval}
+okr: "raw body to the command" {shape: oval}
+
+req -> url
+url -> tok
+tok -> envtok
+envtok -> bfe: "yes"
+envtok -> store: "no"
+store -> miss: "no entry"
+store -> bearer
+bfe -> call
+bearer -> call
+call -> status: "error"
+call -> okr: "2xx"

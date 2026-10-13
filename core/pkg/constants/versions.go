@@ -3,11 +3,15 @@ package constants
 // External dependency versions used across the network.
 // Single source of truth — all installer files and build scripts import from here.
 const (
-	GoVersion          = "1.24.6"
-	OlricVersion       = "v0.7.0"
-	IPFSKuboVersion    = "v0.38.2"
-	IPFSClusterVersion = "v1.1.2"
-	RQLiteVersion      = "8.43.0"
-	CoreDNSVersion     = "1.12.0"
-	CaddyVersion       = "2.10.2"
+	GoVersion          = "1.27.2"
+	OlricVersion       = "v0.7.4"
+	IPFSKuboVersion    = "v0.43.1"
+	IPFSClusterVersion = "v1.1.6"
+	RQLiteVersion      = "10.4.0"
+	CoreDNSVersion     = "1.14.7"
+	// CoreDNSCommit is the commit the v1.14.7 tag names. The build refuses a
+	// checkout of any other commit, so a moved tag cannot change the DNS server
+	// every nameserver runs.
+	CoreDNSCommit = "427fc80ed9ca47f354585eb30a3f1332950856c4"
+	CaddyVersion  = "2.11.4"
 )

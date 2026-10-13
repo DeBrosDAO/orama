@@ -10,7 +10,7 @@ import (
 // pubSubBridge bridges between our PubSubClient interface and the pubsub package
 type pubSubBridge struct {
 	client  *Client
-	adapter *pkgpubsub.ClientAdapter
+	adapter pkgpubsub.Bus
 }
 
 func (p *pubSubBridge) Subscribe(ctx context.Context, topic string, handler MessageHandler) error {
@@ -22,6 +22,15 @@ func (p *pubSubBridge) Subscribe(ctx context.Context, topic string, handler Mess
 		return handler(topic, data)
 	}
 	return p.adapter.Subscribe(ctx, topic, pubsubHandler)
+}
+
+func (p *pubSubBridge) SubscribeHandle(ctx context.Context, topic string, handler MessageHandler) (func() error, error) {
+	if err := p.client.requireAccess(ctx); err != nil {
+		return nil, fmt.Errorf("authentication required: %w - run CLI commands to authenticate automatically", err)
+	}
+	return p.adapter.SubscribeHandle(ctx, topic, func(topic string, data []byte) error {
+		return handler(topic, data)
+	})
 }
 
 func (p *pubSubBridge) Publish(ctx context.Context, topic string, data []byte) error {

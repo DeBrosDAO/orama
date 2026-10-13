@@ -1,0 +1,42 @@
+direction: right
+
+wallet: "Wallet (off node)" {
+  keys: "ZIP-32 key tree\nm/32'/ORAM'/account'"
+  build: "bundle builder\n(Halo 2 prover, Orama sighash)"
+  keys -> build
+}
+
+tx: "Transaction" {
+  transfer: "MsgShieldedTransfer\nno signer, no fee, no memo"
+  signed: "MsgShield / MsgShieldEarnings /\nMsgUnshield (signed)"
+}
+
+node: "oramad (x/shielded)" {
+  ante: "ante: Route, ShapeDecorator,\nSignerlessDecorator, ProofDecorator"
+  admit: "keeper.Admit\nsize, value, nullifiers, anchor"
+  verify: "verify.Check\nboth verifiers must accept"
+  lib: "orchard (cgo library)"
+  proc: "orama-orchard-verifier\n(pinned, out of process)"
+  exec: "Execute*\npool, burn, tip, queue"
+  tree: "frontier, root, anchors" {shape: cylinder}
+  pools: "pools, limiter, queue" {shape: cylinder}
+  acc: "nullifier accumulator\n(IAVL)" {shape: cylinder}
+  nf: "shielded_nullifiers\n(separate database)" {shape: cylinder}
+  ante -> admit
+  admit -> verify
+  verify -> lib
+  verify -> proc: "frame over stdin/stdout"
+  verify -> exec
+  exec -> tree
+  exec -> pools
+  exec -> acc
+  exec -> nf: "end of block"
+}
+
+bank: "x/bank, x/fees,\nx/staking, x/nodes" 
+
+wallet.build -> tx.transfer: "bundle bytes"
+wallet.build -> tx.signed: "bundle bytes"
+tx.transfer -> node.ante
+tx.signed -> node.ante
+node.exec -> bank: "module account 'shielded'\nburn, earnings, delegate, bond"

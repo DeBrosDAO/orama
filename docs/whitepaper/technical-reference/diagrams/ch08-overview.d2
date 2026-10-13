@@ -1,0 +1,54 @@
+direction: right
+
+gw: "Index gateway (every node)" {
+  mon: "peerhealth.Monitor\nprobe 10 s, ring K=3"
+  hooks: "OnNodeSuspect / OnNodeDead /\nOnNodeRecovered callbacks"
+  ping: "/v1/internal/ping\n(open, always 200)"
+  mon -> hooks
+}
+
+node: "orama-node process (every node)" {
+  hb: "DNS heartbeat\nevery 30 s"
+  reaper: "dns_nodes reaper\nactive -> inactive after 120 s"
+  rec: "membership.Reconciler\nevery 60 s, leader only"
+  disc: "libp2p discovery\n(LivePeerIDs)"
+  disc -> rec: "alive veto"
+}
+
+idx: "Index RQLite (cluster registry)" {
+  dns: "dns_nodes" {shape: cylinder}
+  ev: "node_health_events" {shape: cylinder}
+  wg: "wireguard_peers" {shape: cylinder}
+  tomb: "raft_evicted_nodes" {shape: cylinder}
+  creds: "node_credentials" {shape: cylinder}
+  recs: "dns_records\n(system, ns-<name>)" {shape: cylinder}
+}
+
+cm: "namespace.ClusterManager" {
+  dead: "HandleDeadNode"
+  susp: "HandleSuspectNode /\nHandleSuspectRecovery"
+  recd: "HandleRecoveredNode"
+}
+
+raft: "rqlite voter eviction\n(chapter 7)"
+
+node.hb -> idx.dns: "last_seen, status=active (via gateway)"
+node.reaper -> idx.dns: "status=inactive"
+gw.mon -> idx.dns: "ring = rows seen in 15 min"
+gw.mon -> gw.ping: "HTTP GET over WireGuard :10104"
+gw.mon -> idx.ev: "suspect / dead / recovered"
+gw.hooks -> cm.susp: "3 misses"
+gw.hooks -> cm.dead: "12 misses + 2 observers"
+gw.hooks -> cm.recd: "answers again"
+idx.ev -> raft: "2 observers say dead"
+raft -> idx.tomb: "tombstone, then remove voter"
+idx.dns -> node.rec
+idx.wg -> node.rec
+idx.tomb -> node.rec
+node.rec -> idx.wg: "confirm / drop"
+node.rec -> idx.dns: "drop row after 6 h"
+node.rec -> idx.creds: "revoke key"
+node.rec -> idx.recs: "delete system A records"
+node.reaper -> idx.recs: "delete system A records"
+cm.susp -> idx.recs: "ns-<name> is_active = FALSE"
+cm.recd -> idx.recs: "is_active = TRUE (via HandleSuspectRecovery)"

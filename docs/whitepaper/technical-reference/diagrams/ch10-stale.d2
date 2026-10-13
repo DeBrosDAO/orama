@@ -1,0 +1,28 @@
+direction: right
+
+prov: "Stale provisioning (every node's sweep)" {
+  p1: "status provisioning and\nprovisioned_at older than 11 min\n(registry clock)"
+  p2: "skip if this process is provisioning it"
+  p3: "teardown on every active node holding a port block;\ninactive nodes: teardown recorded as owed"
+  p4: "all stops confirmed?" {shape: diamond}
+  p5: "guarded UPDATE status = failed\nWHERE still provisioning and past threshold"
+  p6: "winner only: release ports of confirmed nodes,\nremove DNS and membership, log event"
+  keep: "stay provisioning,\nretry next sweep"
+  p1 -> p2 -> p3 -> p4
+  p4 -> p5: "yes"
+  p4 -> keep: "no"
+  p5 -> p6: "1 row"
+}
+
+deprov: "Stale deprovisioning (every node's sweep)" {
+  d1: "stamp rows that have no deprovisioning_at"
+  d2: "status deprovisioning and stamp\nolder than 12 min"
+  d3: "free resume slot on this node?\n(max 2, one per cluster)" {shape: diamond}
+  d4: "guarded UPDATE: stamp = now\nWHERE still stale"
+  d5: "goroutine: DeprovisionCluster\nunder a 10 min context"
+  later: "left for the next sweep\nor another node"
+  d1 -> d2 -> d3
+  d3 -> d4: "yes"
+  d3 -> later: "no"
+  d4 -> d5: "1 row"
+}

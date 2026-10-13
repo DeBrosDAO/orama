@@ -1,0 +1,632 @@
+package auth
+
+import (
+	"context"
+	"crypto/ed25519"
+	cryptorand "crypto/rand"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/pem"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/client"
+	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/logging"
+	"go.uber.org/zap"
+)
+
+// Which key signed a token, and what it was allowed to sign.
+//
+// The Ed25519 signing key used to be HKDF-derived from the cluster secret with
+// a fixed label. Every node and every namespace gateway holds that secret, so
+// every one of them could mint a token for any namespace and any subject — and
+// there was nothing to rotate to, because the derivation had one output.
+//
+// Each gateway generates its own key now. A namespace gateway's key is bound to
+// its namespace: a token signed with it is refused unless its `namespace` claim
+// matches. The index gateway's key is bound to nothing, because the index
+// gateway is the control plane and a compromise of it is not a tenant boundary
+// problem.
+
+// KeyIDPrefix is what a kid starts with. It says which algorithm the key is
+// without having to look the key up first.
+const KeyIDPrefix = "ed_"
+
+// SigningKey is one key this cluster will accept a token from.
+type SigningKey struct {
+	// KID is the `kid` in a token header.
+	KID string
+	// Namespace this key may sign for. Empty means the index gateway's key,
+	// which is not bound to one.
+	Namespace string
+	// Public is the verifying half.
+	Public ed25519.PublicKey
+	// RetiredAt is when the key stops being accepted, or zero while it is
+	// live. A rotation sets it on the outgoing key rather than deleting it, so
+	// tokens already issued keep working for their remaining lifetime.
+	RetiredAt time.Time
+}
+
+// Live reports whether a key is still accepted at the given moment.
+func (k SigningKey) Live(now time.Time) bool {
+	return k.RetiredAt.IsZero() || now.Before(k.RetiredAt)
+}
+
+// Binds reports whether a token claiming this namespace may be signed by this
+// key.
+//
+// An unbound key — the index gateway's — signs for any namespace. A bound key
+// signs only for its own, which is what stops one tenant's gateway minting a
+// token for another.
+func (k SigningKey) Binds(namespace string) bool {
+	return k.Namespace == "" || strings.EqualFold(k.Namespace, namespace)
+}
+
+// KeyIDFor is the kid of a public key. It is derived from the key so two
+// gateways cannot collide and nobody can choose one.
+func KeyIDFor(pub ed25519.PublicKey) string {
+	sum := sha256.Sum256(pub)
+	return KeyIDPrefix + hex.EncodeToString(sum[:8])
+}
+
+// encodePublicKey is how a public key appears in the registry and in the JWKS.
+func encodePublicKey(pub ed25519.PublicKey) string {
+	return base64.RawURLEncoding.EncodeToString(pub)
+}
+
+func decodePublicKey(encoded string) (ed25519.PublicKey, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimSpace(encoded))
+	if err != nil {
+		return nil, fmt.Errorf("the stored public key is not base64url: %w", err)
+	}
+	if len(raw) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("the stored public key is %d bytes, want %d", len(raw), ed25519.PublicKeySize)
+	}
+	return ed25519.PublicKey(raw), nil
+}
+
+// signingKeyReloadInterval is how often the published keys are re-read.
+//
+// A gateway that has not seen a newly published key yet refuses tokens signed
+// with it, so this is the delay between a namespace gateway starting and its
+// tokens being accepted elsewhere. It is short for the same reason the
+// revocation list's is: the cost is one query, and the alternative is a
+// rollout that looks like an outage.
+const signingKeyReloadInterval = 30 * time.Second
+
+// signingKeyStaleness is how old the cached keys may be and still answer a
+// verification while a reload is in flight. Past it — or before the first load
+// — a verification waits for the reload. A key's retirement therefore takes
+// effect within this bound.
+const signingKeyStaleness = 2 * signingKeyReloadInterval
+
+// signingKeyRetryInterval is the least time between two periodic reload
+// attempts, so a registry that does not answer is asked once a second, not
+// once per verification.
+const signingKeyRetryInterval = time.Second
+
+// signingKeyMissReloadInterval is how often a token naming a key this gateway
+// does not know may make it re-read the published keys. A namespace gateway's
+// key is published moments before its first token is presented anywhere, so
+// waiting for the next periodic reload refused that token for up to
+// signingKeyReloadInterval on every gateway that had loaded before it ("no
+// credential was presented", stagenet e2e 2026-10-03). The bound is what keeps
+// tokens naming made-up kids from becoming one registry read each.
+const signingKeyMissReloadInterval = time.Second
+
+// signingKeyReadTimeout bounds one read of the published keys made on the
+// request path, so a registry that does not answer holds a verification for
+// at most this long rather than for as long as it stalls.
+const signingKeyReadTimeout = 3 * time.Second
+
+// SigningKeys is every key this gateway will verify a token from.
+type SigningKeys struct {
+	// registry resolves the database the published keys live in, at call
+	// time rather than at construction. A namespace gateway learns where its
+	// registry is *after* the auth service is built (SetAPIKeyRegistry), and
+	// a set that captured the handle it was built with published its key into
+	// the tenant's own database — where the index would never see it, and
+	// where the tenant could write one.
+	registry func() client.DatabaseClient
+	logger   *logging.ColoredLogger
+
+	// missMu serialises the reloads a lookup miss makes, so a burst of
+	// unknown kids reads the registry once.
+	missMu sync.Mutex
+	// reloadMu serialises every read-and-replace of the set, so a read that
+	// began earlier never replaces one that began later: a periodic reload
+	// still in flight would otherwise overwrite the set a lookup miss had just
+	// read, dropping a key published in between.
+	reloadMu sync.Mutex
+
+	mu       sync.RWMutex
+	keys     map[string]SigningKey
+	loadedAt time.Time
+	// lastAttempt is when a read of the published keys last began, whether it
+	// succeeded or not.
+	lastAttempt time.Time
+	// readAbandoned is set while a read given up at its deadline is still
+	// running.
+	readAbandoned bool
+	now           func() time.Time
+	published     map[string]struct{}
+	// flight is the periodic reload in progress, if any; done closes when it
+	// has finished.
+	flight *keyReloadFlight
+}
+
+type keyReloadFlight struct{ done chan struct{} }
+
+// NewSigningKeys returns an empty set. A registry that resolves to nil makes it
+// local-only, which is the single-node and test case: the gateway still
+// verifies its own key.
+func NewSigningKeys(registry func() client.DatabaseClient, logger *logging.ColoredLogger) *SigningKeys {
+	return &SigningKeys{
+		registry:  registry,
+		logger:    logger,
+		keys:      map[string]SigningKey{},
+		now:       time.Now,
+		published: map[string]struct{}{},
+	}
+}
+
+// database is where published keys are read and written, or nil when this
+// gateway has none to reach.
+func (s *SigningKeys) database() client.DatabaseClient {
+	if s == nil || s.registry == nil {
+		return nil
+	}
+	return s.registry()
+}
+
+// Add puts a key in the set without publishing it. It is how a gateway trusts
+// its own key, and how the legacy derived key is accepted for the length of one
+// token lifetime after an upgrade.
+func (s *SigningKeys) Add(key SigningKey) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.keys[key.KID] = key
+}
+
+// Publish records a key so every other gateway will accept tokens signed with
+// it. Publishing the same key twice is a no-op, which is what makes a restart
+// cheap.
+func (s *SigningKeys) Publish(ctx context.Context, key SigningKey) error {
+	s.Add(key)
+	db := s.database()
+	if db == nil {
+		return nil
+	}
+
+	var namespace any
+	if key.Namespace != "" {
+		namespace = key.Namespace
+	}
+	if _, err := db.Query(client.WithInternalAuth(ctx),
+		`INSERT INTO signing_keys(kid, namespace, algorithm, public_key, last_seen_at)
+		 VALUES (?, ?, 'EdDSA', ?, CURRENT_TIMESTAMP)
+		 ON CONFLICT(kid) DO UPDATE SET retired_at = NULL, last_seen_at = CURRENT_TIMESTAMP`,
+		key.KID, namespace, encodePublicKey(key.Public)); err != nil {
+		return fmt.Errorf("publish the signing key %s: %w", key.KID, err)
+	}
+
+	s.mu.Lock()
+	s.published[key.KID] = struct{}{}
+	s.mu.Unlock()
+	return nil
+}
+
+// Retire sets when a key stops being accepted. A rotation calls it on the
+// outgoing key rather than deleting it, so tokens already issued keep working
+// until they expire on their own.
+func (s *SigningKeys) Retire(ctx context.Context, kid string, at time.Time) error {
+	db := s.database()
+	if db == nil {
+		return nil
+	}
+	if _, err := db.Query(client.WithInternalAuth(ctx),
+		`UPDATE signing_keys SET retired_at = ? WHERE kid = ?`,
+		at.UTC().Format("2006-01-02 15:04:05"), kid); err != nil {
+		return fmt.Errorf("retire the signing key %s: %w", kid, err)
+	}
+	return nil
+}
+
+// Lookup returns the key a kid names, if this gateway will accept it.
+func (s *SigningKeys) Lookup(kid string) (SigningKey, bool) {
+	if s == nil {
+		return SigningKey{}, false
+	}
+	s.refreshIfStale()
+
+	key, ok := s.find(kid)
+	// Only a kid that names a published key's shape can be one published since
+	// the last read: an empty one, or the RS256 key's, never is.
+	if !ok && strings.HasPrefix(kid, KeyIDPrefix) {
+		s.reloadOnMiss()
+		key, ok = s.find(kid)
+	}
+	if !ok || !key.Live(s.now()) {
+		return SigningKey{}, false
+	}
+	return key, true
+}
+
+// find is the cached key a kid names, live or not.
+func (s *SigningKeys) find(kid string) (SigningKey, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	key, ok := s.keys[kid]
+	return key, ok
+}
+
+// reloadOnMiss re-reads the published keys for a kid the cached set does not
+// have, unless they were read within signingKeyMissReloadInterval. A kid that
+// is present but retired does not come here: it is refused as it stands.
+func (s *SigningKeys) reloadOnMiss() {
+	s.missMu.Lock()
+	defer s.missMu.Unlock()
+	s.mu.RLock()
+	recent := s.now().Sub(s.lastAttempt) < signingKeyMissReloadInterval
+	s.mu.RUnlock()
+	if recent {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), signingKeyReadTimeout)
+	defer cancel()
+	if err := s.Reload(ctx); err != nil && s.logger != nil {
+		s.logger.ComponentWarn(logging.ComponentGeneral,
+			"could not read the published signing keys for a token naming an unknown key; refusing it", zap.Error(err))
+	}
+}
+
+// All returns every live key, for the JWKS.
+func (s *SigningKeys) All() []SigningKey {
+	if s == nil {
+		return nil
+	}
+	s.refreshIfStale()
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	now := s.now()
+	out := make([]SigningKey, 0, len(s.keys))
+	for _, key := range s.keys {
+		if key.Live(now) {
+			out = append(out, key)
+		}
+	}
+	return out
+}
+
+// refreshIfStale re-reads the published keys when the cached set has aged out,
+// with at most one reload in flight, run in the background.
+//
+// A verification is answered from the cached set while the reload runs, unless
+// the set is older than signingKeyStaleness or was never loaded; only then does
+// it wait, for the reload in flight rather than a read of its own. Every
+// verification used to make its own blocking read once the set was 30s old,
+// and the set aged until one of them finished, so every authenticated request
+// arriving in that window queued on a registry read of up to 3s — the soak saw
+// all of them stall together for 3-5s every ~36s (stagenet 2026-10-04).
+//
+// A failed read keeps the previous set rather than emptying it: forgetting
+// every key because one query failed would refuse every token in the cluster.
+// It does not make the set fresh either. During a registry outage the
+// revocation list, which every verification consults and which refuses once it
+// is older than RevocationStaleness, is what stops tokens being accepted.
+func (s *SigningKeys) refreshIfStale() {
+	s.mu.Lock()
+	age := s.now().Sub(s.loadedAt)
+	if age < signingKeyReloadInterval {
+		s.mu.Unlock()
+		return
+	}
+	f := s.flight
+	if f == nil && s.now().Sub(s.lastAttempt) >= signingKeyRetryInterval {
+		f = &keyReloadFlight{done: make(chan struct{})}
+		s.flight = f
+		go s.reloadInBackground(f)
+	}
+	mustWait := f != nil && (s.loadedAt.IsZero() || age >= signingKeyStaleness)
+	s.mu.Unlock()
+	if mustWait {
+		<-f.done
+	}
+}
+
+// reloadInBackground runs one periodic reload and releases its waiters.
+func (s *SigningKeys) reloadInBackground(f *keyReloadFlight) {
+	defer func() {
+		s.mu.Lock()
+		s.flight = nil
+		s.mu.Unlock()
+		close(f.done)
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), signingKeyReadTimeout)
+	defer cancel()
+	if err := s.Reload(ctx); err != nil && s.logger != nil {
+		s.logger.ComponentWarn(logging.ComponentGeneral,
+			"could not read the published signing keys; keeping the ones already known", zap.Error(err))
+	}
+}
+
+// Reload reads every published key.
+func (s *SigningKeys) Reload(ctx context.Context) error {
+	if s == nil {
+		return nil
+	}
+	s.reloadMu.Lock()
+	defer s.reloadMu.Unlock()
+	// An attempt is recorded whatever its outcome, so a registry that does not
+	// answer costs one read per retry interval rather than one per
+	// verification. Only a read that succeeded makes the set fresh: a failed
+	// one leaves it as old as it was, so the staleness bound keeps counting.
+	s.mu.Lock()
+	s.lastAttempt = s.now()
+	s.mu.Unlock()
+
+	db := s.database()
+	if db == nil {
+		s.markLoaded()
+		return nil
+	}
+
+	res, err := s.readPublished(ctx, db)
+	if err != nil {
+		return fmt.Errorf("read the published signing keys: %w", err)
+	}
+
+	loaded := map[string]SigningKey{}
+	if res != nil {
+		for _, row := range res.Rows {
+			if len(row) < 4 {
+				continue
+			}
+			pub, err := decodePublicKey(getStringVal(row[2]))
+			if err != nil {
+				if s.logger != nil {
+					s.logger.ComponentWarn(logging.ComponentGeneral,
+						"a published signing key could not be read", zap.String("kid", getStringVal(row[0])), zap.Error(err))
+				}
+				continue
+			}
+			loaded[getStringVal(row[0])] = SigningKey{
+				KID:       getStringVal(row[0]),
+				Namespace: getStringVal(row[1]),
+				Public:    pub,
+				RetiredAt: retirementFrom(row[3]),
+			}
+		}
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// A key this gateway added locally — its own, and the legacy derived one —
+	// is kept even when it is not published, so a gateway can always verify
+	// what it just minted.
+	for kid, key := range s.keys {
+		if _, published := s.published[kid]; !published {
+			loaded[kid] = key
+		}
+	}
+	s.keys = loaded
+	s.loadedAt = s.now()
+	return nil
+}
+
+// errKeyReadStillRunning refuses a read while one abandoned at its deadline
+// has not returned, so a hung registry holds one goroutine, not one per retry.
+var errKeyReadStillRunning = errors.New("a read of the published keys that timed out has still not returned")
+
+// readPublished reads the published keys, giving up at ctx's deadline.
+//
+// The read runs in its own goroutine and is abandoned at the deadline, because
+// the registry client does not pass its context to the HTTP request: a hung
+// registry otherwise held reloadMu, and every verification waiting on the
+// reload, for as long as it hung. An abandoned read's result is discarded.
+func (s *SigningKeys) readPublished(ctx context.Context, db client.DatabaseClient) (*client.QueryResult, error) {
+	s.mu.Lock()
+	if s.readAbandoned {
+		s.mu.Unlock()
+		return nil, errKeyReadStillRunning
+	}
+	s.mu.Unlock()
+
+	type keyRead struct {
+		res *client.QueryResult
+		err error
+	}
+	done := make(chan keyRead, 1)
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		res, err := db.Query(client.WithInternalAuth(ctx),
+			`SELECT kid, namespace, public_key, retired_at FROM signing_keys`)
+		done <- keyRead{res, err}
+	}()
+	select {
+	case r := <-done:
+		return r.res, r.err
+	case <-ctx.Done():
+		s.mu.Lock()
+		s.readAbandoned = true
+		s.mu.Unlock()
+		go func() {
+			<-finished
+			s.mu.Lock()
+			s.readAbandoned = false
+			s.mu.Unlock()
+		}()
+		return nil, fmt.Errorf("the registry did not answer in time: %w", ctx.Err())
+	}
+}
+
+// markLoaded records a load that had nothing to read.
+func (s *SigningKeys) markLoaded() {
+	s.mu.Lock()
+	s.loadedAt = s.now()
+	s.mu.Unlock()
+}
+
+// retirementFrom reads a retired_at column.
+//
+// NULL is "not retired" and is the common case. A value that is present and
+// cannot be read is treated as retired at the epoch — refused — rather than as
+// live: a key somebody retired and a key nobody can parse are the same risk,
+// and the failure is visible immediately instead of a year later.
+func retirementFrom(cell any) time.Time {
+	at, present, readable := parseTimestamp(cell)
+	switch {
+	case !present:
+		return time.Time{}
+	case !readable:
+		return time.Unix(0, 0).UTC()
+	default:
+		return at
+	}
+}
+
+// Rotate generates a new signing key, persists it, publishes it, starts
+// signing with it, and leaves the outgoing one verifiable until the tokens it
+// signed have expired.
+//
+// Two kids are in flight for exactly that window. Retiring the old key
+// immediately would refuse every token already issued; never retiring it would
+// leave a key that can sign this namespace's tokens on disk for ever.
+//
+// The key is written before it is published. Published first, a failed write
+// left a key in the registry that every gateway trusts and nothing holds the
+// private half of — and the next boot would read the old key back, having
+// silently undone the rotation. A failed publish restores the key that is still
+// signing, so what is on disk is always what this gateway signs with.
+func (s *Service) Rotate(ctx context.Context) (SigningKey, error) {
+	if s.edSigningKey == nil {
+		return SigningKey{}, fmt.Errorf("this gateway does not sign tokens, so it has no key to rotate")
+	}
+	if s.keyStore == nil {
+		return SigningKey{}, fmt.Errorf("this gateway has nowhere to store a replacement signing key")
+	}
+	previous := s.edKeyID
+	current := s.edSigningKey
+
+	pub, priv, err := ed25519.GenerateKey(cryptorand.Reader)
+	if err != nil {
+		return SigningKey{}, fmt.Errorf("generate the replacement signing key: %w", err)
+	}
+
+	if err := s.keyStore.Store(priv); err != nil {
+		return SigningKey{}, err
+	}
+	next := SigningKey{KID: KeyIDFor(pub), Namespace: s.edKeyNamespace, Public: pub}
+	// Published before it signs anything: a token signed with a key the rest
+	// of the cluster has not seen is refused everywhere until the next reload.
+	if err := s.signingKeys.Publish(ctx, next); err != nil {
+		if rerr := s.keyStore.Store(current); rerr != nil {
+			return SigningKey{}, fmt.Errorf("%w; restoring the key still in use at %s also failed, so the next boot switches keys without retiring this one: %v",
+				err, s.keyStore.Where, rerr)
+		}
+		return SigningKey{}, err
+	}
+
+	s.SetEdDSAKey(priv, s.edKeyNamespace)
+
+	// Retired after the switch, so there is no moment where neither key is
+	// accepted.
+	if err := s.signingKeys.Retire(ctx, previous, time.Now().Add(AccessTokenLifetime)); err != nil {
+		return next, fmt.Errorf("the new key is live but the previous one was not retired: %w", err)
+	}
+	return next, nil
+}
+
+// KeyStore is where a gateway keeps the Ed25519 key the next boot loads.
+//
+// A rotation has to write exactly what the next boot reads. A tenant gateway
+// reads its own state directory (FileKeyStore). The index gateway reads a
+// systemd credential from a root-only tree and must never write its key into
+// its state directory, which a tenant gateway (the same uid) can read; its
+// store is built by the gateway package around the privileged helper.
+type KeyStore struct {
+	// Store replaces the stored key with priv.
+	Store func(priv ed25519.PrivateKey) error
+	// Where names the location, for an operator reading an error.
+	Where string
+}
+
+// FileKeyStore keeps the key in the gateway's state directory.
+func FileKeyStore(stateDir string) KeyStore {
+	return KeyStore{
+		Store: func(priv ed25519.PrivateKey) error { return PersistSigningKey(stateDir, priv) },
+		Where: SigningKeyPath(stateDir),
+	}
+}
+
+// EdDSAKeyFileName is a gateway's own signing key, inside its state directory.
+// A rotation has to overwrite exactly the file the next boot will read, so the
+// loader and the rotation both go through SigningKeyPath.
+const EdDSAKeyFileName = constants.GatewayEdDSAKeyFileName
+
+// signingKeyFileMode keeps the private key readable by this gateway alone.
+const signingKeyFileMode = 0o600
+
+// SigningKeyPath is where the gateway with this state directory keeps its key.
+func SigningKeyPath(stateDir string) string {
+	return filepath.Join(stateDir, EdDSAKeyFileName)
+}
+
+// PersistSigningKey writes a key where only this gateway can read it.
+//
+// Written to a temporary file and renamed into place, so a failure part-way
+// leaves the previous key intact rather than a truncated one the next boot
+// refuses to read.
+func PersistSigningKey(stateDir string, priv ed25519.PrivateKey) error {
+	if stateDir == "" {
+		return fmt.Errorf("this gateway has no state directory to write its signing key to")
+	}
+	pkcs8Bytes, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		return fmt.Errorf("marshal the signing key: %w", err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: pkcs8Bytes})
+
+	path := SigningKeyPath(stateDir)
+	tmp, err := os.CreateTemp(stateDir, EdDSAKeyFileName+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("write the signing key into %s: %w", stateDir, err)
+	}
+	tmpPath := tmp.Name()
+	if err := writeKeyFile(tmp, keyPEM); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("write the signing key %s: %w", tmpPath, err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("install the signing key at %s: %w", path, err)
+	}
+	return nil
+}
+
+// writeKeyFile restricts, fills, syncs and closes a freshly created key file.
+func writeKeyFile(f *os.File, keyPEM []byte) error {
+	if err := f.Chmod(signingKeyFileMode); err != nil {
+		f.Close()
+		return err
+	}
+	if _, err := f.Write(keyPEM); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
+}

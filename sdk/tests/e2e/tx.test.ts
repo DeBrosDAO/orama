@@ -1,10 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { createTestClient, skipIfNoGateway, generateTableName } from "./setup";
+import { createTestClient, hasGateway, generateTableName } from "./setup";
 
-describe("Transactions", () => {
-  if (skipIfNoGateway()) {
-    console.log("Skipping transaction tests");
-  }
+describe.skipIf(!hasGateway())("Transactions", () => {
 
   let tableName: string;
 

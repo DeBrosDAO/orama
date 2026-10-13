@@ -1,0 +1,30 @@
+direction: down
+
+idx: "Index gateway (ClusterManager)" {
+  rec: "ReconcileHostTURN\n(enable, disable, 60 s sweep,\nreconcile-host-turn request)"
+  desired: "desiredHostTURNTenants:\nevery namespace on this node with a\nTURN allocation + WebRTC config + secret"
+  desired -> rec
+}
+
+files: "On this host" {
+  yaml: "data/turn/turn.yaml\n0600, written atomically" {shape: cylinder}
+  served: "/run/orama-turn/served-tenants.json\nnamespaces + sha256 of loaded yaml" {shape: cylinder}
+  wild: "data/tls/wildcard.crt, .key\n(exported by the cluster gateway)" {shape: cylinder}
+}
+
+turn: "orama-turn.service (one process per host)" {
+  tick: "watchTenants\nread + sha256 every 2 s"
+  set: "tenantSet snapshot\nnamespace -> own HMAC secret"
+  auth: "authHandler\nusername EXPIRY:NS ->\nsecret of NS only"
+  cert: "certReloader\nmtime poll every 60 s"
+  relay: "pion relay\nUDP 49152-65535, one range\nfor all tenants"
+  tick -> set: "swap on change;\nkeep old set on error"
+  set -> auth
+}
+
+idx.rec -> files.yaml: "write if bytes changed;\nstart unit only if not running"
+files.yaml -> turn.tick
+turn.tick -> files.served: "after each successful load"
+files.served -> idx.rec: "ConfirmHostTURN waits until\ndigest matches and NS listed"
+files.wild -> turn.cert
+turn.auth -> turn.relay: "allocation allowed"

@@ -1,0 +1,16 @@
+syntax = "proto3";
+package orama.emission.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/emission/types";
+
+import "gogoproto/gogo.proto";
+import "orama/emission/v1/emission.proto";
+
+// GenesisState is x/emission's genesis state. On a normal genesis,
+// epoch_state is the zero state (epoch 1, nothing minted) and ceilings is
+// empty: genesis supply is always zero.
+message GenesisState {
+  Params params = 1 [(gogoproto.nullable) = false];
+  EpochState epoch_state = 2 [(gogoproto.nullable) = false];
+  repeated CeilingRecord ceilings = 3 [(gogoproto.nullable) = false];
+}

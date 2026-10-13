@@ -1,0 +1,29 @@
+direction: down
+
+req: "GET /v1/proxy/tunnel or /v1/proxy/relay\n(WebSocket upgrade)" {shape: oval}
+
+t: "Tunnel (authenticated)" {
+  a1: "proxy grant + wallet JWT\n(scopeMiddleware); API-key subject refused"
+  a2: "parseTunnelTarget: no literal reserved IP,\nno localhost, port 80 or 443"
+  a3: "Tor SOCKS port accepting?\nelse 503"
+  a4: "tunnelLimiter: 24 per user, 512 per node\nelse 429"
+  a5: "dial through Tor BEFORE upgrade\nisolation key = HMAC(secret, subject)[:16 hex]\n30 s, else 502"
+  a6: "upgrade, splice: 256 MiB each way,\n30 min, 2 min idle"
+  a1 -> a2 -> a3 -> a4 -> a5 -> a6
+}
+
+r: "Relay (no credential)" {
+  b1: "per-address rate: 30 per minute, burst 10\n(rate_limiter.go)"
+  b2: "normalizeRelayHost: LDH ASCII, no IP literal,\nunder relay_allowed_suffixes, port 443\nelse 400 RELAY_DESTINATION_NOT_ALLOWED"
+  b3: "Tor SOCKS port accepting?\nelse 503 RELAY_UNAVAILABLE"
+  b4: "pool 128 streams; 4 per address\nelse 429 + Retry-After 60"
+  b5: "dial BEFORE upgrade; random 16-byte key per stream\n(?circuit=session: one per address)"
+  b6: "upgrade, splice quietly: 64 MiB each way,\n5 min, no log, no request_logs row"
+  b1 -> b2 -> b3 -> b4 -> b5 -> b6
+}
+
+req -> t.a1
+req -> r.b1
+t.a6 -> tor: "SOCKS5"
+r.b6 -> tor: "SOCKS5"
+tor: "orama-namespace-tor@index" {shape: hexagon}

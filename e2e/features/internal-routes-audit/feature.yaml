@@ -1,0 +1,47 @@
+# Every node-to-node route that no client may reach, attacked with nothing
+# that could succeed: from the internet through every node's public name
+# with no credential, a namespace owner's session, an admin API key and
+# spoofed forwarding (X-Forwarded-For, X-Real-IP, Forwarded), X-Internal-Auth-*
+# hop, X-Orama-* stamp and removed-constant headers — each route answers
+# exactly its refusal (spawn 401, the node's own routes 404, telemetry 404),
+# every other method is 4xx and on the node's own
+# routes 404, oversized and malformed bodies are 4xx; from every node's shell
+# over its loopback and over the overlay to another node, with no MAC, stamp
+# or secret and with forged ones, each route refuses (401/403/404 per
+# handler), and oversized (streamed on stdin) and malformed bodies are 4xx;
+# /v1/operator/node/register refuses nobody (401), a plain namespace admin
+# and its admin key (403 NOT_AN_OPERATOR), a runtime member and a lobby
+# session (403 INSUFFICIENT_SCOPE), spoofed headers or not. Every body is
+# invalid by construction (no namespace, no node, a node nobody holds, a
+# wrong cluster secret) and every test that probes ends by requiring the
+# cluster converged. The removed /v1/internal/namespace/webrtc/* routes
+# answer like a path that never existed (404 to a credential), with or
+# without their old constant. The removed /v1/internal/wg/peer, /peers and
+# /peer/remove routes answer 404 over the overlay, for every method.
+id: internal-routes-audit
+title: Node-to-node routes closed to clients
+area: security
+subtasks: [2844]
+stage: 7
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  routes:
+    - /v1/internal/namespace/spawn
+    - /v1/internal/node/enrol-key
+    - /v1/internal/node/heartbeat
+    - /v1/internal/node/register
+    - /v1/internal/telemetry
+    - /v1/operator/node/register
+  claims:
+    - "docs/whitepaper/technical-reference/appendices/i-api-surface.md#internal-node-to-node: node-to-node routes are never reachable by a client, whatever credential or header it presents"
+    - "docs/whitepaper/technical-reference/appendices/i-api-surface.md#internal-node-to-node: /v1/internal/telemetry is 404 to anything but a coordination MAC from the overlay"
+    - "docs/whitepaper/technical-reference/vol1/15-inter-node-trust.md#the-node-stamp: being on the host or on the mesh is not a credential; a forged coordination MAC, node stamp or cluster secret is refused"
+    - "docs/whitepaper/technical-reference/vol1/15-inter-node-trust.md#the-node-stamp: the node's own routes refuse (404) any caller that is not a process on the host or a node on the overlay"
+    - "docs/whitepaper/technical-reference/vol1/15-inter-node-trust.md#the-node-stamp: the three /v1/internal/namespace/webrtc/* endpoints were removed"
+    - "docs/whitepaper/technical-reference/vol1/15-inter-node-trust.md#the-node-stamp: the /v1/internal/wg/peer, /peers and /peer/remove endpoints were removed and answer like a path that does not exist"
+    - "docs/whitepaper/technical-reference/vol1/15-inter-node-trust.md#the-node-stamp: a node no join admitted cannot register itself, whatever key it enrolled and signs with"
+    - "docs/whitepaper/technical-reference/vol1/14-authorization.md#operators: /v1/operator/node/register refuses a namespace admin who is not on the operator list"

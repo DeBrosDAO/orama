@@ -1,0 +1,99 @@
+syntax = "proto3";
+package orama.fees.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/fees/types";
+
+import "google/api/annotations.proto";
+import "gogoproto/gogo.proto";
+import "orama/fees/v1/fees.proto";
+
+// Query defines the gRPC querier service for x/fees. There is no Msg
+// service (see Params): fees are paid through the ante handler, earnings are
+// credited by other modules' keepers, and deposits are locked/released by
+// their owning module's keeper - never by a user-signed x/fees message.
+service Query {
+  rpc Params(QueryParamsRequest) returns (QueryParamsResponse) {
+    option (google.api.http).get = "/orama/fees/v1/params";
+  }
+  rpc BaseFee(QueryBaseFeeRequest) returns (QueryBaseFeeResponse) {
+    option (google.api.http).get = "/orama/fees/v1/base-fee";
+  }
+  rpc Earnings(QueryEarningsRequest) returns (QueryEarningsResponse) {
+    option (google.api.http).get = "/orama/fees/v1/earnings/{address}";
+  }
+  rpc FeeBalance(QueryFeeBalanceRequest) returns (QueryFeeBalanceResponse) {
+    option (google.api.http).get = "/orama/fees/v1/fee-balance/{address}";
+  }
+  rpc Deposit(QueryDepositRequest) returns (QueryDepositResponse) {
+    option (google.api.http).get = "/orama/fees/v1/deposit";
+  }
+  rpc Invariants(QueryInvariantsRequest) returns (QueryInvariantsResponse) {
+    option (google.api.http).get = "/orama/fees/v1/invariants";
+  }
+}
+
+message QueryParamsRequest {}
+
+message QueryParamsResponse {
+  Params params = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryBaseFeeRequest {}
+
+message QueryBaseFeeResponse {
+  string base_fee = 1 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+}
+
+message QueryEarningsRequest {
+  string address = 1;
+}
+
+message QueryEarningsResponse {
+  string balance = 1 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+}
+
+message QueryFeeBalanceRequest {
+  string address = 1;
+}
+
+message QueryFeeBalanceResponse {
+  string balance = 1 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+}
+
+message QueryDepositRequest {
+  string id = 1;
+}
+
+message QueryDepositResponse {
+  Deposit deposit = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryInvariantsRequest {}
+
+message QueryInvariantsResponse {
+  bool earnings_match_module = 1;
+  bool deposits_match_module = 2;
+  bool fees_balance = 3;
+  string detail = 4;
+  string cumulative_collected = 5 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  string cumulative_burned = 6 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  string cumulative_distributed = 7 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+}

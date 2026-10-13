@@ -107,7 +107,7 @@ func (r *Reporter) sendReport() {
 	// Send to local gateway (which forwards to the cluster)
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Post(
-		"http://127.0.0.1:6001"+GatewayHealthEndpoint,
+		"http://127.0.0.1:10104"+GatewayHealthEndpoint,
 		"application/json",
 		bytes.NewReader(body),
 	)

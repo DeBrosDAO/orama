@@ -1,0 +1,39 @@
+direction: right
+
+oramad: "oramad (every validator)" {
+  blocks: "Block store\n(pruned below the retain height)" {shape: cylinder}
+  archive: "x/archive\nranges, candidates, deal ids,\nlast archived height" {shape: cylinder}
+  storage: "x/storage\nARCHIVE deals" {shape: cylinder}
+  commit: "Commit\nretain height = min(base,\nmin(tip - window, last archived))"
+  archive -> commit: "RetainHeight"
+  commit -> blocks: "prune below"
+  archive -> storage: "CreateArchiveDeal(piece)"
+}
+
+arch: "orama-global archiver (3 or more operators)\nARCHIVER-bonded node, own hot key" {
+  pack: "Pack range into\nORBH bundle"
+  files: "bundles/START-END.orbh\ncursor, deals/, monitor.json" {shape: cylinder}
+  pack -> files
+}
+
+prov: "Storage providers\n(x/storage assigns 3 per range)" {shape: hexagon}
+kubo: "Public Kubo\n(ARCHIVE is a public class)"
+
+arch.pack -> oramad.blocks: "RPC: one block per height" 
+arch.pack -> oramad.archive: "MsgAttest (tuple)"
+arch.pack -> oramad.archive: "MsgCreateArchiveDeal,\nMsgAttachReplicas"
+arch.files -> prov: "POST /pieces/ROOT"
+prov -> kubo: "pin"
+
+idx: "orama-global indexer\n127.0.0.1:31015" {
+  follow: "Follower\nBlock + BlockResults per height"
+  db: "Pebble index" {shape: cylinder}
+  api: "Read API /index/v1/..."
+  follow -> db
+  db -> api
+}
+oramad.blocks -> idx.follow: "RPC (loopback)"
+gw: "Gateway\n/v1/chain/index/..." {shape: hexagon}
+idx.api -> gw: "GET, validated routes only"
+reader: "Explorer, wallets, SDKs" {shape: person}
+gw -> reader

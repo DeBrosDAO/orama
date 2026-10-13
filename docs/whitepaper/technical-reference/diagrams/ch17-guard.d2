@@ -1,0 +1,21 @@
+direction: down
+
+in: "statement text" {shape: parallelogram}
+tok: "tokenize: words, quoted identifiers,\nstring literals, ; and .\ncomments dropped"
+trig: "CREATE [TEMP] TRIGGER?"
+semi: "content after a ;?"
+first: "first word ATTACH, DETACH,\nPRAGMA, VACUUM?\n(first word only: EXPLAIN hides\nthe word behind it)"
+name: "any word, quoted name or\nstring literal equals a reserved name,\nsqlite_dbpage or dbstat?"
+ok: "allowed: statement goes to RQLite"
+no: "ErrNotAllowed\n403 SQL_NOT_ALLOWED"
+
+in -> tok
+tok -> trig
+trig -> no: "yes"
+trig -> semi: "no"
+semi -> no: "yes"
+semi -> first: "no"
+first -> no: "yes (Check)"
+first -> name: "no"
+name -> no: "yes"
+name -> ok: "no"

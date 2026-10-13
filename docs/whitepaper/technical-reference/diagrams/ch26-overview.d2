@@ -1,0 +1,24 @@
+direction: right
+
+client: "Client\n(browser, app, SDK)" {shape: person}
+
+node: "Node with sni_router.enabled" {
+  router: "orama-sni-router\n(orama-namespace-sni-router@index)\nTCP :443, peeks the ClientHello SNI,\nnever terminates TLS"
+  caddy: "Caddy\n127.0.0.1:8443 (https_port)\nterminates TLS for HTTPS"
+  turn: "orama-turn\n127.0.0.1:5349 TURNS\nterminates TLS, HMAC auth per tenant"
+  gw: "index gateway\n:10104"
+  routes: "route table\n(in memory, swapped atomically)" {shape: cylinder}
+  cfg: "sni-router.yaml\nlisten, fallback, timeouts" {shape: cylinder}
+  disc: "TURN route discovery\nscans data/namespaces/*/configs/turn-*.yaml\nevery 30 s"
+  shared: "data/turn/turn.yaml\nshared TURN config (tenants:)" {shape: cylinder}
+  router -> routes: "Pick(sni)"
+  cfg -> routes: "fallback, static routes"
+  disc -> routes: "Replace()"
+  caddy -> gw: "reverse_proxy"
+  router -> caddy: "fallback: every SNI\nwithout a route\n(raw bytes)"
+  router -> turn: "cdn-hash.base and\nturn.ns-ns.base\n(raw bytes)"
+  shared -> turn: "tenants, stealth certs"
+}
+
+client -> node.router: "TLS ClientHello\n(SNI: api host)"
+client -> node.router: "TLS ClientHello\n(SNI: cdn-hash.base)"

@@ -14,9 +14,8 @@ import (
 // Enabling stealth for a namespace whose WebRTC is already running:
 //  1. creates DNS A records for the neutral stealth host -> the TURN nodes,
 //  2. flips namespace_webrtc_config.stealth_enabled,
-//  3. re-spawns the namespace's TURN servers with the stealth domain (the
-//     spawner provisions a Let's Encrypt cert for it — hard-fail, never
-//     self-signed),
+//  3. re-spawns the namespace's TURN servers with the stealth domain (served
+//     with the *.<base> wildcard cert — hard-fail, never self-signed),
 //  4. rewrites cluster-state.json on every node (so DB-less restores keep
 //     the stealth domain), and
 //  5. restarts the namespace gateways so turn.credentials advertises
@@ -174,37 +173,37 @@ func (cm *ClusterManager) respawnTURNWithStealth(
 	turnBlocks []WebRTCPortBlock,
 	turnSecret, stealthDomain string,
 ) error {
-	turnDomain := fmt.Sprintf("turn.ns-%s.%s", cluster.NamespaceName, cm.baseDomain)
+	// Validate the allocation against live membership before claiming success:
+	// a TURN block naming a node that is no longer in the cluster means the
+	// allocation is stale, and enabling stealth on it would report a
+	// censorship-resistant path that nothing serves.
 	for _, block := range turnBlocks {
-		var node *clusterNodeInfo
+		found := false
 		for i := range clusterNodes {
 			if clusterNodes[i].NodeID == block.NodeID {
-				node = &clusterNodes[i]
+				found = true
 				break
 			}
 		}
-		if node == nil {
+		if !found {
 			return fmt.Errorf("TURN node %s not found in cluster nodes", block.NodeID)
 		}
-
-		cm.stopTURNOnNode(ctx, node.NodeID, node.InternalIP, cluster.NamespaceName)
-		turnCfg := TURNInstanceConfig{
-			Namespace:       cluster.NamespaceName,
-			NodeID:          node.NodeID,
-			ListenAddr:      fmt.Sprintf("0.0.0.0:%d", block.TURNListenPort),
-			TURNSListenAddr: fmt.Sprintf("0.0.0.0:%d", block.TURNTLSPort),
-			PublicIP:        node.PublicIP,
-			Realm:           cm.baseDomain,
-			AuthSecret:      turnSecret,
-			RelayPortStart:  block.TURNRelayPortStart,
-			RelayPortEnd:    block.TURNRelayPortEnd,
-			TURNDomain:      turnDomain,
-			StealthDomain:   stealthDomain,
-		}
-		if err := cm.spawnTURNOnNode(ctx, *node, cluster.NamespaceName, turnCfg); err != nil {
-			return fmt.Errorf("failed to re-spawn TURN on node %s: %w", node.NodeID, err)
-		}
 	}
+
+	// Since bugboard #283 part 2 TURN is host-level: enabling stealth adds this
+	// namespace's stealth hostname and cert to its hosts' shared TURN config,
+	// which each host applies from its own reconcile.
+	//
+	// The stop-then-respawn this used to do is now actively wrong — it would tear
+	// down a server that is also relaying for OTHER namespaces, dropping their
+	// live calls to enable stealth for this one. The shared server picks up a new
+	// stealth cert by reloading its tenant set, with no restart at all.
+	if _, err := cm.ReconcileHostTURN(ctx); err != nil {
+		return fmt.Errorf("apply the stealth change to this host's shared TURN server: %w", err)
+	}
+	cm.logger.Info("Stealth TURNS enabled; hosts apply it on their next reconcile",
+		zap.String("namespace", cluster.NamespaceName),
+		zap.String("stealth_domain", stealthDomain))
 	return nil
 }
 

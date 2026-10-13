@@ -1,0 +1,67 @@
+# Serverless functions end to end with TinyGo fixtures (testdata/svcfn, and
+# testdata/badimport for an unknown host module) deployed by the operator's
+# CLI: init/build/deploy/list/get/invoke/logs/versions/disable/enable/delete,
+# secrets and triggers; invocation access (private, public, keys, name@N,
+# /v1/invoke, another namespace, the main gateway), limits (timeout -> 429,
+# memory, per-namespace concurrency, server-side range), nested invoke, the
+# caller context and device id, host functions (http_fetch SSRF matrix,
+# cache atomics and TTL, the SQL guard, batch limits and transactions,
+# ephemeral state limits, TTL and disconnect), the socket registry, cron
+# fired once per slot across gateways, and the pubsub depth limit.
+# Needs tinygo on the runner's PATH (otherwise not applicable, not covered).
+# anon_fetch with Tor down is in anon-tor-chaos.
+id: serverless
+title: Serverless functions
+area: serverless
+subtasks: [2837]
+stage: 5
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  cli:
+    - orama function
+    - orama function build
+    - orama function delete
+    - orama function deploy
+    - orama function disable
+    - orama function enable
+    - orama function get
+    - orama function init
+    - orama function invoke
+    - orama function list
+    - orama function logs
+    - orama function secrets
+    - orama function secrets delete
+    - orama function secrets list
+    - orama function secrets set
+    - orama function triggers
+    - orama function triggers add
+    - orama function triggers delete
+    - orama function triggers list
+    - orama function versions
+  routes:
+    - /v1/functions
+    - /v1/functions/
+    - /v1/invoke/
+    - /v1/serverless/ws/connections
+    - /v1/serverless/ws/connections/
+  claims:
+    - "website/src/docs/developer/functions.mdx#http-api-reference: a page under the base domain calls a public function through its namespace gateway and the answer carries one Access-Control-Allow-Origin, the page's origin, Vary: Origin and the platform's Strict-Transport-Security"
+    - "website/src/docs/developer/functions.mdx#functionyaml: memory 1-256 MB, timeout 1-300 s; a direct invoke past its timeout is 429 RATE_LIMITED"
+    - "website/src/docs/developer/functions.mdx#functionyaml: a private function needs a signed-in wallet or the invoke grant; a storage-only key is refused"
+    - "website/src/docs/developer/functions.mdx#versioning: name@N invokes version N"
+    - "website/src/docs/developer/functions.mdx#http-api-reference: management acts on the credential's namespace; another namespace is refused"
+    - "website/src/docs/developer/functions.mdx#host-functions-api: an import from a module other than env, host or orama fails to instantiate"
+    - "docs/whitepaper/technical-reference/vol1/18-cache.md#what-each-attacker-can-do: http_fetch refuses loopback, RFC 1918, link-local, CGNAT and wrapped IPv4, by name and by redirect"
+    - "website/src/docs/developer/functions.mdx#database-rqlite: ATTACH, PRAGMA, VACUUM, CREATE TRIGGER, two statements and reserved tables in every quoting are refused"
+    - "website/src/docs/developer/functions.mdx#database-transactions: 100 statements per batch (TOO_MANY_STATEMENTS at 101), 10,000 rows per query op, rollback on a failed op"
+    - "website/src/docs/developer/functions.mdx#cache-olric-distributed-cache: cache_incr is atomic (concurrent calls return 1..n once each, a refused call is reported as one); ttl 0 never expires, negative is refused; cache_delete of a missing key is 1"
+    - "website/src/docs/developer/functions.mdx#ephemeral-state-ws-subscribe-tracked: 16 KiB payload, 256 keys per client, TTL backstop, cleared on disconnect"
+    - "website/src/docs/developer/functions.mdx#managing-secrets: values are never listed; get_secret decrypts"
+    - "website/src/docs/developer/functions.mdx#depth-limiting: pubsub trigger chains stop at depth 5"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-function-triggers: cron triggers fire once per scheduled run across the namespace's gateways"
+    - "website/src/docs/developer/functions.mdx#context: get_caller_device_id is the session's device thumbprint"
+    - "docs/whitepaper/technical-reference/vol1/18-cache.md#what-each-attacker-can-do: WASM concurrency has a per-namespace slot"

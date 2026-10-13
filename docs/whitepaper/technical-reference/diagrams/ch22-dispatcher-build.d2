@@ -1,0 +1,45 @@
+direction: down
+
+start: "dispatcherFor(namespace): cache miss or entry older than 30 s"
+defaults: "start from gateway defaults\n(node YAML ntfy_base_url only;\nthe two token defaults are never set)"
+row: "namespace_push_config row?" {shape: diamond}
+literal: "stored ntfy_base_url is a\nliteral internal IP?" {shape: diamond}
+drop: "log, ignore the override"
+tenant: "base URL = row value\nNtfyBaseURLTenant = true"
+fields: "auth token and expo token\noverride when non-empty"
+factory: "ProviderFactory (gateway/dependencies.go)\ncredential-store errors are ignored"
+ntfycred: "ntfy credentials row\nparses and validates?" {shape: diamond}
+ntfyover: "base_url non-empty: use it, guard on\nauth_token non-empty: use it"
+ntfyadd: "base URL set:\nregister ntfy provider"
+fanout: "unguarded and base URL equals\nthe gateway default?" {shape: diamond}
+attach: "attach fan-out resolver and signer"
+expo: "expo token set:\nregister expo"
+apns: "apns credentials row\nparses, p8 key loads?" {shape: diamond}
+apnsadd: "register apns (alert)\nand apns_voip (PushKit)"
+empty: "no provider registered?" {shape: diamond}
+err: "ErrPushNotConfigured"
+done: "new PushDispatcher, cached"
+
+start -> defaults
+defaults -> row
+row -> literal: "yes"
+row -> factory: "no"
+literal -> drop: "yes"
+literal -> tenant: "no"
+drop -> fields
+tenant -> fields
+fields -> factory
+factory -> ntfycred
+ntfycred -> ntfyover: "yes"
+ntfycred -> ntfyadd: "no or absent"
+ntfyover -> ntfyadd
+ntfyadd -> fanout
+fanout -> attach: "yes"
+fanout -> expo: "no"
+attach -> expo
+expo -> apns
+apns -> apnsadd: "yes"
+apns -> empty: "no (logged if a row exists)"
+apnsadd -> empty
+empty -> err: "yes"
+empty -> done: "no"

@@ -1,0 +1,95 @@
+syntax = "proto3";
+package orama.houses.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/houses/types";
+
+import "google/api/annotations.proto";
+import "gogoproto/gogo.proto";
+import "orama/houses/v1/houses.proto";
+
+// Query is the gRPC querier for x/houses.
+service Query {
+  rpc Params(QueryParamsRequest) returns (QueryParamsResponse) {
+    option (google.api.http).get = "/orama/houses/v1/params";
+  }
+  rpc Proposal(QueryProposalRequest) returns (QueryProposalResponse) {
+    option (google.api.http).get = "/orama/houses/v1/proposal/{proposal_id}";
+  }
+  rpc Vote(QueryVoteRequest) returns (QueryVoteResponse) {
+    option (google.api.http).get = "/orama/houses/v1/vote/{proposal_id}/{voter}";
+  }
+  rpc HouseBond(QueryHouseBondRequest) returns (QueryHouseBondResponse) {
+    option (google.api.http).get = "/orama/houses/v1/house-bond/{address}";
+  }
+  rpc Tiers(QueryTiersRequest) returns (QueryTiersResponse) {
+    option (google.api.http).get = "/orama/houses/v1/tiers";
+  }
+  rpc Enacted(QueryEnactedRequest) returns (QueryEnactedResponse) {
+    option (google.api.http).get = "/orama/houses/v1/enacted";
+  }
+  rpc Invariants(QueryInvariantsRequest) returns (QueryInvariantsResponse) {
+    option (google.api.http).get = "/orama/houses/v1/invariants";
+  }
+}
+
+message QueryParamsRequest {}
+
+message QueryParamsResponse {
+  Params params = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryProposalRequest {
+  uint64 proposal_id = 1;
+}
+
+message QueryProposalResponse {
+  Proposal proposal = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryVoteRequest {
+  uint64 proposal_id = 1;
+  string voter = 2;
+}
+
+message QueryVoteResponse {
+  Vote vote = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryHouseBondRequest {
+  string address = 1;
+}
+
+message QueryHouseBondResponse {
+  HouseBond bond = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryTiersRequest {}
+
+message QueryTiersResponse {
+  bool parameter_open = 1;
+  bool structural_open = 2;
+  string lambda = 3 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+  string bonded_stake = 4 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  uint64 eligible_operators = 5;
+  uint64 distinct_prefix16 = 6;
+  uint64 distinct_asn = 7;
+}
+
+message QueryEnactedRequest {}
+
+message QueryEnactedResponse {
+  Enacted enacted = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryInvariantsRequest {}
+
+message QueryInvariantsResponse {
+  bool bonds_match_module = 1;
+  string detail = 2;
+}

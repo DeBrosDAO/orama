@@ -1,0 +1,26 @@
+shape: sequence_diagram
+
+cli: orama CLI (wallet)
+tor: own tor client (onionnet)
+net: Orama Tor relays
+os: Validator onion service (tor)
+gate: txgate
+api: Chain REST API
+
+cli -> cli: "tornet.Load: strict parse, private must be true"
+cli -> cli: "pick validator onion at random (or --onion)"
+cli -> tor: "onionnet.Start: ClientTorrc, wait Bootstrapped 100% (3 min)"
+tor -> net: "fetch consensus from the file's authorities only"
+cli -> cli: "chainonion.NewClient: random 16-byte isolation credential"
+cli -> tor: "GET /cosmos/auth/v1beta1/accounts/addr (SOCKS5h, user = password = credential)"
+tor -> os: "rendezvous circuit"
+os -> gate: "HTTP 127.0.0.1:31022"
+gate -> gate: "route allowlist, token bucket 20/s burst 40, 16 in flight"
+gate -> api: "GET same path, content type only"
+api -> cli: "account (relayed back, no caller headers cross)"
+cli -> cli: "sign (RootWallet)"
+cli -> tor: "POST /cosmos/tx/v1beta1/txs (JSON, at most 512 KiB), same circuit"
+tor -> gate: "via onion service"
+gate -> api: "POST"
+api -> cli: "tx response"
+cli -> tor: "stop tor (--onion-network); any failure: transaction not sent, no clearnet retry"

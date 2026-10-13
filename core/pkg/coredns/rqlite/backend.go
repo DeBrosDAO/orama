@@ -12,6 +12,9 @@ import (
 	"go.uber.org/zap"
 )
 
+// refreshTimeout bounds one rebuild of the ancestor set.
+const refreshTimeout = 30 * time.Second
+
 // DNSRecord represents a DNS record from RQLite
 type DNSRecord struct {
 	FQDN        string
@@ -29,6 +32,7 @@ type Backend struct {
 	refreshRate time.Duration
 	mu          sync.RWMutex
 	healthy     bool
+	below       ancestorSet
 }
 
 // NewBackend creates a new RQLite backend.
@@ -50,6 +54,9 @@ func NewBackend(dsn string, refreshRate time.Duration, logger *zap.Logger, usern
 	// Test connection
 	if err := b.ping(); err != nil {
 		return nil, fmt.Errorf("failed to ping RQLite: %w", err)
+	}
+	if err := b.refreshAncestors(context.Background()); err != nil {
+		return nil, err
 	}
 
 	b.healthy = true
@@ -85,39 +92,97 @@ func (b *Backend) Query(ctx context.Context, fqdn string, qtype uint16) ([]*DNSR
 
 	records := make([]*DNSRecord, 0)
 	for _, row := range rows {
-		if len(row) < 4 {
-			continue
+		if record := b.recordFromRow(row); record != nil {
+			records = append(records, record)
+			b.below.learn(strings.ToLower(record.FQDN))
 		}
-
-		fqdnVal, _ := row[0].(string)
-		typeVal, _ := row[1].(string)
-		valueVal, _ := row[2].(string)
-		ttlVal, _ := row[3].(float64)
-
-		// Parse the value based on record type
-		parsedValue, err := b.parseValue(typeVal, valueVal)
-		if err != nil {
-			b.logger.Warn("Failed to parse record value",
-				zap.String("fqdn", fqdnVal),
-				zap.String("type", typeVal),
-				zap.String("value", valueVal),
-				zap.Error(err),
-			)
-			continue
-		}
-
-		record := &DNSRecord{
-			FQDN:        fqdnVal,
-			Type:        stringToQType(typeVal),
-			Value:       valueVal,
-			TTL:         int(ttlVal),
-			ParsedValue: parsedValue,
-		}
-
-		records = append(records, record)
 	}
 
 	return records, nil
+}
+
+// recordFromRow is the record a dns_records row (fqdn, record_type, value,
+// ttl) holds, or nil for a row that is short or whose value does not parse.
+func (b *Backend) recordFromRow(row []interface{}) *DNSRecord {
+	if len(row) < 4 {
+		return nil
+	}
+
+	fqdnVal, _ := row[0].(string)
+	typeVal, _ := row[1].(string)
+	valueVal, _ := row[2].(string)
+	ttlVal, _ := row[3].(float64)
+
+	// Parse the value based on record type
+	parsedValue, err := b.parseValue(typeVal, valueVal)
+	if err != nil {
+		b.logger.Warn("Failed to parse record value",
+			zap.String("fqdn", fqdnVal),
+			zap.String("type", typeVal),
+			zap.String("value", valueVal),
+			zap.Error(err),
+		)
+		return nil
+	}
+
+	return &DNSRecord{
+		FQDN:        fqdnVal,
+		Type:        stringToQType(typeVal),
+		Value:       valueVal,
+		TTL:         int(ttlVal),
+		ParsedValue: parsedValue,
+	}
+}
+
+// Ownership is what a set of names owns in the zone, as Owners reads it.
+type Ownership struct {
+	// Records are the active records of the type asked that each name holds
+	// (keyed by lower-cased name).
+	Records map[string][]*DNSRecord
+	// Owned are the names that hold an active record of any type.
+	Owned map[string]bool
+}
+
+// Owners reads, in ONE indexed query, what each of fqdns owns. A name that owns
+// a record of another type is NODATA for qtype, not NXDOMAIN, and is not
+// answered from a wildcard (RFC 4592). One query for the whole list keeps the
+// cost of a miss constant however many wildcard candidates the name has.
+func (b *Backend) Owners(ctx context.Context, fqdns []string, qtype uint16) (Ownership, error) {
+	own := Ownership{Records: map[string][]*DNSRecord{}, Owned: map[string]bool{}}
+	if len(fqdns) == 0 {
+		return own, nil
+	}
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	args := make([]interface{}, len(fqdns))
+	for i, fqdn := range fqdns {
+		args[i] = dns.Fqdn(strings.ToLower(fqdn))
+	}
+	query := `SELECT fqdn, record_type, value, ttl FROM dns_records WHERE fqdn IN (?` +
+		strings.Repeat(",?", len(fqdns)-1) + `) AND is_active = TRUE`
+	rows, err := b.client.Query(ctx, query, args...)
+	if err != nil {
+		return Ownership{}, fmt.Errorf("query failed: %w", err)
+	}
+
+	wantType := qTypeToString(qtype)
+	for _, row := range rows {
+		if len(row) < 2 {
+			continue
+		}
+		fqdn, _ := row[0].(string)
+		typeVal, _ := row[1].(string)
+		fqdn = strings.ToLower(fqdn)
+		own.Owned[fqdn] = true
+		b.below.learn(fqdn)
+		if typeVal == wantType {
+			if record := b.recordFromRow(row); record != nil {
+				own.Records[fqdn] = append(own.Records[fqdn], record)
+			}
+		}
+	}
+	return own, nil
 }
 
 // parseValue parses a DNS record value based on its type
@@ -148,7 +213,7 @@ func (b *Backend) parseValue(recordType, value string) (interface{}, error) {
 
 	case "SOA":
 		// SOA format: "mname rname serial refresh retry expire minimum"
-		// Example: "ns1.dbrs.space. admin.dbrs.space. 2026012401 3600 1800 604800 300"
+		// Example: "ns1.example.com. admin.example.com. 2026012401 3600 1800 604800 300"
 		return b.parseSOA(value)
 
 	default:
@@ -219,7 +284,13 @@ func (b *Backend) healthCheck() {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		if err := b.ping(); err != nil {
+		err := b.ping()
+		if err == nil {
+			ctx, cancel := context.WithTimeout(context.Background(), refreshTimeout)
+			err = b.refreshAncestors(ctx)
+			cancel()
+		}
+		if err != nil {
 			b.mu.Lock()
 			b.healthy = false
 			b.mu.Unlock()

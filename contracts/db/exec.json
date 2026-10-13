@@ -1,0 +1,32 @@
+{
+  "route": "/v1/rqlite/exec",
+  "method": "POST",
+  "sdk": "db.exec()",
+  "goStruct": "rqlite.execRequest",
+  "call": {
+    "module": "db",
+    "method": "exec",
+    "args": [
+      "INSERT INTO messages (room, body) VALUES (?, ?)",
+      [
+        "general",
+        "hi"
+      ]
+    ]
+  },
+  "request": {
+    "sql": "INSERT INTO messages (room, body) VALUES (?, ?)",
+    "args": [
+      "general",
+      "hi"
+    ]
+  },
+  "response": {
+    "rows_affected": 1,
+    "last_insert_id": 7
+  },
+  "returns": {
+    "rows_affected": 1,
+    "last_insert_id": 7
+  }
+}

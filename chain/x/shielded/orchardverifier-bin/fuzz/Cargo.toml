@@ -1,0 +1,34 @@
+[package]
+name = "orama-orchard-verifier-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "cargo-fuzz targets for the out-of-process Orchard verifier. Fuzz-only: never built into oramad."
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+orama-orchard-verifier = { path = ".." }
+# Only the framing differential reads the in-process library: it is the other verifier, and the
+# one the framing of this crate has to agree with.
+orama-orchard-ffi = { path = "../../orchardffi" }
+
+# Its own workspace root, so the fuzz crate's lock file and build directory stay out of the
+# verifier's (whose Cargo.lock is pinned and audited).
+[workspace]
+
+[[bin]]
+name = "stdin_frames"
+path = "fuzz_targets/stdin_frames.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "check_framing"
+path = "fuzz_targets/check_framing.rs"
+test = false
+doc = false
+bench = false

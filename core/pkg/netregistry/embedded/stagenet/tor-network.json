@@ -1,0 +1,40 @@
+{
+  "name": "stagenet",
+  "private": true,
+  "bootstrap": false,
+  "allow_exit": false,
+  "allow_shared_subnets": true,
+  "hsdir_min_uptime_hours": 1,
+  "voting_interval_minutes": 30,
+  "vote_delay_seconds": 300,
+  "dist_delay_seconds": 300,
+  "authorities": [
+    {
+      "nickname": "OramaAuth01",
+      "address": "57.129.166.16",
+      "or_port": 31020,
+      "dir_port": 31021,
+      "v3_ident": "3A3935F34A859B1B056537F175BBF19B1E9CA4CE",
+      "fingerprint": "43A651D1A6D4AEA92560FF9686E0C160D1BE7B0E",
+      "ed25519_id": "yn65ZfdKbpLj7DUkkTSobGajWl2ymb/SZe1QbxfwOLE"
+    },
+    {
+      "nickname": "OramaAuth02",
+      "address": "57.129.166.17",
+      "or_port": 31020,
+      "dir_port": 31021,
+      "v3_ident": "28CA5DBF108A672087326DDDCDE0CF77F35557C4",
+      "fingerprint": "5AE9A9DAC372DB1BFFDF57801DC078F4BB8D06BA",
+      "ed25519_id": "spSe4GoTrII3DKzGVv/dW5c1mbD1hnmsq3yZZYNkmaM"
+    },
+    {
+      "nickname": "OramaAuth03",
+      "address": "161.97.184.199",
+      "or_port": 31020,
+      "dir_port": 31021,
+      "v3_ident": "74451198B51B3D224AEDC3992179AC14F33720B3",
+      "fingerprint": "F646BA66875D380B74CB6319CA41BEF969F835D5",
+      "ed25519_id": "JLR/IxLwQA7R40F8eYC1wWeuhT30+G2JgRIPFvUmNf4"
+    }
+  ]
+}

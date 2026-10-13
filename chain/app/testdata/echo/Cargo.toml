@@ -1,0 +1,20 @@
+# Orama-authored echo contract for the cgo instantiate/execute test.
+# wasmvm v3.0.7 rejects bulk-memory, so build with:
+#   rustup target add wasm32-unknown-unknown
+#   RUSTFLAGS='-C target-feature=-bulk-memory -C target-feature=-reference-types -C target-feature=-multivalue -C target-feature=-simd128 -C target-feature=-nontrapping-fptoint -C target-feature=-sign-ext' \
+#     cargo build --release --target wasm32-unknown-unknown -Z build-std=std,panic_abort,core,alloc
+#   wasm-opt --llvm-memory-copy-fill-lowering --enable-bulk-memory --enable-sign-ext \
+#     --enable-nontrapping-float-to-int --enable-reference-types --enable-multivalue --enable-simd \
+#     target/wasm32-unknown-unknown/release/orama_echo.wasm -o ../echo.wasm
+# wasmvm v3.0.7 rejects bulk-memory; wasm-opt lowers memory.copy out of the module.
+[package]
+name = "orama-echo"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+cosmwasm-std = "=2.2.2"

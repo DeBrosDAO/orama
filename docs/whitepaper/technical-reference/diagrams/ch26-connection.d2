@@ -1,0 +1,32 @@
+direction: down
+
+acc: "Accept on :443"
+gate: "global slot free?\n(max_concurrent_conns 10000)" {shape: diamond}
+ip: "per-IP slot free?\n(32 per client IP)" {shape: diamond}
+drop1: "close, log warn:\nmax concurrent reached"
+drop2: "close, log warn:\nper IP reached"
+peek: "PeekClientHello\n5 s deadline, record type 22,\nrecord length at most 16 KiB minus 5"
+bad: "close, debug log:\nClientHello peek failed"
+pick: "Router.Pick(sni)\nexact or single-label wildcard,\nfirst match, else fallback"
+empty: "backend.Addr empty?" {shape: diamond}
+nobe: "close, warn: no backend for SNI"
+dial: "DialTimeout 5 s"
+dialfail: "close, warn: backend dial failed"
+replay: "write the peeked bytes to the backend"
+copy: "two io.Copy loops,\nidle deadline 60 s refreshed on every read and write"
+end: "first side to finish, or shutdown:\nclose both"
+
+acc -> gate
+gate -> drop1: "no"
+gate -> ip: "yes"
+ip -> drop2: "no"
+ip -> peek: "yes"
+peek -> bad: "error"
+peek -> pick: "SNI"
+pick -> empty
+empty -> nobe: "yes"
+empty -> dial: "no"
+dial -> dialfail: "error"
+dial -> replay: "ok"
+replay -> copy
+copy -> end

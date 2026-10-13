@@ -1,0 +1,30 @@
+[
+  {
+    "title": "[e2e] auth-siwe: TestVerify_devices/es256 fails",
+    "description": "e2e run e2e-ab12 at 0123456789abcdef: auth-siwe/TestVerify_devices/es256 failed (deterministic).\n\nTest output:\ndevice_test.go:9: DER refused",
+    "area": "auth",
+    "related_tasks": [
+      2830
+    ],
+    "evidence": [
+      "cli orama auth login → 1"
+    ]
+  },
+  {
+    "title": "[e2e] auth-siwe: TestVerify_replay fails",
+    "description": "e2e run e2e-ab12 at 0123456789abcdef: auth-siwe/TestVerify_replay failed (flaky).\n\nTest output:\nverify_test.go:40: want 401, got 200",
+    "area": "auth",
+    "related_tasks": [
+      2830
+    ],
+    "evidence": [
+      "http POST https://e2e/v1/auth/verify → 200"
+    ]
+  },
+  {
+    "title": "[e2e] broken: (package) fails",
+    "description": "e2e run e2e-ab12 at 0123456789abcdef: broken/(package) failed (unknown).\n\nTest output:\nfeatures/broken/x_test.go:3:1: syntax error",
+    "area": "auth",
+    "evidence": []
+  }
+]

@@ -1,0 +1,47 @@
+direction: down
+
+pre: "While the node serves (old or staged CLI)" {
+  a: "save preferences"
+  b: "Phase 1 prerequisites, Phase 2 provision"
+  c: "Phase 2d Tor install / upgrade (network)"
+  d: "verify archive against anchor (VerifyPreBuiltArchive)"
+  e: "resolve node.public_ip"
+  f: "record raft identity (existing install)"
+  g: "hand over: quorum check, maintenance flag,\nleadership transfer, confirm another leader"
+  a -> b -> c -> d -> e -> f -> g
+}
+
+swap: "Stop and swap" {
+  s1: "stop orama-node, every namespace unit,\n0.122.x deployment units, leftover host units"
+  s2: "ports free (DefaultPorts)"
+  s3: "Phase 2b install binaries"
+  s4: "syscall.Exec /opt/orama/bin/orama ...\n--reexeced-after-binary-swap"
+  s1 -> s2 -> s3 -> s4
+}
+
+post: "Under the new binary (services stopped)" {
+  p1: "Phase 3 secrets"
+  p2: "Phase 4 configs (regenerated)"
+  p3: "Phase 2c initialise services"
+  p4: "Phase 2d Tor ensure"
+  p5: "privhelper"
+  p6: "remove copied signing keys"
+  p7: "Phase 4b templates"
+  p8: "Phase 5 units (write, enable)"
+  p9: "Phase 6b firewall reconcile"
+  p1 -> p2 -> p3 -> p4 -> p5 -> p6 -> p7 -> p8 -> p9
+}
+
+back: "--restart only" {
+  r1: "daemon-reload, unmask, enable"
+  r2: "restart orama-node"
+  r3: "nodehealth gate (5 min)"
+  r4: "start tenant namespace units in order"
+  r5: "retire 0.122.x deployment units"
+  r6: "clear maintenance flag"
+  r1 -> r2 -> r3 -> r4 -> r5 -> r6
+}
+
+pre.g -> swap.s1
+swap.s4 -> post.p1: "process image replaced"
+post.p9 -> back.r1

@@ -4,11 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
+	"github.com/rqlite/gorqlite"
 )
 
 // fakeBatchClient is a tiny rqlite.Client stub that only implements Batch,
@@ -16,16 +18,16 @@ import (
 // which is nil — any test that calls them will panic, which is intentional.
 type fakeBatchClient struct {
 	rqlite.Client
-	calls           int
-	lastOps         []rqlite.BatchOp
-	seqCalls        int
-	lastSeqNS       string
-	queryCalls      int
-	lastQueryOps    []rqlite.BatchOp
-	respond         func(ops []rqlite.BatchOp) (*rqlite.BatchResult, error)
-	respondSeq      func(ns string, ops []rqlite.BatchOp) (*rqlite.BatchResult, int64, error)
-	respondQuery    func(ops []rqlite.BatchOp) ([]rqlite.OpResult, error)
-	nextSeq         int64
+	calls        int
+	lastOps      []rqlite.BatchOp
+	seqCalls     int
+	lastSeqNS    string
+	queryCalls   int
+	lastQueryOps []rqlite.BatchOp
+	respond      func(ops []rqlite.BatchOp) (*rqlite.BatchResult, error)
+	respondSeq   func(ns string, ops []rqlite.BatchOp) (*rqlite.BatchResult, int64, error)
+	respondQuery func(ops []rqlite.BatchOp) ([]rqlite.OpResult, error)
+	nextSeq      int64
 }
 
 func (f *fakeBatchClient) Batch(ctx context.Context, ops []rqlite.BatchOp) (*rqlite.BatchResult, error) {
@@ -71,7 +73,7 @@ func (f *fakeBatchClient) BatchQuery(ctx context.Context, ops []rqlite.BatchOp) 
 }
 
 func newHFWithDB(db rqlite.Client) *HostFunctions {
-	return &HostFunctions{db: db}
+	return &HostFunctions{db: db, dbNamespace: testNamespace}
 }
 
 func TestDBTransaction_happy_path(t *testing.T) {
@@ -79,7 +81,7 @@ func TestDBTransaction_happy_path(t *testing.T) {
 	h := newHFWithDB(fake)
 
 	ops := `{"ops":[{"kind":"exec","sql":"INSERT INTO t (x) VALUES (?)","args":[1]},{"kind":"exec","sql":"INSERT INTO t (x) VALUES (?)","args":[2]}]}`
-	out, err := h.DBTransaction(context.Background(), []byte(ops))
+	out, err := h.DBTransaction(nsCtx(), []byte(ops))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -100,7 +102,7 @@ func TestDBTransaction_happy_path(t *testing.T) {
 
 func TestDBTransaction_invalid_json_rejected(t *testing.T) {
 	h := newHFWithDB(&fakeBatchClient{})
-	_, err := h.DBTransaction(context.Background(), []byte(`not json`))
+	_, err := h.DBTransaction(nsCtx(), []byte(`not json`))
 	if err == nil {
 		t.Fatal("expected error for invalid json, got nil")
 	}
@@ -111,7 +113,7 @@ func TestDBTransaction_invalid_json_rejected(t *testing.T) {
 
 func TestDBTransaction_no_ops_rejected(t *testing.T) {
 	h := newHFWithDB(&fakeBatchClient{})
-	_, err := h.DBTransaction(context.Background(), []byte(`{"ops":[]}`))
+	_, err := h.DBTransaction(nsCtx(), []byte(`{"ops":[]}`))
 	if err == nil {
 		t.Fatal("expected error for empty ops, got nil")
 	}
@@ -134,7 +136,7 @@ func TestDBTransaction_oversize_batch_rejected(t *testing.T) {
 	}
 	sb.WriteString(`]}`)
 
-	_, err := h.DBTransaction(context.Background(), []byte(sb.String()))
+	_, err := h.DBTransaction(nsCtx(), []byte(sb.String()))
 	if err == nil {
 		t.Fatal("expected error for oversize batch, got nil")
 	}
@@ -145,7 +147,7 @@ func TestDBTransaction_oversize_batch_rejected(t *testing.T) {
 
 func TestDBTransaction_no_db_returns_error(t *testing.T) {
 	h := &HostFunctions{db: nil}
-	_, err := h.DBTransaction(context.Background(), []byte(`{"ops":[{"kind":"exec","sql":"x"}]}`))
+	_, err := h.DBTransaction(nsCtx(), []byte(`{"ops":[{"kind":"exec","sql":"x"}]}`))
 	if err == nil {
 		t.Fatal("expected error when db is nil")
 	}
@@ -162,7 +164,7 @@ func TestDBTransaction_no_db_returns_error(t *testing.T) {
 func TestExecAndPublish_no_pubsub_returns_error(t *testing.T) {
 	h := newHFWithDB(&fakeBatchClient{})
 	// pubsub is nil
-	_, err := h.ExecAndPublish(context.Background(),
+	_, err := h.ExecAndPublish(nsCtx(),
 		[]byte(`{"ops":[{"kind":"exec","sql":"x"}]}`),
 		"some-topic",
 		[]byte(`{"hello":"world"}`))
@@ -177,19 +179,6 @@ func TestExecAndPublish_no_pubsub_returns_error(t *testing.T) {
 // TestExecAndPublish_no_topic_rejected — covered indirectly by no_pubsub
 // since the pubsub check fires first. Full coverage of topic validation in
 // integration tests with a real *pubsub.ClientAdapter.
-
-func TestExecAndPublish_no_namespace_in_context_rejected(t *testing.T) {
-	// Bare HostFunctions has no invCtx — namespace is empty.
-	// We need a non-nil pubsub to bypass the earlier check; passing the field
-	// directly is hard without import cycle, so we test via the namespace
-	// resolution branch by ensuring no invCtx is set.
-	h := newHFWithDB(&fakeBatchClient{})
-	// Inject a placeholder so the pubsub-nil check passes;
-	// since pubsub is *pubsub.ClientAdapter we'd need a real one.
-	// Skip this exact test with a TODO — full coverage in integration test.
-	t.Skip("requires real *pubsub.ClientAdapter; covered in integration tests")
-	_ = h
-}
 
 // fakeExecClient is a minimal rqlite.Client stub focused on Exec/Query
 // behavior for the v2 host call tests (bug #218 regression coverage).
@@ -233,7 +222,7 @@ func TestDBExecuteV2_success(t *testing.T) {
 	fake := &fakeExecClient{execRows: 3, execLastID: 42}
 	h := newHFWithDB(fake)
 
-	out, err := h.DBExecuteV2(context.Background(), "INSERT INTO t VALUES (?)", []interface{}{1})
+	out, err := h.DBExecuteV2(nsCtx(), "INSERT INTO t VALUES (?)", []interface{}{1})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -258,7 +247,7 @@ func TestDBExecuteV2_sql_error_populates_error_field(t *testing.T) {
 	fake := &fakeExecClient{execErr: errFakeDBFailure{msg: "no such column: missing"}}
 	h := newHFWithDB(fake)
 
-	out, err := h.DBExecuteV2(context.Background(), "INSERT ...", nil)
+	out, err := h.DBExecuteV2(nsCtx(), "INSERT ...", nil)
 	if err != nil {
 		t.Fatalf("expected SQL errors via envelope, not Go error: %v", err)
 	}
@@ -272,6 +261,9 @@ func TestDBExecuteV2_sql_error_populates_error_field(t *testing.T) {
 	if !strings.Contains(res.Error, "no such column") {
 		t.Errorf("error should preserve SQL message, got %q", res.Error)
 	}
+	if res.Code != rqlite.BatchCodeInternal {
+		t.Errorf("code = %q, want %q for an unrecognised failure", res.Code, rqlite.BatchCodeInternal)
+	}
 	if res.RowsAffected != 0 {
 		t.Errorf("rows_affected should be 0 on failure, got %d", res.RowsAffected)
 	}
@@ -279,7 +271,7 @@ func TestDBExecuteV2_sql_error_populates_error_field(t *testing.T) {
 
 func TestDBExecuteV2_no_db_returns_go_error(t *testing.T) {
 	h := &HostFunctions{db: nil}
-	_, err := h.DBExecuteV2(context.Background(), "INSERT ...", nil)
+	_, err := h.DBExecuteV2(nsCtx(), "INSERT ...", nil)
 	if err == nil {
 		t.Fatal("expected Go error for setup failure (no DB)")
 	}
@@ -289,7 +281,7 @@ func TestDBQueryV2_success_with_empty_rows(t *testing.T) {
 	fake := &fakeExecClient{queryRows: nil} // genuine "no rows" — not an error
 	h := newHFWithDB(fake)
 
-	out, err := h.DBQueryV2(context.Background(), "SELECT * FROM t WHERE 0=1", nil)
+	out, err := h.DBQueryV2(nsCtx(), "SELECT * FROM t WHERE 0=1", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -312,7 +304,7 @@ func TestDBQueryV2_query_error_populates_error_field(t *testing.T) {
 	fake := &fakeExecClient{queryErr: errFakeDBFailure{msg: "syntax error"}}
 	h := newHFWithDB(fake)
 
-	out, err := h.DBQueryV2(context.Background(), "SELECT bogus FROM t", nil)
+	out, err := h.DBQueryV2(nsCtx(), "SELECT bogus FROM t", nil)
 	if err != nil {
 		t.Fatalf("query errors should be in envelope, not Go error: %v", err)
 	}
@@ -325,6 +317,63 @@ func TestDBQueryV2_query_error_populates_error_field(t *testing.T) {
 	}
 	if res.Rows == nil {
 		t.Error("rows must be non-nil even on error (stable shape)")
+	}
+}
+
+// bugboard #267: the v2 envelopes carry a code, and a statement error is
+// classified by type, never by its text.
+func TestDBV2_codes(t *testing.T) {
+	constraint := gorqlite.StatementErrors{errors.New("UNIQUE constraint failed: payments.tx")}
+	columnNamedTimeout := gorqlite.StatementErrors{errors.New("no such column: timeout")}
+	transport := errFakeDBFailure{msg: "Post \"http://127.0.0.1:10001/db/execute\": dial tcp: connect: connection refused"}
+
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"constraint", constraint, rqlite.BatchCodeConstraintViolation},
+		{"column named timeout", columnNamedTimeout, rqlite.BatchCodeInternal},
+		{"transport", transport, rqlite.BatchCodeUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHFWithDB(&fakeExecClient{execErr: tc.err, queryErr: tc.err})
+
+			out, err := h.DBExecuteV2(nsCtx(), "INSERT ...", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var ex dbExecuteV2Result
+			if err := json.Unmarshal(out, &ex); err != nil {
+				t.Fatal(err)
+			}
+			if ex.Code != tc.want || ex.Error == "" {
+				t.Errorf("db_execute_v2 = %+v, want an error coded %q", ex, tc.want)
+			}
+
+			out, err = h.DBQueryV2(nsCtx(), "SELECT 1", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var q dbQueryV2Result
+			if err := json.Unmarshal(out, &q); err != nil {
+				t.Fatal(err)
+			}
+			if q.Code != tc.want || q.Error == "" {
+				t.Errorf("db_query_v2 = %+v, want an error coded %q", q, tc.want)
+			}
+		})
+	}
+}
+
+func TestDBV2_successCarriesNoCode(t *testing.T) {
+	h := newHFWithDB(&fakeExecClient{execRows: 1})
+	out, err := h.DBExecuteV2(nsCtx(), "INSERT ...", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), `"code"`) || strings.Contains(string(out), `"error"`) {
+		t.Errorf("success envelope carries error fields: %s", out)
 	}
 }
 
@@ -350,7 +399,7 @@ func TestDBTransaction_rollback_returns_committed_false_no_go_error(t *testing.T
 	h := newHFWithDB(fake)
 
 	ops := `{"ops":[{"kind":"exec","sql":"INSERT INTO t VALUES (?)","args":[1]},{"kind":"exec","sql":"INSERT INTO t VALUES (?)","args":[1]}]}`
-	out, err := h.DBTransaction(context.Background(), []byte(ops))
+	out, err := h.DBTransaction(nsCtx(), []byte(ops))
 	// Rollback is communicated via JSON, NOT a Go error — that's the contract.
 	if err != nil {
 		t.Fatalf("expected no Go error on rollback (committed=false in JSON), got: %v", err)
@@ -385,7 +434,7 @@ func TestDBQueryBatch_happy_path(t *testing.T) {
 		{"sql":"SELECT 2 WHERE x = ?","args":[42]},
 		{"sql":"SELECT 3"}
 	]}`
-	out, err := h.DBQueryBatch(context.Background(), []byte(in))
+	out, err := h.DBQueryBatch(nsCtx(), []byte(in))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -422,7 +471,7 @@ func TestDBQueryBatch_forces_kind_query(t *testing.T) {
 
 	// Caller maliciously/accidentally sends kind=exec — host fn must coerce.
 	in := `{"ops":[{"kind":"exec","sql":"DELETE FROM users"}]}`
-	if _, err := h.DBQueryBatch(context.Background(), []byte(in)); err != nil {
+	if _, err := h.DBQueryBatch(nsCtx(), []byte(in)); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(fake.lastQueryOps) != 1 {
@@ -436,7 +485,7 @@ func TestDBQueryBatch_forces_kind_query(t *testing.T) {
 
 func TestDBQueryBatch_invalid_json_rejected(t *testing.T) {
 	h := newHFWithDB(&fakeBatchClient{})
-	_, err := h.DBQueryBatch(context.Background(), []byte(`not json`))
+	_, err := h.DBQueryBatch(nsCtx(), []byte(`not json`))
 	if err == nil {
 		t.Fatal("expected error for invalid json, got nil")
 	}
@@ -447,7 +496,7 @@ func TestDBQueryBatch_invalid_json_rejected(t *testing.T) {
 
 func TestDBQueryBatch_no_ops_rejected(t *testing.T) {
 	h := newHFWithDB(&fakeBatchClient{})
-	_, err := h.DBQueryBatch(context.Background(), []byte(`{"ops":[]}`))
+	_, err := h.DBQueryBatch(nsCtx(), []byte(`{"ops":[]}`))
 	if err == nil {
 		t.Fatal("expected error for empty ops, got nil")
 	}
@@ -469,7 +518,7 @@ func TestDBQueryBatch_oversize_batch_rejected(t *testing.T) {
 	}
 	sb.WriteString(`]}`)
 
-	_, err := h.DBQueryBatch(context.Background(), []byte(sb.String()))
+	_, err := h.DBQueryBatch(nsCtx(), []byte(sb.String()))
 	if err == nil {
 		t.Fatal("expected error for oversize batch, got nil")
 	}
@@ -480,7 +529,7 @@ func TestDBQueryBatch_oversize_batch_rejected(t *testing.T) {
 
 func TestDBQueryBatch_no_db_returns_error(t *testing.T) {
 	h := &HostFunctions{db: nil}
-	_, err := h.DBQueryBatch(context.Background(), []byte(`{"ops":[{"sql":"SELECT 1"}]}`))
+	_, err := h.DBQueryBatch(nsCtx(), []byte(`{"ops":[{"sql":"SELECT 1"}]}`))
 	if err == nil {
 		t.Fatal("expected error when db is nil")
 	}
@@ -502,7 +551,7 @@ func TestDBQueryBatch_per_op_errors_surface_in_json(t *testing.T) {
 	h := newHFWithDB(fake)
 
 	in := `{"ops":[{"sql":"SELECT 1"},{"sql":"SELECT * FROM missing"}]}`
-	out, err := h.DBQueryBatch(context.Background(), []byte(in))
+	out, err := h.DBQueryBatch(nsCtx(), []byte(in))
 	if err != nil {
 		t.Fatalf("per-op errors must NOT surface as Go errors: %v", err)
 	}

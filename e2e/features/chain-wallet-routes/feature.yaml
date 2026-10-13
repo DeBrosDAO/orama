@@ -1,0 +1,37 @@
+# Stage 8: the gateway's chain routes for a wallet that has no node, no tunnel and
+# no SSH (bugboard 744 and 739). A fresh key is funded through the faucet, then
+# everything a wallet does goes through the public gateway only: the bank
+# balance, the auth account and the staking and distribution reads, a simulate
+# of a signed delegation (gas, and a fee priced from x/fees' base fee, with no
+# state change), its broadcast (CometBFT broadcast_tx_sync), and
+# /v1/chain/tx?hash= until the transaction is in a block (a 404 while it is
+# not, never a 502), after which the delegation is visible through the same
+# reads. A transaction the chain refuses (a user-to-user send, which x/bank
+# refuses; undecodable bytes) is a 422 {code, codespace, log} with a log that
+# names no path, source file or address, and the same bytes sent again are the
+# SDK's already-in-the-mempool refusal with the hash. ContractInfo of an address
+# that is not a contract is a typed 404. The tests share the gateway's
+# per-address buckets for simulate (burst 10) and broadcast (burst 4), so they
+# run one after another against one pinned gateway, and the limiter test is last.
+id: chain-wallet-routes
+title: Gateway chain routes for wallets - balance, simulate, broadcast, tx
+area: chain
+subtasks: [3149, 3138]
+stage: 8
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: true
+covers:
+  routes:
+    - /v1/chain/
+  queries:
+    - orama.fees.v1.BaseFee
+  claims:
+    - "docs/whitepaper/technical-reference/vol2/39-chain-architecture.md#how-core-reads-and-writes-the-chain: POST /v1/chain/simulate answers gas_wanted (the limit the transaction declares) and gas_used as decimal strings, and a fee of the base fee times gas_used, and keeps nothing"
+    - "docs/whitepaper/technical-reference/vol2/39-chain-architecture.md#how-core-reads-and-writes-the-chain: POST /v1/chain/broadcast submits with broadcast_tx_sync and answers code, codespace, log and tx_hash; a refusal is a 422 with a sanitised log"
+    - "docs/whitepaper/technical-reference/vol2/39-chain-architecture.md#how-core-reads-and-writes-the-chain: a transaction not yet in a block is a 404 with Retry-After on /v1/chain/tx, never a 502"
+    - "docs/whitepaper/technical-reference/vol2/39-chain-architecture.md#how-core-reads-and-writes-the-chain: wallet queries (bank, auth, staking, distribution, wasm ContractInfo) are served on /v1/chain/query/; a non-contract address is a 404"
+    - "docs/whitepaper/technical-reference/vol2/39-chain-architecture.md#how-core-reads-and-writes-the-chain: a page limit over 100 is refused, and simulate and broadcast have their own rate-limit buckets"
+    - "docs/whitepaper/technical-reference/appendices/i-api-surface.md: POST /v1/chain/light answers the state-sync light client's status, commit, validators and consensus_params with the caller's JSON-RPC id, and refuses every other method (broadcast_evidence included)"

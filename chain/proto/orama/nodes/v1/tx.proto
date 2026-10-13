@@ -1,0 +1,233 @@
+syntax = "proto3";
+package orama.nodes.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/nodes/types";
+
+import "amino/amino.proto";
+import "cosmos/msg/v1/msg.proto";
+import "cosmos_proto/cosmos.proto";
+import "gogoproto/gogo.proto";
+import "orama/nodes/v1/nodes.proto";
+
+// Msg is x/nodes' transaction service. Every method is signed by the
+// operator that owns the record. There is no authority field and no
+// parameter-update method (plans/open-network.md D18).
+service Msg {
+  option (cosmos.msg.v1.service) = true;
+
+  rpc RegisterOperator(MsgRegisterOperator) returns (MsgRegisterOperatorResponse);
+  rpc RegisterNode(MsgRegisterNode) returns (MsgRegisterNodeResponse);
+  rpc UpdateNode(MsgUpdateNode) returns (MsgUpdateNodeResponse);
+  rpc RetireNode(MsgRetireNode) returns (MsgRetireNodeResponse);
+  rpc BondNode(MsgBondNode) returns (MsgBondNodeResponse);
+  rpc UnbondNode(MsgUnbondNode) returns (MsgUnbondNodeResponse);
+  rpc DeclareCapacity(MsgDeclareCapacity) returns (MsgDeclareCapacityResponse);
+  rpc FundHotKey(MsgFundHotKey) returns (MsgFundHotKeyResponse);
+  rpc RegisterCluster(MsgRegisterCluster) returns (MsgRegisterClusterResponse);
+  rpc UpdateCluster(MsgUpdateCluster) returns (MsgUpdateClusterResponse);
+  rpc RetireCluster(MsgRetireCluster) returns (MsgRetireClusterResponse);
+  rpc ClaimNodeName(MsgClaimNodeName) returns (MsgClaimNodeNameResponse);
+  rpc ReleaseNodeName(MsgReleaseNodeName) returns (MsgReleaseNodeNameResponse);
+}
+
+message MsgRegisterOperator {
+  option (cosmos.msg.v1.signer) = "operator";
+  option (amino.name) = "orama/nodes/MsgRegisterOperator";
+
+  string operator = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+}
+
+message MsgRegisterOperatorResponse {}
+
+// MsgRegisterNode verifies every binding signature, including ed25519
+// (C6, plans/open-network.md "Keys").
+message MsgRegisterNode {
+  option (cosmos.msg.v1.signer) = "operator";
+  option (amino.name) = "orama/nodes/MsgRegisterNode";
+
+  string operator = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  string node_id = 2;
+  repeated Role roles = 3;
+  string hot_key = 4 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  repeated Binding bindings = 5 [(gogoproto.nullable) = false];
+  repeated string endpoints = 6;
+  string region_hint = 7;
+  // asn is the operator's declared autonomous system number for this node.
+  // 0 leaves it undeclared. The chain cannot verify it (C5, C7).
+  uint32 asn = 8;
+}
+
+message MsgRegisterNodeResponse {}
+
+// MsgUpdateNode rotates the hot key and bindings. It is the sensitive
+// rotation path (C6, track B4): replaced service pubkeys are retired.
+message MsgUpdateNode {
+  option (cosmos.msg.v1.signer) = "operator";
+  option (amino.name) = "orama/nodes/MsgUpdateNode";
+
+  string operator = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  string node_id = 2;
+  // hot_key, when non-empty, replaces the node's hot key.
+  string hot_key = 3 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  // bindings, when non-empty, replaces the whole binding set.
+  repeated Binding bindings = 4 [(gogoproto.nullable) = false];
+  // set_endpoints replaces endpoints, including with an empty list.
+  bool set_endpoints = 5;
+  repeated string endpoints = 6;
+  // set_region_hint replaces region_hint, including with an empty string.
+  bool set_region_hint = 7;
+  string region_hint = 8;
+  // set_asn replaces the declared asn, including with 0 (undeclared).
+  bool set_asn = 9;
+  uint32 asn = 10;
+}
+
+message MsgUpdateNodeResponse {}
+
+message MsgRetireNode {
+  option (cosmos.msg.v1.signer) = "operator";
+  option (amino.name) = "orama/nodes/MsgRetireNode";
+
+  string operator = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  string node_id = 2;
+}
+
+message MsgRetireNodeResponse {}
+
+message MsgBondNode {
+  option (cosmos.msg.v1.signer) = "operator";
+  option (amino.name) = "orama/nodes/MsgBondNode";
+
+  string operator = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  string node_id = 2;
+  Role role = 3;
+  string amount = 4 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+}
+
+message MsgBondNodeResponse {}
+
+message MsgUnbondNode {
+  option (cosmos.msg.v1.signer) = "operator";
+  option (amino.name) = "orama/nodes/MsgUnbondNode";
+
+  string operator = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  string node_id = 2;
+  Role role = 3;
+  string amount = 4 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+}
+
+message MsgUnbondNodeResponse {}
+
+// MsgDeclareCapacity sets STORAGE declared_capacity_bytes. The keeper
+// rejects a value above the bond-backed cap (C6).
+message MsgDeclareCapacity {
+  option (cosmos.msg.v1.signer) = "operator";
+  option (amino.name) = "orama/nodes/MsgDeclareCapacity";
+
+  string operator = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  string node_id = 2;
+  uint64 capacity_bytes = 3;
+}
+
+message MsgDeclareCapacityResponse {}
+
+// FundSource says where MsgFundHotKey takes the amount from. The zero value is
+// the original behaviour, so a message encoded before the field existed, or by a
+// caller that never sets it, still funds from earnings.
+enum FundSource {
+  // FUND_SOURCE_EARNINGS moves the amount out of the operator's earnings.
+  FUND_SOURCE_EARNINGS = 0;
+  // FUND_SOURCE_BANK moves the amount out of the operator's bank balance, for an
+  // operator that holds ORAMA but has earned nothing yet.
+  FUND_SOURCE_BANK = 1;
+}
+
+// MsgFundHotKey moves amount from the operator's own earnings account (or, with
+// source FUND_SOURCE_BANK, its bank balance) to the fee-only balance of the hot
+// key registered on the operator's own node (C2 item 5). The target is never a
+// field: it is always the node's hot key.
+message MsgFundHotKey {
+  option (cosmos.msg.v1.signer) = "operator";
+  option (amino.name) = "orama/nodes/MsgFundHotKey";
+
+  string operator = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  string node_id = 2;
+  string amount = 3 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  FundSource source = 4;
+}
+
+message MsgFundHotKeyResponse {}
+
+// MsgRegisterCluster adds an optional discovery row. It does not join
+// any node to a cluster (D1, track A8).
+message MsgRegisterCluster {
+  option (cosmos.msg.v1.signer) = "operator";
+  option (amino.name) = "orama/nodes/MsgRegisterCluster";
+
+  string operator = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  string cluster_id = 2;
+  string base_domain = 3;
+  repeated string public_endpoints = 4;
+  string metadata_uri = 5;
+}
+
+message MsgRegisterClusterResponse {}
+
+message MsgUpdateCluster {
+  option (cosmos.msg.v1.signer) = "operator";
+  option (amino.name) = "orama/nodes/MsgUpdateCluster";
+
+  string operator = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  string cluster_id = 2;
+  string base_domain = 3;
+  repeated string public_endpoints = 4;
+  string metadata_uri = 5;
+}
+
+message MsgUpdateClusterResponse {}
+
+message MsgRetireCluster {
+  option (cosmos.msg.v1.signer) = "operator";
+  option (amino.name) = "orama/nodes/MsgRetireCluster";
+
+  string operator = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  string cluster_id = 2;
+}
+
+message MsgRetireClusterResponse {}
+
+// MsgClaimNodeName claims name for one of the operator's nodes and locks
+// name_deposit. A node holds at most one name, and a name belongs to one node
+// (first come, first served). The name is a DNS label of 3 to 32 characters
+// from a-z, 0-9 and '-', without a leading or trailing '-', and not reserved.
+message MsgClaimNodeName {
+  option (cosmos.msg.v1.signer) = "operator";
+  option (amino.name) = "orama/nodes/MsgClaimNodeName";
+
+  string operator = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  string node_id = 2;
+  string name = 3;
+}
+
+message MsgClaimNodeNameResponse {}
+
+// MsgReleaseNodeName gives the node's name up and returns its deposit to the
+// operator. A node that retires releases its name the same way.
+message MsgReleaseNodeName {
+  option (cosmos.msg.v1.signer) = "operator";
+  option (amino.name) = "orama/nodes/MsgReleaseNodeName";
+
+  string operator = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  string node_id = 2;
+}
+
+message MsgReleaseNodeNameResponse {}

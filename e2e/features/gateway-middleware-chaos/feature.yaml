@@ -1,0 +1,30 @@
+# The gateway limits and failover that need a flood or a failure, one test at
+# a time with the run's credential pacer held before and after each flood:
+# the credential bucket per address and per gateway (429, Retry-After 60,
+# coded retryable envelope, security headers on the 429), a spoofed
+# X-Forwarded-For not moving the bucket, the per-wallet challenge bucket,
+# loopback with a forwarding header limited while plain loopback and the
+# overlay are exempt, and the namespace proxy's circuit breaker failing over
+# when a node's own namespace gateway cannot be reached (503 envelope and
+# security headers on the 5xx), and one namespace's unreachable gateway on a
+# node opening only its own breaker: another namespace on the same node keeps
+# being served through it and the operator's report names only the first.
+id: gateway-middleware-chaos
+title: Gateway rate limits and namespace proxy failover
+area: network-edge
+subtasks: [2829]
+stage: 11
+destructive: true
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  routes:
+    - /v1/auth/token
+    - /v1/auth/challenge
+  claims:
+    - "website/src/docs/contributor/architecture-reference.mdx#middleware-stack: credential endpoints are limited to 30 a minute per address, burst 10; challenges per wallet too"
+    - "docs/whitepaper/technical-reference/vol1/12-gateway-architecture.md#the-middleware-stack: X-Forwarded-For is honoured only from the local proxy and only its last entry; loopback with a forwarding header is not exempt; the overlay is"
+    - "website/src/docs/contributor/architecture-reference.mdx#middleware-stack: security headers are set on 429 and 5xx answers too"
+    - "website/src/docs/contributor/architecture-reference.mdx#circuit-breakers: the namespace proxy keeps one breaker per namespace gateway, so one namespace's failing gateway never refuses another namespace's requests, and an open breaker is raised as a namespace alert"

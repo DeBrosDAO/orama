@@ -1,0 +1,20 @@
+shape: sequence_diagram
+
+c: "Client"
+idx: "Index gateway"
+reg: "Registry (index RQLite)"
+t1: "Namespace gateway, local node"
+t2: "Namespace gateway, next member"
+
+c -> idx: "request, Host ns-NAME.base"
+idx -> idx: "refuseCrossSiteUpgrade (WebSocket Origin)"
+idx -> idx: "validateAuthForNamespaceProxy:\nJWT, ?jwt= (WS), or API key (cached 60 s);\nrevocation list first"
+idx -> idx: "credential namespace must equal NAME"
+idx -> reg: "cache miss: live gateway targets\n(singleflight, level=weak, 10 s)"
+idx -> idx: "order: local WG IP first, FNV-32a affinity pick, rest;\nfirst target whose breaker allows"
+idx -> idx: "sign hop: X-Internal-Auth-* + MAC v1, v2, v3"
+idx -> t1: "HTTP over WireGuard (30 s, 300 s for long routes)"
+t1 -> idx: "dial failed, body unread"
+idx -> t2: "retry the next member (dial failures only)"
+t2 -> idx: "response"
+idx -> c: "copy status, headers, body;\n502 / 503 / 504 counts against the breaker"

@@ -1,0 +1,14 @@
+direction: right
+
+other: "other process on the node\n(tenant deployment, other uid)"
+cluster: "ipfs-cluster-service\n(child, uid orama)"
+proxy: "serve-ipfs-cluster\nlistener 127.0.0.1:10110"
+diag: "kernel sock_diag\nNETLINK_SOCK_DIAG" {shape: cylinder}
+kubo: "Kubo RPC\n127.0.0.1:10107\nAPI.Authorizations bearer"
+
+cluster -> proxy: "pin, unpin, id\nno Authorization header"
+other -> proxy: "TCP connect"
+proxy -> diag: "which uid owns the dialling socket?"
+diag -> proxy: "uid"
+proxy -> kubo: "uid = orama: forward,\nsets Authorization: Bearer token"
+proxy -> other: "uid differs: connection closed"

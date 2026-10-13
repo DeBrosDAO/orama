@@ -1,0 +1,386 @@
+package namespace
+
+import (
+	"context"
+	"fmt"
+	"sort"
+	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/client"
+	"github.com/DeBrosOfficial/network/pkg/olric"
+	"github.com/DeBrosOfficial/network/pkg/systemd"
+	"go.uber.org/zap"
+)
+
+// The tenant plane converges rather than being nudged.
+//
+// rqlite, Olric and the gateway for each namespace used to be edge-triggered:
+// provisioned once, repaired on a dead-node event, and restored once at boot by
+// a loop that gave up after twelve attempts. Anything that happened outside
+// those moments stayed broken until someone ran a runbook — and seven manual
+// steps existed precisely because of that. The WebRTC plane already converges
+// on a 60s loop; this is the same shape for the rest of the tenant services.
+//
+// Two legs, because they answer different questions and have different
+// authority:
+//
+//   - The PER-NODE leg is what this node owes the namespaces it hosts: start
+//     what is missing, rewrite a config that has drifted, and tear down what the
+//     registry no longer assigns to it (orphan_teardown.go). Every node runs
+//     it, for its own services only.
+//   - The COORDINATOR leg is cluster-wide state — pruning departed members,
+//     releasing their ports, taking them out of the namespace's raft. Exactly
+//     one node may do that per sweep, elected deterministically, because
+//     concurrent writers are how these stores diverged in the first place.
+
+// tenantReconcileInterval is how often each node re-checks its tenant services.
+// Matches the WebRTC reconciler, and is the same order as the systemd restart
+// backoff — fast enough that a failure is corrected within a minute or two,
+// slow enough not to fight a service that is legitimately starting.
+const tenantReconcileInterval = 60 * time.Second
+
+// StartTenantReconciler runs the tenant convergence loop until ctx is done.
+//
+// The first sweep runs immediately: after a restart this node's tenant services
+// are down, and waiting a full interval to notice is the outage it exists to
+// end.
+func (cm *ClusterManager) StartTenantReconciler(ctx context.Context) {
+	go func() {
+		cm.reconcileTenantsOnce(ctx)
+
+		ticker := time.NewTicker(tenantReconcileInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				cm.logger.Info("Tenant reconciler stopping")
+				return
+			case <-ticker.C:
+				cm.reconcileTenantsOnce(ctx)
+			}
+		}
+	}()
+}
+
+// reconcileTenantsOnce is one sweep. It never returns an error: a sweep that
+// fails is retried by the next one, and the loop must outlive any single
+// failure.
+func (cm *ClusterManager) reconcileTenantsOnce(ctx context.Context) {
+	if cm.localNodeID == "" {
+		cm.logger.Warn("Tenant reconcile skipped: this node has no id, so it cannot tell which services are its own")
+		return
+	}
+
+	// Per-node leg. RestoreLocalClusters spawns whatever is missing and skips
+	// what is already running; reconcileLocalDrift is what corrects the ones it
+	// skipped.
+	if err := cm.RestoreLocalClusters(ctx); err != nil {
+		cm.logger.Warn("Tenant reconcile: could not start missing services this sweep", zap.Error(err))
+	}
+	if err := cm.reconcileLocalDrift(ctx); err != nil {
+		cm.logger.Warn("Tenant reconcile: could not reconcile local service configs this sweep", zap.Error(err))
+	}
+
+	if err := cm.reconcileRQLiteLiveness(ctx, cm.localRQLiteRunning); err != nil {
+		cm.logger.Warn("Tenant reconcile: could not report this node's rqlite state this sweep", zap.Error(err))
+	}
+
+	if err := cm.reapOrphanedTenants(ctx); err != nil {
+		cm.logger.Warn("Tenant reconcile: could not tear down orphaned namespaces this sweep", zap.Error(err))
+	}
+
+	// Coordinator leg.
+	if err := cm.replayPendingCleanups(ctx); err != nil {
+		cm.logger.Warn("Tenant reconcile: could not replay pending cleanups this sweep", zap.Error(err))
+	}
+	if err := cm.resumeStaleDeprovisioning(ctx); err != nil {
+		cm.logger.Warn("Tenant reconcile: could not resume abandoned namespace teardowns this sweep", zap.Error(err))
+	}
+	if err := cm.failStaleProvisioning(ctx); err != nil {
+		cm.logger.Warn("Tenant reconcile: could not fail stale provisioning clusters this sweep", zap.Error(err))
+	}
+	if err := cm.reconcileClusterMembership(ctx); err != nil {
+		cm.logger.Warn("Tenant reconcile: could not reconcile cluster membership this sweep", zap.Error(err))
+	}
+}
+
+// tenantAssignment is one namespace this node hosts services for.
+type tenantAssignment struct {
+	ClusterID     string `db:"namespace_cluster_id"`
+	NamespaceName string `db:"namespace_name"`
+}
+
+// localAssignments returns the ready namespaces this node hosts.
+func (cm *ClusterManager) localAssignments(ctx context.Context) ([]tenantAssignment, error) {
+	var out []tenantAssignment
+	err := cm.db.Query(client.WithInternalAuth(ctx), &out, `
+		SELECT DISTINCT cn.namespace_cluster_id, c.namespace_name
+		  FROM namespace_cluster_nodes cn
+		  JOIN namespace_clusters c ON cn.namespace_cluster_id = c.id
+		 WHERE cn.node_id = ? AND c.status IN ('ready', 'degraded')`, cm.localNodeID)
+	if err != nil {
+		return nil, fmt.Errorf("query local tenant assignments: %w", err)
+	}
+	return out, nil
+}
+
+// reconcileLocalDrift rewrites this node's Olric and gateway configs when the
+// live membership no longer matches what is on disk.
+//
+// This is the half that was missing entirely. ReplaceClusterNode wrote config
+// only for the REPLACEMENT node, so every survivor kept the departed node's
+// overlay address in its Olric peers and its gateway's olric_servers — for
+// ever, since nothing else rewrote them. ReconcileGateway existed but was only
+// ever called from the boot restore, and there was no ReconcileOlric at all.
+//
+// Only the gateway is restarted onto its rewritten config. Olric is a
+// clustered, stateful service that systemd.Manager.StartService never restarts
+// as a side effect, so its rewritten peers apply at its next deliberate
+// restart; the running process keeps the membership it has until then.
+func (cm *ClusterManager) reconcileLocalDrift(ctx context.Context) error {
+	assignments, err := cm.localAssignments(ctx)
+	if err != nil {
+		return err
+	}
+
+	var errs []error
+	for _, a := range assignments {
+		if err := cm.reconcileNamespaceOnThisNode(ctx, a); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", a.NamespaceName, err))
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("reconcile local tenant configs: %v", errs)
+	}
+	return nil
+}
+
+// reconcileNamespaceOnThisNode brings one namespace's local services in line
+// with the live membership.
+func (cm *ClusterManager) reconcileNamespaceOnThisNode(ctx context.Context, a tenantAssignment) error {
+	desired, err := cm.desiredLocalConfig(ctx, a.ClusterID)
+	if err != nil {
+		return err
+	}
+	if desired == nil {
+		// No port allocation for this node on this cluster. Either the
+		// assignment is being torn down or the allocation has not been written
+		// yet; both resolve on a later sweep, and neither is a reason to touch
+		// a running service.
+		return nil
+	}
+
+	// Only reconcile a service that is actually running. A stopped one is
+	// RestoreLocalClusters' job, and its cold-spawn path writes a fresh config
+	// anyway — reconciling it here would just race that.
+	if active, err := cm.systemdSpawner.systemdMgr.IsServiceActive(a.NamespaceName, systemd.ServiceTypeOlric); err == nil && active {
+		if err := cm.systemdSpawner.ReconcileOlric(ctx, a.NamespaceName, cm.localNodeID, desired.Olric); err != nil {
+			return fmt.Errorf("reconcile olric: %w", err)
+		}
+	}
+
+	if active, err := cm.systemdSpawner.systemdMgr.IsServiceActive(a.NamespaceName, systemd.ServiceTypeGateway); err == nil && active {
+		if err := cm.systemdSpawner.ReconcileGatewayMembership(ctx, a.NamespaceName, cm.localNodeID, desired.Gateway); err != nil {
+			return fmt.Errorf("reconcile gateway: %w", err)
+		}
+	}
+	return nil
+}
+
+// localServiceConfig is the desired config for this node's services in one
+// namespace, derived from live membership. For the gateway that is only the
+// membership-derived part; the rest of its config (DSNs, secrets, WebRTC) is
+// kept from what it runs with (SystemdSpawner.ReconcileGatewayMembership).
+type localServiceConfig struct {
+	Olric   olric.InstanceConfig
+	Gateway gatewayMembership
+}
+
+// reconcileClusterMembership is the coordinator leg: forget members that are
+// permanently gone, and take them out of the namespace's raft.
+//
+// Pruning already released their ports (bugboard #280). What it never did was
+// remove them from raft, so a namespace kept counting a departed node toward
+// quorum — the tenant-plane version of the dead-voter problem, and the reason a
+// three-member namespace could not survive its second replacement.
+func (cm *ClusterManager) reconcileClusterMembership(ctx context.Context) error {
+	assignments, err := cm.localAssignments(ctx)
+	if err != nil {
+		return err
+	}
+
+	var errs []error
+	for _, a := range assignments {
+		// Same membership read the WebRTC reconciler uses, so the two legs
+		// cannot disagree about who is live.
+		_, live, err := cm.getWebRTCMemberStatus(ctx, a.ClusterID)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", a.NamespaceName, err))
+			continue
+		}
+		if coordinator := tenantReconcileCoordinator(live); coordinator != cm.localNodeID {
+			continue
+		}
+
+		if err := cm.pruneAndDeraft(ctx, a); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", a.NamespaceName, err))
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("reconcile tenant membership: %v", errs)
+	}
+	return nil
+}
+
+// tenantReconcileCoordinator picks the one node that may make cluster-wide
+// changes this sweep: the lowest-sorted live member.
+//
+// A deterministic election — every node computes the same answer from the same
+// membership list, with no lock and no leader lookup — so exactly one applies
+// the plan and the rest no-op. Same rule the WebRTC reconciler uses.
+func tenantReconcileCoordinator(liveNodeIDs []string) string {
+	if len(liveNodeIDs) == 0 {
+		return ""
+	}
+	sorted := append([]string(nil), liveNodeIDs...)
+	sort.Strings(sorted)
+	return sorted[0]
+}
+
+// desiredLocalConfig derives what this node's Olric and gateway configs SHOULD
+// contain for a cluster, from the live membership.
+//
+// Returns nil when this node has no port allocation for the cluster (one the
+// cluster owes a teardown for is none, notOwedTeardownSQL), which is
+// not an error: the assignment is either being torn down or not yet allocated,
+// and neither is a reason to touch a running service.
+func (cm *ClusterManager) desiredLocalConfig(ctx context.Context, clusterID string) (*localServiceConfig, error) {
+	internalCtx := client.WithInternalAuth(ctx)
+
+	var mine []PortBlock
+	if err := cm.db.Query(internalCtx, &mine,
+		`SELECT pa.* FROM namespace_port_allocations pa WHERE pa.namespace_cluster_id = ? AND pa.node_id = ? `+notOwedTeardownSQL,
+		clusterID, cm.localNodeID); err != nil {
+		return nil, fmt.Errorf("read this node's port allocation: %w", err)
+	}
+	if len(mine) == 0 {
+		return nil, nil
+	}
+	block := mine[0]
+
+	// Peers come from the CURRENT membership joined to dns_nodes, so a member
+	// that has been pruned drops out of the list on the next sweep. Restricted
+	// to nodes that are still active: a peer list that includes a departed
+	// node is what made every gateway restart stall for minutes timing out
+	// against it.
+	//
+	// Membership is an EXISTS, not a JOIN: namespace_cluster_nodes holds one row
+	// per role (rqlite, olric, gateway), so a join listed every peer three times.
+	// That desired list never equalled the one spawn wrote, and the reconciler
+	// restarted every freshly provisioned gateway as "drifted".
+	type peerRow struct {
+		NodeID              string `db:"node_id"`
+		InternalIP          string `db:"internal_ip"`
+		OlricMemberlistPort int    `db:"olric_memberlist_port"`
+		OlricHTTPPort       int    `db:"olric_http_port"`
+	}
+	var peers []peerRow
+	if err := cm.db.Query(internalCtx, &peers, `
+		SELECT pa.node_id,
+		       COALESCE(dn.internal_ip, dn.ip_address) AS internal_ip,
+		       pa.olric_memberlist_port, pa.olric_http_port
+		  FROM namespace_port_allocations pa
+		  JOIN dns_nodes dn ON pa.node_id = dn.id
+		 WHERE pa.namespace_cluster_id = ? AND dn.status = 'active'
+		   AND EXISTS (SELECT 1 FROM namespace_cluster_nodes cn
+		                WHERE cn.namespace_cluster_id = pa.namespace_cluster_id AND cn.node_id = pa.node_id)`, clusterID); err != nil {
+		return nil, fmt.Errorf("read cluster peers: %w", err)
+	}
+
+	localIP, err := cm.nodeInternalIP(cm.localNodeID)
+	if err != nil {
+		return nil, err
+	}
+
+	olricPeers := make([]string, 0, len(peers))
+	olricServers := make([]string, 0, len(peers))
+	for _, p := range peers {
+		if p.InternalIP == "" {
+			continue
+		}
+		if p.NodeID != cm.localNodeID {
+			olricPeers = append(olricPeers, fmt.Sprintf("%s:%d", p.InternalIP, p.OlricMemberlistPort))
+		}
+		olricServers = append(olricServers, fmt.Sprintf("%s:%d", p.InternalIP, p.OlricHTTPPort))
+	}
+	sort.Strings(olricPeers)
+	sort.Strings(olricServers)
+
+	return &localServiceConfig{
+		Olric: olric.InstanceConfig{
+			Namespace:      "",
+			NodeID:         cm.localNodeID,
+			HTTPPort:       block.OlricHTTPPort,
+			MemberlistPort: block.OlricMemberlistPort,
+			BindAddr:       localIP,
+			AdvertiseAddr:  localIP,
+			PeerAddresses:  olricPeers,
+		},
+		Gateway: gatewayMembership{
+			HTTPPort:     block.GatewayHTTPPort,
+			OlricServers: olricServers,
+		},
+	}, nil
+}
+
+// pruneAndDeraft forgets members that are permanently gone. Each is taken out of
+// the namespace's raft first (pruneStaleClusterNodes), so every path that prunes
+// — this sweep, RepairCluster, the WebRTC reconciler — leaves raft consistent.
+func (cm *ClusterManager) pruneAndDeraft(ctx context.Context, a tenantAssignment) error {
+	if _, err := cm.pruneStaleClusterNodes(ctx, a.ClusterID); err != nil {
+		return fmt.Errorf("prune stale members: %w", err)
+	}
+	return nil
+}
+
+// survivingNodes returns the members that are still active, with the ports a
+// raft removal is issued through.
+func (cm *ClusterManager) survivingNodes(ctx context.Context, clusterID string) ([]survivingNodePorts, error) {
+	var out []survivingNodePorts
+	err := cm.db.Query(client.WithInternalAuth(ctx), &out, `
+		SELECT pa.node_id,
+		       COALESCE(dn.internal_ip, dn.ip_address) AS internal_ip,
+		       dn.ip_address,
+		       pa.rqlite_http_port, pa.rqlite_raft_port,
+		       pa.olric_http_port, pa.olric_memberlist_port, pa.gateway_http_port
+		  FROM namespace_port_allocations pa
+		  JOIN dns_nodes dn ON pa.node_id = dn.id
+		 WHERE pa.namespace_cluster_id = ? AND dn.status = 'active'
+		   AND EXISTS (SELECT 1 FROM namespace_cluster_nodes cn
+		                WHERE cn.namespace_cluster_id = pa.namespace_cluster_id AND cn.node_id = pa.node_id)`, clusterID)
+	if err != nil {
+		return nil, fmt.Errorf("read surviving members: %w", err)
+	}
+	return out, nil
+}
+
+// serviceRunning reports whether a unit is active, and whether the answer is
+// KNOWN.
+//
+// `IsServiceActive`'s error was discarded at every call site, so a transient
+// systemctl or D-Bus failure read as "the service is down" and triggered a
+// re-spawn of something that was running perfectly well. Re-spawning is not
+// free: it stops the unit first, so a momentary inability to ask the question
+// caused the outage it was checking for.
+func serviceRunning(cm *ClusterManager, namespace string, serviceType systemd.ServiceType) (running, known bool) {
+	active, err := cm.systemdSpawner.systemdMgr.IsServiceActive(namespace, serviceType)
+	if err != nil {
+		cm.logger.Warn("Cannot read a unit's state; treating it as unknown rather than inactive",
+			zap.String("namespace", namespace),
+			zap.String("service", string(serviceType)),
+			zap.Error(err))
+		return false, false
+	}
+	return active, true
+}

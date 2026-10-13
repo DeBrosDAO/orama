@@ -1,0 +1,45 @@
+direction: down
+
+clients: "Clients" {
+  cli: "orama CLI"
+  sdk: "TypeScript SDK, Go client"
+  rw: "RootWallet agent\nsigns, holds SSH keys"
+}
+
+edge: "Public edge of each cluster node" {
+  dns: "CoreDNS\nauthoritative for the base domain"
+  caddy: "Caddy\nTLS, proxies to loopback"
+}
+
+cluster: "Cluster: nodes joined by the WireGuard mesh 10.0.0.0/24" {
+  index: "Index plane, every node" {
+    gw: "Index gateway :10104"
+    reg: "Index RQLite\ncluster registry" {shape: cylinder}
+    sup: "orama-node\nsupervisor"
+    shared: "Olric, IPFS + Cluster,\npub/sub, vault guardian"
+  }
+  tenant: "Tenant plane, one set per namespace on 3 nodes" {
+    nsgw: "Namespace gateway"
+    nsdb: "Namespace RQLite" {shape: cylinder}
+    nscache: "Namespace Olric"
+  }
+}
+
+global: "Global layer: separate machines or a separate network namespace" {
+  chain: "oramad\nCosmos SDK chain"
+  svc: "Storage provider, archiver,\nindexer, Tor roles"
+}
+
+clients.cli -> edge.caddy: "HTTPS"
+clients.sdk -> edge.caddy: "HTTPS"
+clients.cli <-> clients.rw: "agent socket"
+edge.dns -> cluster.index.reg: "reads dns_records"
+edge.caddy -> cluster.index.gw: "HTTP, loopback"
+cluster.index.gw -> cluster.tenant.nsgw: "signed hop, WireGuard"
+cluster.index.gw -> cluster.index.reg: "keys, grants, placement"
+cluster.index.sup -> cluster.index.gw: "starts and converges"
+cluster.tenant.nsgw -> cluster.tenant.nsdb
+cluster.tenant.nsgw -> cluster.tenant.nscache
+cluster.tenant.nsgw -> cluster.index.shared
+clients.sdk -> global.chain: "reads and transactions"
+global.svc -> global.chain: "bonds, deals, reports"

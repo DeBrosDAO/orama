@@ -1,0 +1,27 @@
+# The join that spends an invite, on a fresh server, the manual way an
+# operator runs it on the new machine: the build extracted at /opt/orama,
+# the invite on stdin. A wrong certificate pin and an unexpected archive
+# signer list are refused without spending the invite; the genuine invite
+# joins a full member, the registry records who used it, and a replay is
+# refused as already used.
+id: invite-join-destructive
+title: Invite spending and the manual join
+area: infrastructure
+subtasks: [2821]
+stage: 11
+destructive: true
+requires:
+  extra_nodes: 1
+  probe: false
+  chain: false
+covers:
+  cli:
+    - orama maint invite
+    - orama maint node install
+  routes:
+    - /v1/internal/join
+  claims:
+    - "docs/whitepaper/technical-reference/vol1/06-the-wireguard-mesh.md#minting-an-invite: the joining node verifies the invite's certificate fingerprint before it sends the token"
+    - "docs/whitepaper/technical-reference/vol1/30-install-and-upgrade.md#setup-and-remote-install: the invite travels on the install's stdin, never on a command line"
+    - "docs/whitepaper/technical-reference/vol1/18-cache.md#supply-chain: an unexpected archive signer list is refused before the invite is spent"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-maint-invite: an invite is single-use; a replay is refused as already used"

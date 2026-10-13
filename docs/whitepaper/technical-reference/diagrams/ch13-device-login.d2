@@ -1,0 +1,21 @@
+shape: sequence_diagram
+
+w: "waiting machine"
+g: "gateway"
+r: "registry RQLite"
+a: "approver (machine with a wallet)"
+
+w -> g: "POST /v1/auth/device {namespace?}"
+g -> r: "DELETE finished rows; INSERT device_authorizations\n(SHA-256 of device code, user code, expires +10 min)"
+g -> w: "device_code (256 bit), user_code XXXX-XXXX, interval 5 s"
+w -> g: "POST /v1/auth/device/token {device_code}"
+g -> w: "400 authorization_pending (slow_down inside 5 s)"
+a -> g: "POST /v1/auth/challenge, then sign"
+g -> a: "sign-in message"
+a -> g: "POST /v1/auth/device/approve\nuser_code, message, signature, deny?"
+g -> r: "consume nonce; UPDATE approved_at, subject, namespace\nWHERE not approved, denied or claimed"
+g -> a: "200 approved"
+w -> g: "POST /v1/auth/device/token {device_code}"
+g -> r: "RequireSignInAllowed; device policy optional?\nUPDATE claimed_at WHERE approved AND NOT claimed"
+g -> r: "INSERT refresh_tokens; sign access token"
+g -> w: "200 access_token, refresh_token (no API key)"

@@ -1,0 +1,32 @@
+direction: down
+
+owed: "teardown or stop not confirmed\nrecordPendingCleanup / recordClaimedTeardown\nrow keyed (namespace, node_id, action)"
+read: "replay sweep reads rows:\nattempts below 30, or last attempt older than 1 h;\nnot claimed or claim lapsed; oldest first, 50 per sweep"
+claim: "claimPendingCleanup:\nUPDATE ... WHERE id, attempts, cluster_id match and lease free\nclaimed_until = now + 5 min, claimed_by = node id + nonce"
+lost: "0 rows changed:\nanother gateway holds it,\nleave it"
+replayable: "action in ReplayableCleanupActions?" {shape: diamond}
+dropbad: "drop the row unsent"
+removed: "node has no dns_nodes row?" {shape: diamond}
+settle: "settleCleanup:\nfree the allocations the row kept,\nthen delete the row"
+destructive: "destructive action and a later\nincarnation or the same cluster\nis assigned to that node?" {shape: diamond}
+dropsup: "superseded: settleCleanup (other incarnation)\nor delete the row only (same cluster is a member again)"
+held: "still holds the claim?" {shape: diamond}
+send: "replayCleanup:\nlocal teardown, or signed POST to the node's spawn endpoint"
+ok: "node confirmed" {shape: diamond}
+fail: "attempts + 1, last_error,\nlast_attempt_at; claim released;\nError log from attempt 30 on"
+
+owed -> read
+read -> claim
+claim -> lost: "no"
+claim -> replayable: "yes"
+replayable -> dropbad: "no"
+replayable -> removed: "yes"
+removed -> settle: "yes"
+removed -> destructive: "no"
+destructive -> dropsup: "yes"
+destructive -> held: "no"
+held -> send: "yes"
+send -> ok
+ok -> settle: "yes, still claimed"
+ok -> fail: "no"
+fail -> read: "next sweep, or hourly once exhausted"

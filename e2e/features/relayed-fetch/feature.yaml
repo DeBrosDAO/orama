@@ -1,0 +1,41 @@
+# Relayed fetch (bugboard #266): a download whose originating address the node
+# serving it never sees. The owner's device-bound session mints fetch
+# capabilities for a CID it uploaded; a client opens /v1/proxy/relay on a
+# gateway with NO credential, runs TLS to the namespace host through it and
+# fetches /v1/storage/relayed/<cid> with a capability. The walk uploads, mints
+# three capabilities, fetches through the relay (bytes equal, headers those of
+# /v1/storage/get), and checks the refusals: a capability for another CID, a
+# revoked one (revoking by id takes the revoke key the mint returned), none at all, a credential beside it, a destination off the
+# allowlist or on another port, and the mint's own bounds and device rule. The
+# namespace's request_logs hold no address for the relayed route. A TinyGo
+# fixture exercises storage_fetch_cap_mint (needs tinygo on the runner's PATH,
+# otherwise not applicable, not covered). The relay writes no request_logs row and no
+# access-log line at all (route policy LogNone): the cluster gateway's database
+# is not readable by a tenant, so that, the per-address limit and stream cap and
+# the pool are pinned by the gateway unit tests. Tor stopped
+# is anon-tor-chaos territory.
+id: relayed-fetch
+title: Relayed fetch
+area: storage
+subtasks: [266]
+stage: 4
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  routes:
+    - /v1/storage/fetch-caps
+    - /v1/storage/fetch-caps/
+    - /v1/storage/relayed/
+    - /v1/proxy/relay
+  claims:
+    - "docs/whitepaper/technical-reference/vol1/19-storage.md#fetch-capabilities: a fetch capability reads one CID of one namespace with no credential; forged, expired, wrong-CID and wrong-namespace tokens are one 403 FETCH_CAP_INVALID, a revoked one FETCH_CAP_REVOKED, none is 401 FETCH_CAP_MISSING"
+    - "docs/whitepaper/technical-reference/vol1/19-storage.md#fetch-capabilities: revoking by id takes the revoke_key the mint returned in X-Orama-Revoke-Key; without it, or with another capability's, it is 403 FETCH_CAP_REVOKE_KEY_INVALID and nothing is written"
+    - "docs/whitepaper/technical-reference/vol1/19-storage.md#fetch-capabilities: minting needs a device-bound session, count 1 to 64, ttl 3600 to 604800 seconds"
+    - "docs/whitepaper/technical-reference/vol1/19-storage.md#fetch-capabilities: a credential beside the capability is 400 FETCH_CAP_NOT_ALONE"
+    - "docs/whitepaper/technical-reference/appendices/i-api-surface.md#storage: the relayed download answers the body and headers of /v1/storage/get with a Content-Length"
+    - "website/src/docs/contributor/architecture-reference.mdx#6-anonymity-proxy--tor-pkganonproxy: /v1/proxy/relay takes no credential and reaches only hosts under relay_allowed_suffixes on port 443, never an IP literal"
+    - "docs/whitepaper/technical-reference/vol1/36-sdks.md#relayed-fetch: the relay writes no request log row or line, and the relayed download keeps no address in request_logs"
+    - "website/src/docs/developer/functions.mdx#storage-fetch-capabilities: storage_fetch_cap_mint mints capabilities from a device-bound caller"

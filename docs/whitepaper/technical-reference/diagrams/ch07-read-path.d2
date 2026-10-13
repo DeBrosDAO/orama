@@ -1,0 +1,23 @@
+direction: down
+
+caller: caller reads
+weak: level=weak (default)\nrouted to the leader\nadapterReadConsistencyLevel
+none: level=none requested\n(serverless guest, BatchQueryConsistency)
+gate: followerFreshnessGate\ncached 250 ms
+fresh: leader, or follower with\nlast_contact at most 2 s\nand apply gap at most 50?
+local: local replica answers\n~1 ms, may lag
+degrade: degrade to the weak connection\n(warning at most 1 per s)
+bound: level=none with freshness=D\nqueryNoneFresh, one node, no retry
+reject: HTTP 503 or stale error:\nFreshnessError, caller falls back
+boot: LocalDB: level=none\nbootstrap reads only\n(no leader needed)
+
+caller -> weak
+caller -> none
+none -> gate
+gate -> fresh
+fresh -> local: yes
+fresh -> degrade: no or status error
+caller -> bound: BatchQueryFresh
+bound -> local: within D
+bound -> reject: staler than D
+caller -> boot

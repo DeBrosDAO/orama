@@ -99,7 +99,7 @@ func TestIsInternalIP(t *testing.T) {
 		{"10.0.0.1", true},
 		{"10.0.0.254", true},
 		{"10.0.0.255", true},
-		{"10.0.1.1", false},      // outside /24 — VPS provider's internal range, not our WG mesh
+		{"10.0.1.1", false},       // outside /24 — VPS provider's internal range, not our WG mesh
 		{"10.255.255.255", false}, // outside /24
 		{"127.0.0.1", true},
 		{"192.168.1.1", false},
@@ -126,9 +126,9 @@ func TestSecurityHeaders(t *testing.T) {
 
 	expected := map[string]string{
 		"X-Content-Type-Options":    "nosniff",
-		"X-Frame-Options":          "DENY",
-		"X-XSS-Protection":        "0",
-		"Referrer-Policy":          "strict-origin-when-cross-origin",
+		"X-Frame-Options":           "DENY",
+		"X-XSS-Protection":          "0",
+		"Referrer-Policy":           "strict-origin-when-cross-origin",
 		"Strict-Transport-Security": "max-age=31536000; includeSubDomains",
 	}
 

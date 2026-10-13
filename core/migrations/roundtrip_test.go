@@ -214,6 +214,40 @@ func TestSchemaRoundtrip_PlatformExemplars(t *testing.T) {
 			exec: true,
 		},
 
+		// push_topics — migration 059 (FEAT-265). Mirror RqliteTopicStore; the
+		// DELETE and UPSERT run as one Batch there.
+		{
+			name: "push_topics evict same-token and expired DELETE",
+			sql: `DELETE FROM push_topics
+				WHERE namespace = ? AND topic_id != ? AND (token_fp = ? OR expires_at <= ?)`,
+			args: []any{"ns", "topic-a", "fp", 0},
+			exec: true,
+		},
+		{
+			name: "push_topics UPSERT",
+			sql: `INSERT INTO push_topics
+				(namespace, topic_id, provider, token_encrypted, token_fp, expires_at)
+				VALUES (?, ?, ?, ?, ?, ?)
+				ON CONFLICT(namespace, topic_id) DO UPDATE SET
+					provider = excluded.provider,
+					token_encrypted = excluded.token_encrypted,
+					token_fp = excluded.token_fp,
+					expires_at = excluded.expires_at`,
+			args: []any{"ns", "topic-a", "apns", "enc:...", "fp", 1},
+			exec: true,
+		},
+		{
+			name: "push_topics live SELECT",
+			sql: `SELECT provider, token_encrypted, expires_at
+				FROM push_topics WHERE namespace = ? AND topic_id = ? AND expires_at > ?`,
+		},
+		{
+			name: "push_topics unregister DELETE",
+			sql:  `DELETE FROM push_topics WHERE namespace = ? AND topic_id = ?`,
+			args: []any{"ns", "topic-a"},
+			exec: true,
+		},
+
 		// namespace_publish_seq — sequence counter from plan 08.
 		{
 			name: "namespace_publish_seq UPSERT",
@@ -223,6 +257,39 @@ func TestSchemaRoundtrip_PlatformExemplars(t *testing.T) {
 					next_seq = next_seq + 1,
 					updated_at = excluded.updated_at`,
 			args: []any{"ns", 2, 0},
+			exec: true,
+		},
+
+		{
+			name: "cluster_settings UPSERT",
+			sql: `INSERT INTO cluster_settings (key, value, updated_by) VALUES (?, ?, ?)
+				ON CONFLICT(key) DO UPDATE SET
+					value = excluded.value,
+					updated_by = excluded.updated_by,
+					updated_at = CURRENT_TIMESTAMP`,
+			args: []any{"namespace_creation", "open", "operator:0xabc"},
+			exec: true,
+		},
+		{
+			name: "cluster_settings SELECT",
+			sql:  `SELECT key, value FROM cluster_settings WHERE key IN (?, ?)`,
+			args: []any{"namespace_creation", "max_namespaces_per_wallet"},
+		},
+		{
+			name: "namespace_creators INSERT",
+			sql:  `INSERT OR IGNORE INTO namespace_creators (wallet, added_by) VALUES (?, ?)`,
+			args: []any{"0xabc", "operator:0xop"},
+			exec: true,
+		},
+		{
+			name: "namespace_creators SELECT",
+			sql:  `SELECT wallet FROM namespace_creators WHERE LOWER(wallet) = ? LIMIT 1`,
+			args: []any{"0xabc"},
+		},
+		{
+			name: "namespace_creators DELETE",
+			sql:  `DELETE FROM namespace_creators WHERE LOWER(wallet) = ?`,
+			args: []any{"0xabc"},
 			exec: true,
 		},
 	}

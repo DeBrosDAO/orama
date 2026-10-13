@@ -133,20 +133,15 @@ pub fn handleSession(writer: anytype, body: []const u8, ctx: *const router.Route
     var resp_buf: [1024]u8 = undefined;
     const token_tag_hex = std.fmt.bytesToHex(token.tag, .lower);
 
-    // For identity, we need to encode just the used portion
-    var id_hex_buf: [128]u8 = undefined;
+    // The identity is already a hex string (the value the client authenticated
+    // with); return it verbatim. It must equal the <identity_hex> segment of the
+    // session token, which validateSessionToken re-hashes to verify the tag —
+    // hex-encoding it again here produced a 128-char value that never validated.
     const id_slice = token.identity[0..token.identity_len];
-    var id_hex_len: usize = 0;
-    for (id_slice) |b| {
-        const hex_chars = std.fmt.bytesToHex([1]u8{b}, .lower);
-        id_hex_buf[id_hex_len] = hex_chars[0];
-        id_hex_buf[id_hex_len + 1] = hex_chars[1];
-        id_hex_len += 2;
-    }
 
     const resp_body = std.fmt.bufPrint(&resp_buf,
         \\{{"identity":"{s}","expiry_ns":{d},"tag":"{s}"}}
-    , .{ id_hex_buf[0..id_hex_len], token.expiry_ns, &token_tag_hex }) catch {
+    , .{ id_slice, token.expiry_ns, &token_tag_hex }) catch {
         return response.internalError(writer);
     };
 

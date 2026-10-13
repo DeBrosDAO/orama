@@ -1,0 +1,27 @@
+direction: right
+
+genesis: "Genesis node install\ncrypto/rand, 32 bytes each" {shape: person}
+joiner: "Joining node" {shape: person}
+
+secrets: "secrets/ on every node (orama 0600)\ncluster-secret, swarm.key, rqlite-password,\napi-key-hmac-secret, turn-secret,\nencryption-root seed" {shape: cylinder}
+
+registry: "encryption_roots\nindex RQLite, slots current and previous" {shape: cylinder}
+
+gw: "Gateway process (index or namespace)" {
+  cache: "state dir cache\nencryption-root, .id, .prev, .prev.id\nown EdDSA signing key" {shape: cylinder}
+  holder: "secrets.Holder\nin-memory Root"
+  stores: "stores that seal columns\nfunction secrets, push, TURN,\ndeployment env, agent tokens"
+  holder -> stores: "Keyset(purpose)"
+}
+
+derived: "Keys derived from the cluster secret\nMAC keys, Kubo and Cluster credentials,\nIPFS wrap key, TLS store keys,\ncapability keys"
+
+genesis -> secrets: "EnsureClusterSecret and the other Ensure calls"
+joiner -> secrets: "JoinResponse over pinned TLS\n(invite is single use)"
+registry -> gw.cache: "LoadOrMaterialize\n1. registry"
+secrets -> gw.cache: "2. seed, when cache is empty\n3. copy of cluster-secret"
+gw.cache -> gw.holder: "Root"
+secrets -> derived: "HKDF-SHA256, nil salt,\npurpose label"
+operator: "Operator wallet" {shape: person}
+operator -> gw: "POST /v1/operator/rotate-secrets\nPOST /v1/operator/rotate-signing-key"
+gw -> registry: "Rotate writes both slots"

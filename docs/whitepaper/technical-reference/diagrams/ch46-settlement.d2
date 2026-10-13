@@ -1,0 +1,15 @@
+direction: down
+
+reports: "Complete reports of epoch e\nfrom reporters still in the set"
+q: "Count at least min_reporters_quorum?\n(else: result stored, nothing minted)" {shape: diamond}
+a: "First quorate epoch?\nActivation: result stored, nothing minted"  {shape: diamond}
+per: "Per relay (listed by at least quorum reports):\nregistered, not jailed, same ed25519 in every report"
+up: "median uptime at least min_uptime_fraction"
+w: "amount = median weight\nmin(amount, per_relay_cap)\nx exit_multiplier if median Exit bit"
+cap1: "scale each operator's claims\nto per_operator_cap"
+cap2: "scale each /16 bucket's claims\nto per_prefix16_cap"
+ceil: "scale all claims to the epoch's\nrelay ceiling"
+mint: "MintRelayReward(total)" {shape: hexagon}
+pay: "per operator: 90% earnings,\n5% burn, 5% archive fund" {shape: hexagon}
+
+reports -> q -> a -> per -> up -> w -> cap1 -> cap2 -> ceil -> mint -> pay

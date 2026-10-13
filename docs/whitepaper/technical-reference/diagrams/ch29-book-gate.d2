@@ -1,0 +1,16 @@
+direction: down
+
+bump: "make -C core bump VER=X.Y.Z"
+fail: "make whitepaper-check:\nversion gate fails"
+reverify: "re-verify each chapter\nagainst the code"
+stamp: "book.yaml: chapter verified\nand book version = VERSION"
+gates: "ownership, anchors, structure,\nmarkdown, links, diagrams,\ngenerated appendices, manifest"
+build: "make whitepaper:\ndiagrams, gen, check, PDFs"
+pdfs: "dist/orama-whitepaper-technical-reference-vX.Y.Z-vol1, vol2, appendices.pdf"
+
+bump -> fail: "VERSION changed"
+fail -> reverify
+reverify -> stamp
+stamp -> gates
+gates -> build: "all pass"
+build -> pdfs

@@ -16,14 +16,6 @@ func (r *RQLiteManager) rqliteDataDirPath() (string, error) {
 	return filepath.Join(dataDir, "rqlite"), nil
 }
 
-func (r *RQLiteManager) resolveMigrationsDir() (string, error) {
-	productionPath := "/opt/orama/src/migrations"
-	if _, err := os.Stat(productionPath); err == nil {
-		return productionPath, nil
-	}
-	return "migrations", nil
-}
-
 func (r *RQLiteManager) prepareDataDir() (string, error) {
 	rqliteDataDir, err := r.rqliteDataDirPath()
 	if err != nil {

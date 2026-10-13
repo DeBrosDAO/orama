@@ -21,6 +21,11 @@ var (
 
 	// ErrNamespaceMismatch indicates a namespace mismatch
 	ErrNamespaceMismatch = errors.New("namespace mismatch")
+
+	// ErrInvalidPeer is a peer address or peer ID the caller got wrong: it is
+	// not a multiaddr, names no peer or no address to dial, or is not a peer
+	// ID. The wrapped text says which.
+	ErrInvalidPeer = errors.New("invalid peer")
 )
 
 // ClientError represents a client-specific error with additional context

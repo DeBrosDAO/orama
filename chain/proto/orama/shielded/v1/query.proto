@@ -1,0 +1,111 @@
+syntax = "proto3";
+package orama.shielded.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/shielded/types";
+
+import "google/api/annotations.proto";
+import "gogoproto/gogo.proto";
+import "orama/shielded/v1/shielded.proto";
+
+// Query is the gRPC querier for x/shielded.
+service Query {
+  rpc Params(QueryParamsRequest) returns (QueryParamsResponse) {
+    option (google.api.http).get = "/orama/shielded/v1/params";
+  }
+  rpc Pools(QueryPoolsRequest) returns (QueryPoolsResponse) {
+    option (google.api.http).get = "/orama/shielded/v1/pools";
+  }
+  rpc TreeState(QueryTreeStateRequest) returns (QueryTreeStateResponse) {
+    option (google.api.http).get = "/orama/shielded/v1/tree-state";
+  }
+  rpc TreeFrontier(QueryTreeFrontierRequest) returns (QueryTreeFrontierResponse) {
+    option (google.api.http).get = "/orama/shielded/v1/tree-frontier";
+  }
+  rpc SubtreeRoots(QuerySubtreeRootsRequest) returns (QuerySubtreeRootsResponse) {
+    option (google.api.http).get = "/orama/shielded/v1/subtree-roots";
+  }
+  rpc NullifierSpent(QueryNullifierSpentRequest) returns (QueryNullifierSpentResponse) {
+    option (google.api.http).get = "/orama/shielded/v1/nullifier-spent";
+  }
+  rpc Invariants(QueryInvariantsRequest) returns (QueryInvariantsResponse) {
+    option (google.api.http).get = "/orama/shielded/v1/invariants";
+  }
+}
+
+message QueryParamsRequest {}
+
+message QueryParamsResponse {
+  Params params = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryPoolsRequest {}
+
+message QueryPoolsResponse {
+  repeated PoolBalance pools = 1 [(gogoproto.nullable) = false];
+  repeated QueuedUnshield queue = 2 [(gogoproto.nullable) = false];
+}
+
+message QueryTreeStateRequest {}
+
+message QueryTreeStateResponse {
+  uint64 tree_size = 1;
+  bytes current_root = 2;
+  uint64 anchors = 3;
+  bytes nullifier_accumulator = 4;
+  uint64 nullifier_count = 5;
+}
+
+message QueryTreeFrontierRequest {}
+
+// QueryTreeFrontierResponse is the right edge of the Orchard note-commitment tree at the height the
+// query reads (the latest committed block, or the height the caller asks the node for). A wallet
+// that holds a frontier, and the commitments after it, can witness any note it owns without
+// holding every leaf.
+message QueryTreeFrontierResponse {
+  // height is the block whose committed state this is.
+  uint64 height = 1;
+  // tree_size is the number of commitments in the tree, so the next leaf's position.
+  uint64 tree_size = 2;
+  // current_root is the tree's root, equal to TreeState.current_root at the same height.
+  bytes current_root = 3;
+  // frontier is the encoded frontier: empty for an empty tree, otherwise position (u64 LE), the
+  // last leaf (32 bytes) and one ommer (32 bytes) per set bit of the position, lowest level first.
+  bytes frontier = 4;
+}
+
+// QuerySubtreeRootsRequest pages the roots of the filled 2^16-leaf subtrees.
+message QuerySubtreeRootsRequest {
+  // start_index is the first subtree wanted (0 is the first).
+  uint64 start_index = 1;
+  // limit is the most roots to return: 0 means 100, and more than 1000 is refused.
+  uint32 limit = 2;
+}
+
+// QuerySubtreeRootsResponse is a page of subtree roots, in index order, and how many subtrees have
+// filled in all. The next page starts at start_index plus the number of roots returned, and the
+// last page is the one that reaches total.
+message QuerySubtreeRootsResponse {
+  repeated SubtreeRoot roots = 1 [(gogoproto.nullable) = false];
+  // total is the number of filled subtrees, floor(tree_size / 65536), at the height the query reads.
+  uint64 total = 2;
+}
+
+message QueryNullifierSpentRequest {
+  bytes nullifier = 1;
+}
+
+message QueryNullifierSpentResponse {
+  bool spent = 1;
+}
+
+message QueryInvariantsRequest {}
+
+message QueryInvariantsResponse {
+  bool balance_matches = 1;
+  bool pools_non_negative = 2;
+  bool accumulator_matches = 3;
+  string detail = 4;
+  // subtree_roots_match is whether the module holds a root for every filled 2^16-leaf subtree and
+  // for no other: the last index is floor(tree_size / 65536) - 1.
+  bool subtree_roots_match = 5;
+}

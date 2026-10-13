@@ -1,0 +1,23 @@
+shape: sequence_diagram
+
+caller: "caller process\n(orama-node, index gateway)"
+client: "orama-privhelper call"
+sock: "socket unit"
+helper: "orama-privhelper serve\n(root, one instance)"
+tool: "tool\n(systemctl, wg, ufw, journalctl)\nor file writer"
+
+caller -> client: "exec call tool args"
+client -> client: "Validate argv; read stdin if NeedsInput"
+client -> sock: "connect (5 s dial timeout)"
+client -> sock: "JSON Request: argv, input"
+sock -> helper: "start instance, connection on stdin/stdout"
+helper -> helper: "SO_PEERCRED: uid, pid"
+helper -> helper: "non-root: pidfd + cgroup -> unit"
+helper -> helper: "uid 0 or orama user?"
+helper -> helper: "read request (30 s deadline, 1 MiB)"
+helper -> helper: "Validate argv, then Authorize(unit, invocation)"
+helper -> tool: "fixed path, fixed env, 5 min timeout"
+tool -> helper: "output capped at 256 KiB"
+helper -> helper: "log uid, unit, argv, exit to journal"
+helper -> client: "JSON Response: exit_code, output, truncated"
+client -> caller: "stdout, exit status (126 = refused)"

@@ -1,0 +1,55 @@
+direction: right
+
+callers: "Callers" {
+  http: "HTTP client\nPOST /v1/invoke/ns/fn"
+  ws: "WebSocket client\n/v1/functions/fn/ws"
+  dev: "Developer\norama function deploy"
+}
+
+idx: "Cluster (index) gateway" {
+  route: "serverless routing\nproxy to ns-<name>"
+}
+
+ns: "Namespace gateway (one per member node)" {
+  h: "handlers/serverless\ndeploy, invoke, ws, triggers, secrets"
+  inv: "Invoker\nauthorize, retry, DLQ"
+  eng: "Engine (wazero)\nrate limit, module cache,\nexecutor slots, reactor pool"
+  pers: "persistent.Manager\none instance per socket"
+  host: "HostFunctions\n48 host calls"
+  trig: "Triggers\ncron scheduler,\npub/sub dispatcher,\naggregator"
+  reg: "Registry\nmetadata cache 5 s"
+  h -> inv
+  inv -> eng
+  h -> pers
+  pers -> eng
+  eng -> host: "env / host / orama"
+  trig -> inv: "SystemOriginated"
+  inv -> reg
+}
+
+stores: "Namespace services" {
+  db: "namespace RQLite\nfunctions, triggers,\nsecrets, invocations" {shape: cylinder}
+  olric: "namespace Olric\ncache, dispatch dedup,\npublish depth" {shape: cylinder}
+  ipfs: "IPFS + Cluster\nsealed WASM, pinned everywhere" {shape: cylinder}
+  ps: "pub/sub service"
+}
+
+ext: "Outside the node" {
+  net: "public internet\n(guarded dial)"
+  tor: "node Tor client\nSOCKS"
+}
+
+callers.http -> idx.route
+callers.ws -> idx.route
+callers.dev -> idx.route
+idx.route -> ns.h: "signed hop"
+ns.reg -> stores.db
+ns.reg -> stores.ipfs: "AddLocal, Pin -1, Get"
+ns.host -> stores.db: "db_*"
+ns.host -> stores.olric: "cache_*"
+ns.host -> stores.ps: "pubsub_publish"
+ns.trig -> stores.db: "trigger tables"
+ns.trig -> stores.olric: "claims"
+ns.trig -> stores.ps: "subscribe"
+ns.host -> ext.net: "http_fetch"
+ns.host -> ext.tor: "anon_fetch"

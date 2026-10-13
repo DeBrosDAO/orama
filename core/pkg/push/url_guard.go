@@ -1,13 +1,14 @@
 package push
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"net"
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/netguard"
 )
 
 // url_guard.go — SSRF guard for TENANT-supplied push base URLs.
@@ -82,15 +83,10 @@ func CheckBaseURLSyntax(baseURL string) error {
 // internal host. It performs DNS, so call it ONLY at config-set time (the PUT
 // handlers), never on the hot send path.
 //
-// Resolution failure FAILS OPEN (allowed): an unresolvable host reaches nothing
-// (delivery would fail anyway), and rejecting it would break a legitimate host
-// that's momentarily unresolvable at config time. The hard floor is
-// CheckBaseURLSyntax's literal-IP block, which applies on every code path.
-//
-// Residual: as a set-time check it does not defend against DNS rebinding (the
-// host re-pointing to an internal IP AFTER it was accepted). Closing that would
-// require a send-time IP check, which is complicated here by the operator's
-// loopback default ntfy.
+// Resolution failure FAILS CLOSED: a host that cannot be resolved (or resolves to nothing) cannot be
+// checked, so it is refused. The send path does not rely on this check: a tenant server is reached
+// through a guarded client that checks every dialed address (netguard.NewHTTPClient), which also
+// covers DNS rebinding after this check and redirects.
 func CheckBaseURLResolvable(ctx context.Context, baseURL string) error {
 	if err := CheckBaseURLSyntax(baseURL); err != nil {
 		return err
@@ -107,8 +103,11 @@ func CheckBaseURLResolvable(ctx context.Context, baseURL string) error {
 	rctx, cancel := context.WithTimeout(ctx, baseURLDNSTimeout)
 	defer cancel()
 	ips, err := lookupIP(rctx, host)
-	if err != nil || len(ips) == 0 {
-		return nil // fail open on resolution failure (see doc)
+	if err != nil {
+		return fmt.Errorf("base_url: host %q could not be resolved, so it cannot be checked: %w", host, err)
+	}
+	if len(ips) == 0 {
+		return fmt.Errorf("base_url: host %q resolved to no address, so it cannot be checked", host)
 	}
 	for _, ip := range ips {
 		if isReservedIP(ip) {
@@ -138,34 +137,11 @@ func IsInternalBaseURL(baseURL string) bool {
 	return looksLikeNumericHost(host)
 }
 
-// isReservedIP reports whether ip is in a range a tenant must never be able to
-// reach via a push base URL: loopback, link-local (incl. 169.254.169.254 cloud
-// metadata), RFC1918 private, ULA, unspecified, multicast, and 100.64/10 CGNAT.
-func isReservedIP(ip net.IP) bool {
-	if ip == nil {
-		return true // unparseable → treat as unsafe
-	}
-	if ip4 := ip.To4(); ip4 != nil {
-		// 100.64.0.0/10 — carrier-grade NAT (not covered by IsPrivate). The
-		// second-octet band [64,127] is the /10.
-		if ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127 {
-			return true
-		}
-	} else if ip16 := ip.To16(); ip16 != nil {
-		// NAT64 well-known prefix 64:ff9b::/96 (RFC 6052) embeds an IPv4 address
-		// a NAT64 gateway would translate — so it can reach internal v4.
-		if bytes.Equal(ip16[:12], []byte{0x00, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0}) {
-			return true
-		}
-	}
-	return ip.IsLoopback() ||
-		ip.IsLinkLocalUnicast() ||
-		ip.IsLinkLocalMulticast() ||
-		ip.IsInterfaceLocalMulticast() ||
-		ip.IsMulticast() ||
-		ip.IsPrivate() || // 10/8, 172.16/12, 192.168/16, fc00::/7
-		ip.IsUnspecified()
-}
+// isReservedIP reports whether ip is in a range a tenant must never be able to reach via a push
+// base URL: the shared list in pkg/netguard (loopback, private, link-local incl. the cloud metadata
+// address, CGNAT, benchmarking incl. the co-located chain namespace, multicast, IPv6 forms that embed
+// an IPv4 host).
+func isReservedIP(ip net.IP) bool { return netguard.Reserved(ip) }
 
 // looksLikeNumericHost reports whether host is a non-standard numeric IPv4
 // encoding — hex ("0x7f000001", "0x7f.0.0.1"), decimal ("2130706433"), or octal

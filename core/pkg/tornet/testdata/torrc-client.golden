@@ -1,0 +1,16 @@
+# Client of the Orama Tor network orama-teststage (orama.network/docs/operator/tor-network).
+DataDirectory /var/lib/orama-tornet
+Log notice stdout
+SafeLogging 1
+UseDefaultFallbackDirs 0
+DirAuthority OramaAuth1 orport=31020 v3ident=00000000000000000000000000000000000000A0 57.129.166.16:31021 00000000000000000000000000000000000000B0
+DirAuthority OramaAuth2 orport=31020 v3ident=00000000000000000000000000000000000000A1 57.129.166.17:31021 00000000000000000000000000000000000000B1
+DirAuthority OramaAuth3 orport=31020 v3ident=00000000000000000000000000000000000000A2 161.97.184.199:31021 00000000000000000000000000000000000000B2
+SocksPort 127.0.0.1:9052 IsolateSOCKSAuth
+ControlPort 0
+ClientOnly 1
+ORPort 0
+DirPort 0
+ExitRelay 0
+UseBridges 0
+ClientRejectInternalAddresses 1

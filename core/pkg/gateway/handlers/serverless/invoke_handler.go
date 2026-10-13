@@ -2,14 +2,16 @@ package serverless
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
-	"net"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
+	"github.com/DeBrosOfficial/network/pkg/gateway/clientkey"
 	"github.com/DeBrosOfficial/network/pkg/httputil"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 )
@@ -34,30 +36,10 @@ func classifyInvokeError(err error) (int, httputil.RPCErrorCode, bool) {
 	}
 }
 
-// extractRemoteIP returns a best-effort source IP for the request.
-// Trusts X-Real-IP / X-Forwarded-For only when the immediate peer is loopback
-// or a private address (i.e. behind our own reverse proxy / SNI router).
-func extractRemoteIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
-	}
-	peer := net.ParseIP(host)
-	trustHeaders := peer != nil && (peer.IsLoopback() || peer.IsPrivate())
-	if trustHeaders {
-		if v := r.Header.Get("X-Real-IP"); v != "" {
-			return strings.TrimSpace(v)
-		}
-		if v := r.Header.Get("X-Forwarded-For"); v != "" {
-			// First entry is the original client.
-			if comma := strings.IndexByte(v, ','); comma >= 0 {
-				v = v[:comma]
-			}
-			return strings.TrimSpace(v)
-		}
-	}
-	return host
-}
+// extractRemoteIP returns the source IP of the request: the peer, or the last X-Forwarded-For entry
+// when the peer is the local reverse proxy or a gateway on the mesh (clientkey.Attribute). X-Real-IP
+// and the first, caller-written, entry are never used, and a private peer off the mesh is the client.
+func extractRemoteIP(r *http.Request) string { return clientkey.Attribute(r) }
 
 // InvokeFunction handles POST /v1/functions/{name}/invoke
 // Invokes a function with the provided input.
@@ -74,14 +56,24 @@ func (h *ServerlessHandlers) InvokeFunction(w http.ResponseWriter, r *http.Reque
 		name = nameWithNS[idx+1:]
 	} else {
 		name = nameWithNS
-		namespace = r.URL.Query().Get("namespace")
-		if namespace == "" {
-			namespace = h.getNamespaceFromRequest(r)
-		}
+		namespace = h.invokeNamespace(r)
 	}
 
 	if namespace == "" {
-		writeError(w, http.StatusBadRequest, "namespace required")
+		writeError(w, http.StatusBadRequest,
+			"name the namespace whose function to invoke: POST /v1/invoke/<namespace>/<function>")
+		return
+	}
+
+	// A grant may be narrowed to one function — `fn:name=checkout`. A
+	// credential with no selector is unaffected: whether it may invoke at all
+	// is the invoker's decision (public, private, the invoke grant), and this
+	// only ever takes access away.
+	if err := auth.AuthorizeResource(r.Context(), auth.Resource{
+		Domain: auth.SelectorFn,
+		Name:   name,
+	}); err != nil {
+		writeError(w, http.StatusForbidden, err.Error())
 		return
 	}
 
@@ -105,11 +97,18 @@ func (h *ServerlessHandlers) InvokeFunction(w http.ResponseWriter, r *http.Reque
 		Input:            input,
 		TriggerType:      serverless.TriggerTypeHTTP,
 		CallerWallet:     callerWallet,
+		CallerIsAdmin:    h.getCallerIsAdminFromRequest(r),
+		CallerHasInvoke:  h.getCallerHasInvokeFromRequest(r),
 		CallerIP:         extractRemoteIP(r),
 		CallerClaims:     h.getCallerClaimsFromRequest(r),
 		CallerJWTSubject: h.getJWTSubjectFromRequest(r),
+		CallerDeviceID:   h.getDeviceIDFromRequest(r),
 	}
 
+	// From here the response is the function's: its output, its own status, or
+	// the failure to run it. The proxy in front does not hold a 502, 503 or 504
+	// that carries this against the gateway.
+	httputil.MarkTenantOrigin(w.Header())
 	resp, err := h.invoker.Invoke(ctx, req)
 	if err != nil {
 		// Bug #212: every error path here emits the canonical RPC
@@ -136,6 +135,16 @@ func (h *ServerlessHandlers) InvokeFunction(w http.ResponseWriter, r *http.Reque
 		// retryable bit from defaultRetryableFor(code), so a cold-WASM
 		// FUNCTION_UNAVAILABLE comes back retryable automatically.
 		statusCode, errCode, _ := classifyInvokeError(err)
+		// A caller the gateway knows and the invoker refused has been
+		// authenticated: signing in again would change nothing, so it is told
+		// it may not (403), and 401 stays for a caller with no identity.
+		// getWalletFromRequest answers a verified wallet, else the namespace
+		// the credential belongs to (an API key, a workload), and "" only when
+		// the request carries no credential at all.
+		identified := callerWallet != ""
+		if errCode == httputil.ErrCodeUnauthorized && identified {
+			statusCode, errCode = http.StatusForbidden, httputil.ErrCodeForbidden
+		}
 
 		// Pick the most informative message: function-side resp.Error
 		// (if set) is more actionable than the wrapping err.Error().
@@ -151,7 +160,13 @@ func (h *ServerlessHandlers) InvokeFunction(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Return the function's output directly if it's JSON
+	writeInvocationOutput(w, resp)
+}
+
+// writeInvocationOutput writes a successful invocation: the function's raw
+// HTTP response when it set one, its output as it is when that is JSON, and
+// otherwise the output wrapped with the request id, status and duration.
+func writeInvocationOutput(w http.ResponseWriter, resp *serverless.InvokeResponse) {
 	w.Header().Set("X-Request-ID", resp.RequestID)
 	w.Header().Set("X-Duration-Ms", strconv.FormatInt(resp.DurationMS, 10))
 
@@ -176,8 +191,11 @@ func (h *ServerlessHandlers) InvokeFunction(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Try to detect if output is JSON
-	if len(resp.Output) > 0 && (resp.Output[0] == '{' || resp.Output[0] == '[') {
+	// Output that is JSON is the function's answer and is returned as it is.
+	// The test used to be its first byte, '{' or '[', so any other JSON value —
+	// null, a number, a string, true — came back wrapped in the envelope: a
+	// function that returned null (a refused database call) read as an object.
+	if json.Valid(resp.Output) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		w.Write(resp.Output)
@@ -227,13 +245,8 @@ func (h *ServerlessHandlers) HandleInvoke(w http.ResponseWriter, r *http.Request
 // GetFunctionInfo handles GET /v1/functions/{name}
 // Returns detailed information about a specific function.
 func (h *ServerlessHandlers) GetFunctionInfo(w http.ResponseWriter, r *http.Request, name string, version int) {
-	namespace := r.URL.Query().Get("namespace")
-	if namespace == "" {
-		namespace = h.getNamespaceFromRequest(r)
-	}
-
-	if namespace == "" {
-		writeError(w, http.StatusBadRequest, "namespace required")
+	namespace, ok := managedNamespace(w, r)
+	if !ok {
 		return
 	}
 
@@ -245,7 +258,7 @@ func (h *ServerlessHandlers) GetFunctionInfo(w http.ResponseWriter, r *http.Requ
 		if serverless.IsNotFound(err) {
 			writeError(w, http.StatusNotFound, "Function not found")
 		} else {
-			writeError(w, http.StatusInternalServerError, "Failed to get function")
+			writeStoreError(w, "Failed to get function", err)
 		}
 		return
 	}
@@ -256,13 +269,8 @@ func (h *ServerlessHandlers) GetFunctionInfo(w http.ResponseWriter, r *http.Requ
 // ListVersions handles GET /v1/functions/{name}/versions
 // Lists all versions of a specific function.
 func (h *ServerlessHandlers) ListVersions(w http.ResponseWriter, r *http.Request, name string) {
-	namespace := r.URL.Query().Get("namespace")
-	if namespace == "" {
-		namespace = h.getNamespaceFromRequest(r)
-	}
-
-	if namespace == "" {
-		writeError(w, http.StatusBadRequest, "namespace required")
+	namespace, ok := managedNamespace(w, r)
+	if !ok {
 		return
 	}
 
@@ -278,10 +286,21 @@ func (h *ServerlessHandlers) ListVersions(w http.ResponseWriter, r *http.Request
 
 	versions, err := reg.ListVersions(ctx, namespace, name)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "Failed to list versions")
+		writeStoreError(w, "Failed to list versions", err)
 		return
 	}
 
+	writeVersions(w, versions)
+}
+
+// writeVersions answers a version listing. A function that exists has at least
+// one version, and deleting a function deletes its versions, so an empty list
+// means there is no such function: a 404, not a 200 with nothing in it.
+func writeVersions(w http.ResponseWriter, versions []*serverless.Function) {
+	if len(versions) == 0 {
+		writeError(w, http.StatusNotFound, "Function not found")
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"versions": versions,
 		"count":    len(versions),
@@ -291,7 +310,8 @@ func (h *ServerlessHandlers) ListVersions(w http.ResponseWriter, r *http.Request
 // reservedResponseHeaders are response headers a raw-HTTP-response tenant
 // function (bugboard #835) must not be able to set or overwrite: gateway-owned
 // trace/auth headers and hop-by-hop / framing-control headers. Compared
-// case-insensitively; the X-Internal- prefix is matched separately.
+// case-insensitively; the X-Internal- and X-Orama- prefixes (the latter holds
+// the tenant-origin marker the proxy in front reads) are matched separately.
 var reservedResponseHeaders = map[string]struct{}{
 	"x-request-id":        {},
 	"x-duration-ms":       {},
@@ -313,6 +333,9 @@ func isReservedResponseHeader(key string) bool {
 	if _, ok := reservedResponseHeaders[k]; ok {
 		return true
 	}
-	// Any internal-auth header the gateway uses for inter-service trust.
-	return strings.HasPrefix(k, "x-internal-")
+	// Any internal-auth header the gateway uses for inter-service trust, and
+	// any header the platform's own components exchange (x-orama-): a function
+	// that blanked the tenant-origin marker would make its own 503 count
+	// against its namespace's circuit breaker.
+	return strings.HasPrefix(k, "x-internal-") || strings.HasPrefix(k, "x-orama-")
 }

@@ -1,0 +1,21 @@
+shape: sequence_diagram
+
+cli: "CLI"
+entry: "Entry gateway\n(any node)"
+home: "Home node handler"
+fs: "Deployment directory"
+unit: "Unit"
+reg: "Registry"
+rep: "Each active replica"
+
+cli -> entry: "POST /v1/deployments/TYPE/update"
+entry -> home: "withHomeNodeOnly: proxy over :10104 (360 s);\n503 + Retry-After if home does not answer"
+home -> home: "lockDeployment (120 s local budget)"
+home -> fs: "extract to INSTANCE.new + owner marker"
+home -> fs: "rename INSTANCE -> INSTANCE.old, .new -> INSTANCE"
+home -> unit: "Restart (fresh token) + WaitForHealthy 60 s"
+home -> fs: "on failure: swap back, restart, 500"
+home -> reg: "UPDATE build_cid, version+1; history row\n(a failed write is logged, not returned)"
+home -> rep: "POST replica/update (new_version, CIDs), parallel, 180 s each"
+rep -> rep: "checkVersionNotStale; same swap; restart; record version"
+home -> cli: "200, or 502 naming the replicas that did not apply"

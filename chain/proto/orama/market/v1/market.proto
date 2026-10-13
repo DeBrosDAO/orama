@@ -1,0 +1,35 @@
+syntax = "proto3";
+package orama.market.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/market/types";
+
+import "gogoproto/gogo.proto";
+
+// Listing is a buy-now offer for one compressed asset. Royalty is copied from
+// the collection at listing time and is not read again at settlement.
+message Listing {
+  uint64 id = 1;
+  string seller = 2;
+  uint64 tree_id = 3;
+  uint32 leaf_index = 4;
+  bytes asset_id = 5;
+  string price = 6 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  string royalty_creator = 7;
+  uint32 royalty_bps = 8;
+  uint64 collection_id = 9;
+}
+
+// Bid is an escrowed offer against a listing. The coins sit in the market
+// module account until the bid is accepted, cancelled, or refunded.
+message Bid {
+  uint64 id = 1;
+  uint64 listing_id = 2;
+  string bidder = 3;
+  string amount = 4 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+}

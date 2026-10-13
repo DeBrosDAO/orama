@@ -1,0 +1,35 @@
+# CLI conformance for `orama function`: every command's help against
+# docs/whitepaper/technical-reference/appendices/d-cli-reference.md and its usage errors and arity; no credential is an
+# auth error on every command that calls the gateway; in a fresh namespace
+# list is empty (text and --json) and every command naming an absent function
+# is "not found"; function names are validated before they reach a request
+# path; triggers add needs exactly one of --topic/--schedule; init scaffolds
+# a project, refuses to overwrite and refuses hostile names. Deploying,
+# invoking and deleting real functions is the serverless feature's.
+id: cli-function
+title: CLI conformance - function commands
+area: cli
+subtasks: [2845]
+stage: 3
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  cli:
+    - orama function
+    - orama function disable
+    - orama function get
+    - orama function init
+    - orama function invoke
+    - orama function list
+    - orama function logs
+    - orama function secrets
+    - orama function secrets list
+    - orama function triggers
+    - orama function triggers add
+    - orama function triggers list
+    - orama function versions
+  claims:
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-function-init: scaffolds a directory with function.go and function.yaml templates"

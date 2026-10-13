@@ -28,9 +28,9 @@ import (
 type RateLimitRequest struct {
 	Namespace string
 	Function  string
-	Wallet    string                  // empty = anonymous; per-wallet tier falls back to per-IP
-	IP        string                  // remote IP, used when Wallet is empty
-	Override  *PerFunctionRateLimit  // optional per-function tightening
+	Wallet    string                // empty = anonymous; per-wallet tier falls back to per-IP
+	IP        string                // remote IP, used when Wallet is empty
+	Override  *PerFunctionRateLimit // optional per-function tightening
 }
 
 // PerFunctionRateLimit overrides the default per-wallet limits for one function.
@@ -67,7 +67,7 @@ func DefaultLimiterConfig() LimiterConfig {
 		PerWalletBurst:        60,     // 60-token burst window
 		PerNamespacePerMinute: 60_000, // 1k/sec sustained per namespace
 		PerNamespaceBurst:     6000,
-		PerIPPerMinute:        120,    // 2/sec for anonymous
+		PerIPPerMinute:        120, // 2/sec for anonymous
 		PerIPBurst:            30,
 		MaxBucketsPerScope:    100_000,
 	}
@@ -97,10 +97,10 @@ type MultiTierLimiter struct {
 	cfg LimiterConfig
 
 	// Tier buckets — each scope owns its own LRU.
-	fnWalletBuckets *lruBuckets // (ns, fn, wallet) — only populated when override exists
-	walletBuckets   *lruBuckets // (ns, wallet)
+	fnWalletBuckets  *lruBuckets // (ns, fn, wallet) — only populated when override exists
+	walletBuckets    *lruBuckets // (ns, wallet)
 	namespaceBuckets *lruBuckets // (ns)
-	ipBuckets       *lruBuckets // (ns, ip) — for anonymous callers
+	ipBuckets        *lruBuckets // (ns, ip) — for anonymous callers
 }
 
 // NewMultiTierLimiter constructs a limiter with the given config. Pass

@@ -1,0 +1,22 @@
+direction: right
+
+pending: "replica: pending\n(port 0)"
+active: "replica: active"
+failed: "replica: failed"
+removing: "replica: removing"
+gone: "row deleted" {shape: oval}
+
+pending -> active: "setup answered with port > 0"
+pending -> failed: "setup call failed\n(recordReplicaSetupFailure)"
+active -> failed: "10 restart cycles used, then 3 more misses;\nor node confirmed dead"
+failed -> active: "probe 2xx and unit active,\nfewer than 2 active replicas"
+failed -> gone: "probe 2xx but 2 replicas active:\nzombie stopped, row deleted"
+failed -> pending: "leader reconcile (deployment active or degraded):\nsetup again"
+active -> removing: "teardown call (delete)"
+
+dstate: "Deployment status from active replicas" {
+  d0: "0 active: failed\n(terminal: no loop revisits it)"
+  d1: "1 active: degraded"
+  d2: "2 or more: active"
+}
+active -> dstate: "recalculateDeploymentStatus"

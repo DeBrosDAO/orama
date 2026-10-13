@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Reference chat</title></head>
+<body>
+<h1 id="app">reference-chat</h1>
+<ul id="messages"></ul>
+<form id="send"><input id="text" autocomplete="off"><button>Send</button></form>
+<script>
+// The browser half of the reference chat. The simulated users of the e2e
+// suite make exactly these calls: sign in with the wallet, subscribe to the
+// room with presence, send through the chat-send function, upload
+// attachments to storage, register an ntfy push topic.
+const params = new URLSearchParams(location.search);
+const room = params.get('room') || 'lobby';
+const gateway = params.get('gateway') || location.origin.replace(/^https:\/\/[^.]+\./, 'https://ns-' + (params.get('ns') || '') + '.');
+const token = sessionStorage.getItem('orama_token') || '';
+function show(from, text) {
+  const li = document.createElement('li');
+  li.textContent = from.slice(0, 10) + ': ' + text;
+  document.getElementById('messages').appendChild(li);
+}
+if (token) {
+  const ws = new WebSocket(gateway.replace('https:', 'wss:') + '/v1/pubsub/ws?topic=chat.' + room + '&presence=true&member_id=' + encodeURIComponent(params.get('me') || 'web'));
+  ws.onmessage = (e) => { const env = JSON.parse(e.data); try { const m = JSON.parse(atob(env.data)); show(m.from, m.text); } catch (_) {} };
+  document.getElementById('send').onsubmit = async (e) => {
+    e.preventDefault();
+    await fetch(gateway + '/v1/functions/chat-send/invoke', {method: 'POST', headers: {Authorization: 'Bearer ' + token, 'Content-Type': 'application/json'},
+      body: JSON.stringify({op: 'send', room, text: document.getElementById('text').value})});
+  };
+}
+</script>
+</body>
+</html>

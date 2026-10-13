@@ -1,0 +1,40 @@
+{
+  "route": "/v1/rqlite/find",
+  "method": "POST",
+  "sdk": "db.find()",
+  "goStruct": "rqlite.findRequest",
+  "call": {
+    "module": "db",
+    "method": "find",
+    "args": [
+      "messages",
+      {
+        "room": "general"
+      },
+      {
+        "limit": 20
+      }
+    ]
+  },
+  "request": {
+    "table": "messages",
+    "criteria": {
+      "room": "general"
+    },
+    "options": {
+      "limit": 20
+    }
+  },
+  "response": {
+    "items": [
+      {
+        "id": 1
+      }
+    ]
+  },
+  "returns": [
+    {
+      "id": 1
+    }
+  ]
+}

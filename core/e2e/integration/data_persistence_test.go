@@ -394,7 +394,7 @@ func TestSQLite_DataPersistence(t *testing.T) {
 			},
 			Body: map[string]interface{}{
 				"database_name": dbName,
-				"query":      "CREATE TABLE IF NOT EXISTS test_table (id INTEGER PRIMARY KEY, data TEXT)",
+				"query":         "CREATE TABLE IF NOT EXISTS test_table (id INTEGER PRIMARY KEY, data TEXT)",
 			},
 		}
 
@@ -411,7 +411,7 @@ func TestSQLite_DataPersistence(t *testing.T) {
 			},
 			Body: map[string]interface{}{
 				"database_name": dbName,
-				"query":      "INSERT INTO test_table (data) VALUES ('persistent_data')",
+				"query":         "INSERT INTO test_table (data) VALUES ('persistent_data')",
 			},
 		}
 
@@ -428,7 +428,7 @@ func TestSQLite_DataPersistence(t *testing.T) {
 			},
 			Body: map[string]interface{}{
 				"database_name": dbName,
-				"query":      "SELECT data FROM test_table",
+				"query":         "SELECT data FROM test_table",
 			},
 		}
 

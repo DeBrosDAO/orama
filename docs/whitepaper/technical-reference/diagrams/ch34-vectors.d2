@@ -1,0 +1,36 @@
+direction: right
+
+piece: "Piece root" {
+  f: "chain/piece/testdata/vectors.json\n5 cases" {shape: document}
+  a: "chain/piece TestVectors\n(WRITE_VECTORS=1 rewrites)"
+  b: "core/pkg/pieceroot\nTestRootsMatchTheChainVectors"
+  f -> a
+  f -> b
+}
+
+outer: "Storage outer layer" {
+  f: "chain/storagekey/testdata/\nouter_vectors.json, 5 cases" {shape: document}
+  a: "chain/storagekey\nTestApply_matchesTheSharedVectors"
+  b: "core/pkg/storagefile\nTestApplyOuter_matchesTheChainVectors"
+  f -> a
+  f -> b
+}
+
+tx: "Chain transactions" {
+  f: "chain/client/tx/testdata/\ntx_vectors.json, 24 cases\nwallet_msgs.json" {shape: document}
+  a: "chain/client/tx TestVectors\n(-update-tx-vectors rewrites)"
+  b: "sdk/tests/unit/chain/vectors.test.ts\nrebuilds every case byte for byte"
+  a -> f: "writes"
+  f -> b
+}
+
+caddy: "Caddy wire formats (three copies)" {
+  a: "caddy/vectors_test.go"
+  b: "core/pkg/tlsstore/vectors_test.go"
+  c: "core/pkg/auth/caddy_vectors_test.go"
+}
+
+shamir: "Shamir field arithmetic (two copies)" {
+  a: "vault/src/sss/test_cross_platform.zig"
+  b: "core/pkg/shamir/shamir_test.go"
+}

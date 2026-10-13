@@ -1,0 +1,14 @@
+direction: right
+
+replica: "Replica restarts unit\n20 s" 
+home: "Home node waits for replica\n30 s"
+handler: "Env change handler\n60 s"
+proxy: "Gateway hop to home node\n120 s"
+write: "Server write deadline\n120 s"
+cli: "CLI env set\n90 s"
+
+replica -> home: "inside"
+home -> handler: "inside"
+handler -> proxy: "inside"
+proxy -> write: "equal"
+cli -> handler: "outlasts"

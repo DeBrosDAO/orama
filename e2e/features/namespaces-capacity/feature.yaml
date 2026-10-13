@@ -1,0 +1,23 @@
+# Namespace capacity: a wallet at its cap is refused NAMESPACE_QUOTA, and a
+# fleet filled to twenty tenant blocks per node refuses (or fails) the next
+# namespace cleanly, with every block inside 10000-10099 and every existing
+# namespace still serving. Everything created is deleted at the end. Runs
+# alone: it fills every node.
+id: namespaces-capacity
+title: Per-wallet quota and per-node namespace capacity
+area: tenancy
+subtasks: [2830]
+stage: 11
+destructive: true
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  routes:
+    - /v1/namespaces
+    - /v1/namespace/status
+    - /v1/namespace/delete
+  claims:
+    - "docs/whitepaper/technical-reference/appendices/i-api-surface.md#namespace-management: a wallet at its per-wallet cap (default 10) is refused NAMESPACE_QUOTA"
+    - "website/src/docs/contributor/architecture-reference.mdx: a node hosts at most twenty tenant port blocks in 10000-10099; the next namespace is refused, not squeezed in"

@@ -1,7 +1,7 @@
 import { defineConfig } from "vitest/config";
 import dotenv from "dotenv";
 
-dotenv.config();
+dotenv.config({ quiet: true });
 
 export default defineConfig({
   test: {

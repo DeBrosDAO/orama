@@ -1,0 +1,33 @@
+network-status-version 3 microdesc
+vote-status consensus
+consensus-method 32
+valid-after 2026-10-08 12:00:00
+fresh-until 2026-10-08 12:30:00
+valid-until 2026-10-08 14:30:00
+voting-delay 300 300
+known-flags Authority Exit Fast Guard HSDir Running Stable V2Dir Valid
+r OramaAuth1 AAAAAAAAAAAAAAAAAAAAAAAAALA 2026-10-08 11:49:00 57.129.166.16 31020 31021
+m gkb8vNmGtmsI2D9sAFuGwuIWgh/UQgv+iNDC/NLVYFE
+s Authority Fast Guard HSDir Running Stable V2Dir Valid
+w Bandwidth=5000 Measured=5000
+p reject 1-65535
+r OramaAuth2 AAAAAAAAAAAAAAAAAAAAAAAAALE 2026-10-08 11:00:00 57.129.166.17 31020 31021
+m PvHUxvGTULsqgQTgnUPQx/qZBKXDIy/5XYJ2A5f7S18
+s Authority Fast Guard HSDir Running Stable V2Dir Valid
+w Bandwidth=4000
+p reject 1-65535
+r OramaRelayA AAAAAAAAAAAAAAAAAAAAAAAAAMA 2026-10-08 11:15:00 161.97.184.202 31020 0
+m DNKPiGSBi6nADXqt/R1GTHeAa0ncgf3ddsInenHqToQ
+s Exit Fast Running V2Dir Valid
+w Bandwidth=900
+p accept 1-65535
+directory-footer
+bandwidth-weights Wbd=0 Wbe=0 Wbg=4194 Wbm=10000
+directory-signature sha256 00000000000000000000000000000000000000A0 00000000000000000000000000000000000001A0
+-----BEGIN SIGNATURE-----
+c3ludGhldGljLXNpZ25hdHVyZS1ub3QtcmVhbA==
+-----END SIGNATURE-----
+directory-signature sha256 00000000000000000000000000000000000000A1 00000000000000000000000000000000000001A1
+-----BEGIN SIGNATURE-----
+c3ludGhldGljLXNpZ25hdHVyZS1ub3QtcmVhbA==
+-----END SIGNATURE-----

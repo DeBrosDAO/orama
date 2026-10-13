@@ -1,0 +1,6 @@
+# The upgrade plan this release enacts: the name of a SoftwareUpgrade proposal whose handler
+# is registered in registry.go, one plan name on one line. Leave it empty (comments only) when
+# the release is not consensus-breaking. `make -C chain upgrade-check` fails, and so does the
+# release script, when the name has no registered handler.
+#
+# This release declares no plan.

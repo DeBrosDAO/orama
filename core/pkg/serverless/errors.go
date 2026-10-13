@@ -87,8 +87,25 @@ var (
 	// ErrDatabaseUnavailable is returned when the database is unavailable.
 	ErrDatabaseUnavailable = errors.New("database unavailable")
 
+	// ErrNamespaceNotServed is returned when a gateway is asked to run a
+	// function of a namespace other than its own (bugboard #427).
+	ErrNamespaceNotServed = errors.New("namespace not served by this gateway")
+
+	// ErrDatabaseOfAnotherNamespace is returned when a database host call comes
+	// from a function whose namespace does not own the gateway's database
+	// (bugboard #427).
+	ErrDatabaseOfAnotherNamespace = errors.New("this gateway's database belongs to another namespace")
+
 	// ErrCacheUnavailable is returned when the cache is unavailable.
 	ErrCacheUnavailable = errors.New("cache unavailable")
+
+	// ErrCacheMiss is returned by CacheGet when the key is not in the cache.
+	ErrCacheMiss = errors.New("cache miss")
+
+	// ErrInvalidCacheTTL is returned when cache_set is given a ttl it refuses:
+	// negative, or longer than olric.MaxEntryTTL. A guest mistake, not a
+	// gateway fault.
+	ErrInvalidCacheTTL = errors.New("invalid cache ttl")
 )
 
 // ConfigError represents a configuration validation error.

@@ -173,6 +173,8 @@ func TestPredefinedErrors(t *testing.T) {
 		{"ErrNoPortsAvailable", ErrNoPortsAvailable, "no ports available on node"},
 		{"ErrNodeAtCapacity", ErrNodeAtCapacity, "node has reached maximum namespace instances"},
 		{"ErrInsufficientNodes", ErrInsufficientNodes, "insufficient nodes available for cluster"},
+		{"ErrTwoNodeFleet", ErrTwoNodeFleet, "a 2-node fleet is not eval (1) and not HA (3); add a third node"},
+		{"ErrEvalClusterNoReplacement", ErrEvalClusterNoReplacement, "eval cluster of size 1 cannot be replaced onto another machine; waiting for this node to return"},
 		{"ErrClusterNotFound", ErrClusterNotFound, "namespace cluster not found"},
 		{"ErrClusterAlreadyExists", ErrClusterAlreadyExists, "namespace cluster already exists"},
 		{"ErrProvisioningFailed", ErrProvisioningFailed, "cluster provisioning failed"},
